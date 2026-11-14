@@ -678,6 +678,35 @@ jobs:
           name: release-binaries
           path: release
 
+      - name: build delta patches from previous releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Patches are optional: a client without a matching patch downloads
+          # the full executable, so a missing older release only skips a patch.
+          go build -trimpath -o "$RUNNER_TEMP/mkpatch" ./cmd/mkpatch
+          tags="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=30" \
+            --jq '.[] | select(.draft | not) | select(any(.assets[]; .name == "noxa-client-windows-amd64.exe")) | .tag_name' \
+            | awk -v current="$NOXA_RELEASE_TAG" '$0 != current && n < 3 { print; n++ }')" || {
+            echo "::warning::could not list previous releases; publishing without delta patches"
+            exit 0
+          }
+          for tag in $tags; do
+            [[ "$tag" =~ ^v[0-9A-Za-z.+-]+$ ]] || continue
+            previous="$RUNNER_TEMP/previous/$tag"
+            patch="release/noxa-client-windows-amd64-from-${tag#v}.patch"
+            if gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+                --pattern noxa-client-windows-amd64.exe --dir "$previous" &&
+              "$RUNNER_TEMP/mkpatch" -old "$previous/noxa-client-windows-amd64.exe" \
+                -new release/noxa-client-windows-amd64.exe -out "$patch"; then
+              ls -l "$patch"
+            else
+              rm -f "$patch"
+              echo "::warning::skipping delta patch from $tag"
+            fi
+          done
+
       - name: create release manifest
         shell: bash
         run: |
@@ -685,8 +714,10 @@ jobs:
             echo "repository variable NOXA_UPDATE_PUBLIC_KEYS is required" >&2
             exit 1
           }
+          shopt -s nullglob
           printf '# noxa-version: %s\n' "$NOXA_RELEASE_TAG" > release/checksums.txt
           sha256sum release/noxa-client-windows-amd64.exe release/noxa-server-linux-amd64 \
+            release/noxa-client-windows-amd64-from-*.patch \
             | sed 's#  release/#  #' >> release/checksums.txt
 
       - name: build release signer
@@ -707,8 +738,10 @@ jobs:
           (
             cd release
             test "$(head -n 1 checksums.txt)" = "# noxa-version: $NOXA_RELEASE_TAG"
-            test "$(tail -n +2 checksums.txt | wc -l)" -eq 2
-            test "$(tail -n +2 checksums.txt | awk '{print $2}')" = "$(printf '%s\n%s' noxa-client-windows-amd64.exe noxa-server-linux-amd64)"
+            test "$(tail -n +2 checksums.txt | awk 'NR <= 2 {print $2}')" = "$(printf '%s\n%s' noxa-client-windows-amd64.exe noxa-server-linux-amd64)"
+            # Up to three optional delta patches follow the two binaries.
+            test "$(tail -n +4 checksums.txt | wc -l)" -le 3
+            tail -n +4 checksums.txt | awk '$2 !~ /^noxa-client-windows-amd64-from-[0-9A-Za-z.+-]+[.]patch$/ { exit 1 }'
             tail -n +2 checksums.txt | sha256sum --check --strict
           )
 
@@ -753,10 +786,24 @@ jobs:
           (
             cd release
             test "$(head -n 1 checksums.txt)" = "# noxa-version: $NOXA_RELEASE_TAG"
-            test "$(tail -n +2 checksums.txt | wc -l)" -eq 2
-            test "$(tail -n +2 checksums.txt | awk '{print $2}')" = "$(printf '%s\n%s' noxa-client-windows-amd64.exe noxa-server-linux-amd64)"
+            test "$(tail -n +2 checksums.txt | awk 'NR <= 2 {print $2}')" = "$(printf '%s\n%s' noxa-client-windows-amd64.exe noxa-server-linux-amd64)"
+            # Up to three optional delta patches follow the two binaries.
+            test "$(tail -n +4 checksums.txt | wc -l)" -le 3
+            tail -n +4 checksums.txt | awk '$2 !~ /^noxa-client-windows-amd64-from-[0-9A-Za-z.+-]+[.]patch$/ { exit 1 }'
             tail -n +2 checksums.txt | sha256sum --check --strict
           )
+
+      - name: list verified release assets
+        id: assets
+        shell: bash
+        run: |
+          {
+            echo 'files<<EOF'
+            tail -n +2 release/checksums.txt | awk '{print "release/" $2}'
+            echo release/checksums.txt
+            echo release/checksums.txt.sig
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
 
       - name: upload verified release assets
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -766,8 +813,5 @@ jobs:
           prerelease: ${{ needs.release-build.outputs.prerelease == 'true' }}
           make_latest: ${{ needs.release-build.outputs.prerelease == 'false' }}
           fail_on_unmatched_files: true
-          files: |
-            release/noxa-client-windows-amd64.exe
-            release/noxa-server-linux-amd64
-            release/checksums.txt
-            release/checksums.txt.sig
+          # Every asset is listed in the verified signed manifest.
+          files: ${{ steps.assets.outputs.files }}

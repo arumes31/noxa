@@ -449,6 +449,11 @@ Releases also include `noxa-server-linux-amd64`, checksums, and a signed manifes
 Container builds publish `linux/amd64` and `linux/arm64` images to
 [`ghcr.io/arumes31/noxa`](https://github.com/arumes31/noxa/pkgs/container/noxa).
 The desktop updater verifies the signed manifest using its embedded trusted keys.
+Each release also ships signed delta patches
+(`noxa-client-windows-amd64-from-<version>.patch`, zstd with the old executable as
+dictionary, built by `cmd/mkpatch`) from the three previous releases. The updater
+uses a patch only when its result matches the full executable's signed checksum;
+otherwise it downloads the full executable, so every version can still update.
 
 > [!TIP]
 > The fastest way to run noXa is using **Docker Compose**.

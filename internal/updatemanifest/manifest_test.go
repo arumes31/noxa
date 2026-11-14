@@ -23,6 +23,9 @@ func TestVerify(t *testing.T) {
 		return []byte(base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, manifest)))
 	}
 
+	withPatches := []byte(VersionPrefix + "v1.2.3\nabc  client.exe\ndef  server\n" +
+		"123  noxa-client-windows-amd64-from-1.2.2.patch\n456  noxa-client-windows-amd64-from-1.2.1.patch\n")
+
 	tests := []struct {
 		name      string
 		manifest  []byte
@@ -35,6 +38,13 @@ func TestVerify(t *testing.T) {
 			name:      "valid manifest",
 			manifest:  manifest,
 			signature: sign(manifest),
+			keys:      keys,
+			version:   "v1.2.3",
+		},
+		{
+			name:      "valid manifest with delta patches",
+			manifest:  withPatches,
+			signature: sign(withPatches),
 			keys:      keys,
 			version:   "v1.2.3",
 		},
