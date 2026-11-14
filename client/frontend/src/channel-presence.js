@@ -7,20 +7,26 @@ export function captureChannelPresence(state) {
         // Snapshot hints: why recent sessions ended, and who came back after a drop.
         departures: state.presenceDepartures || {},
         reconnected: state.presenceReconnected || new Set(),
+        returned: state.presenceReturned || new Set(),
     };
 }
 
-/** The cue for a member leaving: a lost connection, a silent replacement, or a plain leave. */
+// A member restarting into an update keeps its place: a quiet status, no sound.
+const UPDATING_CUE = Object.freeze({ kind: 'updating', message: 'runtime.updatingUser', quiet: true });
+
+/** The cue for a member leaving: a lost connection, a silent replacement, an update restart, or a plain leave. */
 export function departureCue(reason, moved = false) {
     if (reason === 'replaced') return null; // the same device is already back on a new session
+    if (reason === 'updating') return UPDATING_CUE;
     if (reason === 'connection_lost') {
         return { kind: 'leave', message: 'runtime.connectionLostUser', soundEvent: 'user_leave', speechEvent: 'user_connection_lost' };
     }
     return { kind: 'leave', message: moved ? 'runtime.movedOut' : 'runtime.left', soundEvent: 'user_leave', speechEvent: 'user_leave' };
 }
 
-/** The cue for a member arriving: a reconnect after a lost connection, or a join. */
-export function arrivalCue(reconnected) {
+/** The cue for a member arriving: a quiet return from an update, a reconnect after a lost connection, or a join. */
+export function arrivalCue(reconnected, returned = false) {
+    if (returned) return null; // back from an update: only its status clears
     return reconnected
         ? { kind: 'join', message: 'runtime.reconnectedUser', soundEvent: 'user_join', speechEvent: 'user_reconnected' }
         : { kind: 'join', message: 'runtime.joined', soundEvent: 'user_join', speechEvent: 'user_join' };
@@ -34,15 +40,20 @@ export function channelPresenceChanges(before, after) {
     for (const [id, client] of before.clients) {
         if (id === after.selfID || client.channel_id !== after.channelID) continue;
         const next = after.clients.get(id);
-        if (next?.channel_id === after.channelID) continue;
+        if (next?.channel_id === after.channelID) {
+            // The server keeps an updating member's place, marked as updating.
+            if (next.updating && !client.updating) changes.push({ client, ...UPDATING_CUE });
+            continue;
+        }
         // A filtered snapshot can omit a private destination, so absence alone
         // does not prove disconnection: only the server's reason does.
         const cue = departureCue(after.departures[id], !!next?.channel_id);
         if (cue) changes.push({ client, ...cue });
     }
     for (const [id, client] of after.clients) {
-        if (id === after.selfID || client.channel_id !== after.channelID || before.clients.get(id)?.channel_id === after.channelID) continue;
-        changes.push({ client, ...arrivalCue(after.reconnected.has(id)) });
+        if (id === after.selfID || client.updating || client.channel_id !== after.channelID || before.clients.get(id)?.channel_id === after.channelID) continue;
+        const cue = arrivalCue(after.reconnected.has(id), after.returned.has(id));
+        if (cue) changes.push({ client, ...cue });
     }
     return changes;
 }

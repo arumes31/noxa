@@ -53,3 +53,27 @@ func TestClientMinimum(t *testing.T) {
 		})
 	}
 }
+
+func TestClientRecommended(t *testing.T) {
+	for _, tc := range []struct {
+		name, configured, server, want string
+		invalid                        bool
+	}{
+		{"default is the server version", "", "0.6.1", "0.6.1", false},
+		{"default normalized", "", "v0.6.1+abc", "0.6.1+abc", false},
+		{"dev server recommends nothing", "", "0.6.1-dev", "", false},
+		{"unknown server recommends nothing", "", "unknown", "", false},
+		{"override", "0.6.0", "0.6.1", "0.6.0", false},
+		{"override normalized", "v0.6.0", "0.6.1", "0.6.0", false},
+		{"none disables", "none", "0.6.1", "", false},
+		{"garbage invalid", "latest", "0.6.1", "", true},
+		{"four part invalid", "0.6.0.1", "0.6.1", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ClientRecommended(tc.configured, tc.server)
+			if (err != nil) != tc.invalid || got != tc.want {
+				t.Fatalf("ClientRecommended(%q, %q) = %q, %v; want %q, invalid=%v", tc.configured, tc.server, got, err, tc.want, tc.invalid)
+			}
+		})
+	}
+}

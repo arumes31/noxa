@@ -23,6 +23,7 @@ export function presenceLines(clients, type, data, at = Date.now() / 1000) {
     const previous = known ? known.channel_id || 0 : data.from_channel_id || 0;
     switch (type) {
         case "user_joined": {
+            if (data.returned) return []; // back from an update: quiet
             const kind = data.reconnected ? "reconnected" : "joined";
             const out = [line(0, kind)];
             if (data.channel_id) out.push(line(data.channel_id, kind));
@@ -30,7 +31,7 @@ export function presenceLines(clients, type, data, at = Date.now() / 1000) {
         }
         case "user_left": {
             if (data.reason === "replaced") return []; // the same device is already back
-            const kind = data.reason === "connection_lost" ? "lost" : "left";
+            const kind = data.reason === "connection_lost" ? "lost" : data.reason === "updating" ? "updating" : "left";
             const out = [line(0, kind)];
             if (previous) out.push(line(previous, kind));
             return out;

@@ -186,3 +186,12 @@ func TestReaderFingerprint(t *testing.T) {
 		t.Fatalf("fingerprints: first=%q again=%q second=%q", first, again, second)
 	}
 }
+
+func TestIsRelease(t *testing.T) {
+	t.Parallel()
+	for value, want := range map[string]bool{"0.6.1": true, "v0.6.1+abc": true, "0.6.1-dev+gabc": false, "0.6.1-rc.1": false, "dev": false, "": false} {
+		if got := IsRelease(value); got != want {
+			t.Errorf("IsRelease(%q) = %v, want %v", value, got, want)
+		}
+	}
+}

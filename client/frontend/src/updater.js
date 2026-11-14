@@ -7,6 +7,7 @@ import { createPeriodicUpdateCheck } from "./update-periodic.js";
 import { measuredUpdateProgress } from "./update-core.js";
 import { createUpdateLogo } from "./update-logo.js";
 import { announceConnectedUpdate } from "./update-announcement.js";
+import { createRecommendedUpdate } from "./update-recommended.js";
 import { playUpdateAnnouncement } from "./sounds.js";
 import { updateShareSettings } from "./video.js";
 import "./updater.css";
@@ -339,6 +340,51 @@ function showRestart(m) {
     btn.onclick = () => restartUpdate(m);
 }
 
+// Saves the session for the new process, then restarts into the staged update.
+async function prepareAndRestart() {
+    const app = window.go.main.App;
+    await announceConnectedUpdate({ getState: () => V()?.state,
+        sessionInfo: tab => app.SessionInfoForTab(tab), play: playUpdateAnnouncement });
+    if (typeof app.PrepareUpdateReconnect === "function") {
+        const audio = window.__noxa.updateReconnectAudio();
+        const preparationError = await app.PrepareUpdateReconnect(audio.muted, audio.deafened, audio.mutedBeforeDeafen);
+        if (preparationError) throw new Error(preparationError);
+        const streamSettings = updateShareSettings();
+        if (streamSettings && typeof app.PrepareUpdateStreamResume === "function") {
+            try {
+                const streamError = await app.PrepareUpdateStreamResume(JSON.stringify(streamSettings));
+                if (streamError) V().sysMsg(t("share.resumeUnavailable"));
+            } catch { V().sysMsg(t("share.resumeUnavailable")); }
+        }
+    }
+    const error = await app.ApplyAndRestart();
+    if (error) throw new Error(error);
+    restartCompleted = true;
+}
+
+// Server-recommended (soft) update: no dialog, no countdown, no idle wait.
+export const recommendedUpdateCheck = createRecommendedUpdate({
+    app: () => window.go.main.App,
+    settings: () => V()?.state?.settings,
+    busy: () => !!modal || downloading || restarting || applied,
+    notify: (key, values) => V().sysMsg(t(key, values)),
+    download: async info => {
+        downloading = true;
+        try {
+            const error = await window.go.main.App.DownloadAndApply(info);
+            if (!error) applied = true; // staged: the update dialog can restart into it
+            return error;
+        } finally { downloading = false; }
+    },
+    restart: async () => {
+        restarting = true;
+        try { await prepareAndRestart(); } finally { restarting = false; }
+        return true;
+    },
+    // The launcher rolled the old version back: allow a fresh download later.
+    unstage: () => { applied = false; },
+});
+
 async function restartUpdate(m) {
     const status = m.querySelector(".upd-status");
     const btn = m.querySelector(".upd-update");
@@ -350,24 +396,7 @@ async function restartUpdate(m) {
     m.querySelector(".upd-close").disabled = true;
     status.textContent = t("updater.starting");
     try {
-        const app = window.go.main.App;
-        await announceConnectedUpdate({ getState: () => V()?.state,
-            sessionInfo: tab => app.SessionInfoForTab(tab), play: playUpdateAnnouncement });
-        if (typeof app.PrepareUpdateReconnect === "function") {
-            const audio = window.__noxa.updateReconnectAudio();
-            const preparationError = await app.PrepareUpdateReconnect(audio.muted, audio.deafened, audio.mutedBeforeDeafen);
-            if (preparationError) throw new Error(preparationError);
-            const streamSettings = updateShareSettings();
-            if (streamSettings && typeof app.PrepareUpdateStreamResume === "function") {
-                try {
-                    const streamError = await app.PrepareUpdateStreamResume(JSON.stringify(streamSettings));
-                    if (streamError) V().sysMsg(t("share.resumeUnavailable"));
-                } catch { V().sysMsg(t("share.resumeUnavailable")); }
-            }
-        }
-        const error = await app.ApplyAndRestart();
-        if (error) throw new Error(error);
-        restartCompleted = true;
+        await prepareAndRestart();
         return true;
     } catch (error) {
         status.textContent = t("updater.restartFailed", { error });

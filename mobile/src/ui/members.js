@@ -27,6 +27,7 @@ function memberRow(client, session) {
         sub ? h("span", { class: "row-sub" }, sub) : null,
         roles.length ? h("span", { class: "role-chips inline" }, roles.slice(0, 3).map(role => h("span", { class: "role-chip", style: role.color ? `--role:${role.color}` : null }, role.name))) : null),
     guestBadge(client),
+    client.updating ? h("span", { class: "row-meta member-updating", title: t("presence.updatingTitle") }, t("presence.updatingBadge")) : null,
     client.on_mobile ? h("span", { class: "row-meta", title: t("presence.onMobile") }, t("presence.mobileBadge")) : null));
 }
 

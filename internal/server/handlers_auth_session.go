@@ -199,6 +199,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		TLSFingerprint:     s.tlsFingerprint,
 		Capabilities:       []string{netproto.CapabilityLobbyPrivacy, netproto.CapabilityLinkPreview, netproto.CapabilityAudioState, netproto.CapabilityVoiceTelemetry, netproto.CapabilityStreamVideoQuality, netproto.CapabilityStreamDiagnostics, netproto.CapabilityStreamSourceQuality, netproto.CapabilityStreamCodec, netproto.CapabilityStreamHEVC, netproto.CapabilityStreamCodecRefresh, netproto.CapabilityStreamReceiverRecovery, netproto.CapabilityConversationActivity},
 	}
+	s.announceClientVersions(&resp)
 	if s.deps.Relay != nil {
 		resp.Capabilities = append(resp.Capabilities, netproto.CapabilityManagedRelay)
 	}
@@ -280,13 +281,16 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		s.sendPendingRules(ctx, client, id.guest)
 		key, _ := client.presenceSessionKey()
 		now := time.Now()
-		reconnected := s.presence.noteJoin(client.ID, key, s.markReplacedSessions(client, now), now)
+		overlapping := s.markReplacedSessions(client, now)
+		returned := s.presence.noteReturn(client.ID, key, now)
+		reconnected := !returned && s.presence.noteJoin(client.ID, key, overlapping, now)
 		s.broadcastEvent(eventUserJoined, userEvent{
 			ClientID:    client.ID,
 			UniqueID:    id.uniqueID,
 			Nickname:    id.nickname,
 			OnMobile:    client.isWebTransport(),
 			Reconnected: reconnected,
+			Returned:    returned,
 		})
 		return nil
 	})

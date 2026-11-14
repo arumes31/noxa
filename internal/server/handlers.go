@@ -38,10 +38,12 @@ type userEvent struct {
 	OnMobile      bool   `json:"on_mobile,omitempty"`
 	MediaDevice   string `json:"media_device,omitempty"`
 	PresenceToken string `json:"presence_token,omitempty"`
-	// Reason on user_left: netproto.DepartureConnectionLost or DepartureReplaced.
+	// Reason on user_left: netproto.DepartureConnectionLost, DepartureReplaced or DepartureUpdating.
 	Reason string `json:"reason,omitempty"`
 	// Reconnected on user_joined: the device's previous session was lost.
 	Reconnected bool `json:"reconnected,omitempty"`
+	// Returned on user_joined: the device came back from an update; announce quietly.
+	Returned bool `json:"returned,omitempty"`
 }
 
 // channelEvent is the payload of channel_created / channel_deleted events.

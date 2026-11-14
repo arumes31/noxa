@@ -97,6 +97,14 @@ export function createLoginFeedback($) {
         } else {
             const hint = document.createElement("p"); hint.textContent = action; area.append(hint);
         }
+        // Below the server's hard minimum: offer the update right here.
+        const updateNow = window.__noxa?.checkForUpdatesInteractive;
+        if (failure.kind === "minimumVersion" && typeof updateNow === "function") {
+            const button = document.createElement("button");
+            button.type = "button"; button.className = "login-update-now"; button.textContent = t("updater.updateNow");
+            button.onclick = () => void updateNow();
+            area.append(button);
+        }
         // Native reasons remain available for support; never interpret server text as HTML.
         if (!["addressRequired", "nameRequired"].includes(failure.kind)) {
             const detail = document.createElement("details"), summary = document.createElement("summary"), reason = document.createElement("p");
