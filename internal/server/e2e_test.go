@@ -359,14 +359,22 @@ func TestGuestKeyLookupScopedToVisibleScope(t *testing.T) {
 			t.Fatalf("member lookup of offline principal = %q, want %q", got.PublicKey, memberKey)
 		}
 	})
-	t.Run("device directory withheld from caller with no device", func(t *testing.T) {
-		member := &Client{ID: "member-caller", UniqueID: "user-uid", UserID: 2}
-		got := keyLookup(t, env.srv, member, netproto.KeyRequest{UniqueID: "member-uid", Devices: true})
+	t.Run("device directory withheld from a device-less guest", func(t *testing.T) {
+		got := keyLookup(t, env.srv, guest(), netproto.KeyRequest{UniqueID: "member-uid", Devices: true})
 		if got.PublicKey != memberKey {
 			t.Fatalf("key = %q, want %q", got.PublicKey, memberKey)
 		}
 		if len(got.Devices) != 0 {
-			t.Fatalf("device directory served to a caller with no registered device: %+v", got.Devices)
+			t.Fatalf("device directory served to a device-less guest: %+v", got.Devices)
+		}
+	})
+	t.Run("guest with a linked device resolves an unshared principal", func(t *testing.T) {
+		// A key-login guest that linked a device is an accountable DM
+		// participant, not the at-scale harvester; it is not scope-gated.
+		deviceGuest := &Client{ID: "device-guest", UniqueID: "dguest-uid", deviceID: "dguest-dev"}
+		got := keyLookup(t, env.srv, deviceGuest, netproto.KeyRequest{UniqueID: "offline-uid"})
+		if got.PublicKey != memberKey {
+			t.Fatalf("device-guest lookup of unshared principal = %q, want %q (unrestricted)", got.PublicKey, memberKey)
 		}
 	})
 }
