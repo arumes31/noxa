@@ -53,6 +53,7 @@ export const enqueue=()=>{},flush=async()=>{},showPending=async()=>{},waitingCou
 export const announceRead=()=>{},closeAllNotifications=async()=>{},closeNotifications=()=>{},reportVisibility=()=>{},setBadge=()=>{},syncPush=async()=>({});
 export const addServer=()=>{};
 // (#52) reconnect jitter imported by app.js.
+export const holdUpdates=()=>()=>{};
 export const takeShutdownJitterMs=()=>0,noteShutdownJitter=()=>{},clearShutdownJitter=()=>{};
 // noxa-olm-v1 consumer imports of app.js (this fixture server advertises no capability, so none opens).
 export const Msg={},signBundle=()=>({}),signReset=()=>({}),connectionTransport=()=>({}),verifyLinkBinding=()=>'',announcedBinding=()=>'',linkBindingFromStatus=()=>null,signKeyRecord=()=>'';

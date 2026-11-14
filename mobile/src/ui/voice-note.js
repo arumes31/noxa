@@ -3,6 +3,7 @@
 // compact inline player for audio attachments. The file and message format
 // is the desktop's (core/voice-notes.js), so either side plays the other's.
 import { withAttachmentMeta } from "../core/files.js";
+import { holdUpdates } from "../core/update-policy.js";
 import { VOICE_MAX_BYTES, VOICE_MAX_MS, audioMime, formatDuration, levelDB, pickVoiceMime, voiceNoteName, waveformPeaks } from "../core/voice-notes.js";
 import { t } from "../i18n.js";
 import { h, toast } from "./dom.js";
@@ -222,7 +223,10 @@ function openRecorder(composerCtx, { hold = false } = {}) {
         for (const track of stream?.getTracks() || []) track.stop();
         stream = null;
     };
+    const releaseUpdates = holdUpdates();
     view.closed.then(() => {
+        // A send in flight keeps the hold until the message is handed off.
+        if (!sending) releaseUpdates();
         closed = true;
         if (recorder && recorder.state !== "inactive") { recorder.onstop = null; recorder.stop(); }
         release();
@@ -261,6 +265,7 @@ function openRecorder(composerCtx, { hold = false } = {}) {
                 send.disabled = false;
             } finally {
                 sending = false;
+                if (closed) releaseUpdates();
             }
         }, "btn-primary");
         actions.replaceChildren(send, button(t("vnote.again"), start), button(t("vnote.discard"), () => view.close(), "btn-danger"));
