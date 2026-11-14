@@ -8,10 +8,10 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/minio/selfupdate v0.6.0
 	github.com/wailsapp/go-webview2 v1.0.23
-	github.com/wailsapp/wails/v2 v2.17.0
+	github.com/wailsapp/wails/v2 v2.17.1
 	golang.design/x/hotkey v0.6.4
 	golang.org/x/crypto v0.58.0
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 	noxa v0.6.1
 	rsc.io/qr v0.2.0
 )
