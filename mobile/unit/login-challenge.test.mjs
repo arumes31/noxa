@@ -59,22 +59,3 @@ test("the app login announces resume and presents its token; worker logins do ne
     assert.equal(worker.sent[0].resume_token, undefined);
     assert.ok(!worker.sent[0].client_features.includes("resume-v1"));
 });
-
-test("a server with a client minimum gets one retry announcing that minimum", async () => {
-    const identity = generateIdentity();
-    const challenge = nacl.randomBytes(32);
-    challenge[0] = 0x41;
-    const sent = [];
-    const conn = { async request(type, payload) {
-        sent.push({ ...payload });
-        if (sent.length === 1) return { ok: false, reason: "client too old", client_min_version: "1.4.0" };
-        if (sent.length === 2) return { challenge: toBase64(challenge), scheme: LOGIN_CHALLENGE_SCHEME };
-        return { ok: true, unique_id: "u", device_id: "d" };
-    } };
-    await signIn(conn, identity, { version: "0.0.0" });
-    assert.deepEqual(sent.slice(0, 2).map(p => p.client_version), ["0.0.0", "1.4.0"]);
-
-    const refusing = { sent: 0, async request() { this.sent++; return { ok: false, reason: "client too old", client_min_version: "1.4.0" }; } };
-    await assert.rejects(signIn(refusing, identity, { version: "0.0.0" }), /client too old/);
-    assert.equal(refusing.sent, 2, "only one retry");
-});

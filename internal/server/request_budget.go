@@ -34,9 +34,10 @@ func (b *sessionRequestBudget) allow(mt netproto.MessageType, now time.Time) boo
 	case netproto.MsgICECandidate, netproto.MsgWebRTCAnswer:
 		class, burst, rate = 2, 256, 64
 	case netproto.MsgWebRTCOffer:
-		// Each offer rebuilds the session's transceivers; clients renegotiate
-		// only when a source starts or stops, plus glare retries.
-		class, burst, rate = 6, 32, 4
+		// Each offer rebuilds the session's transceivers. Clients send one at a
+		// time (each waits for its answer) on source changes, ICE restarts and
+		// up to two glare retries; member joins arrive as server offers.
+		class, burst, rate = 6, 64, 8
 	case netproto.MsgSetStatus, netproto.MsgDisplayNameSet:
 		// Each change rebuilds a snapshot for every recipient.
 		class, burst, rate = 5, 5, 0.5

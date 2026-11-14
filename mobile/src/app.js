@@ -538,7 +538,7 @@ export async function connect({ guest = null, fence } = {}) {
     let auth;
     try {
         auth = await signIn(conn, identity, {
-            version: "0.0.0",
+            version: app.info?.version || "0.0.0",
             nickname: guest ? guest.nickname : app.meta.guest ? (app.meta.guestNickname || app.meta.nickname) : "",
             serverPassword: guest ? guest.serverPassword : app.guestPassword || "",
             goodbye: true,

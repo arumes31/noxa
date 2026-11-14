@@ -209,9 +209,6 @@ func TestInfoAndAppRoutes(t *testing.T) {
 	if info.RPID != "chat.example" || info.ProtocolVersion != ProtocolVersion || info.PublicURL != "https://chat.example" {
 		t.Fatalf("info = %+v", info)
 	}
-	if strings.Contains(string(resp.body), `"version"`) {
-		t.Fatalf("info discloses the server build: %s", resp.body)
-	}
 	if csp := resp.header.Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'none'") {
 		t.Fatalf("missing CSP: %q", csp)
 	}

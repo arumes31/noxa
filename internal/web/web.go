@@ -34,6 +34,7 @@ import (
 	"noxa/internal/health"
 	"noxa/internal/netproto"
 	"noxa/internal/tlscert"
+	"noxa/internal/version"
 )
 
 // ProtocolVersion is the web app protocol this server speaks. A bundle with
@@ -66,10 +67,11 @@ type Info struct {
 	PublicURL       string `json:"public_url"`
 	RPID            string `json:"rp_id"`
 	ProtocolVersion int    `json:"protocol_version"`
-	// The server build is not published here; like /healthz, it stays
-	// hidden from unauthenticated callers.
-	GuestLogin             bool `json:"guest_login"`
-	ServerPasswordRequired bool `json:"server_password_required"`
+	// Version is the server build; the bundle reports it as its client
+	// version because the server always serves its own matching app.
+	Version                string `json:"version"`
+	GuestLogin             bool   `json:"guest_login"`
+	ServerPasswordRequired bool   `json:"server_password_required"`
 }
 
 // Server is the mobile web listener.
@@ -268,6 +270,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
 		PublicURL:       origin,
 		RPID:            s.cfg.RPID(),
 		ProtocolVersion: ProtocolVersion,
+		Version:         version.Short(),
 		GuestLogin:      guests, ServerPasswordRequired: password,
 	})
 }
