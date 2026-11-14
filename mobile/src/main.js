@@ -12,6 +12,7 @@ import { inviteFromLocation, setPendingInvite } from "./core/invite.js";
 import { t, lang } from "./i18n.js";
 import { h, sheet, toast } from "./ui/dom.js";
 import { afterRoute, onWideChange, screenRoot } from "./ui/layout.js";
+import { updatePolicy } from "./core/update-policy.js";
 import "./ui/call-waiting.js";
 
 // Each screen is its own chunk, so Connect and Home load without the rest.
@@ -238,6 +239,41 @@ function showRouteLoadFailure() {
             } }, t("update.reloadPage")))));
 }
 
+const inVoice = () => !!(app.voice?.active || app.calls?.active);
+
+/** Activates the waiting service worker, then reloads into the new version. */
+async function applyUpdate() {
+    try {
+        const registration = await navigator.serviceWorker?.getRegistration("/app/");
+        const waiting = registration?.waiting;
+        if (waiting) {
+            // Reload once the new worker controls the page, so the reload is served by it.
+            const switched = new Promise(resolve => {
+                navigator.serviceWorker.addEventListener("controllerchange", resolve, { once: true });
+                setTimeout(resolve, 3000);
+            });
+            waiting.postMessage("activate-update");
+            await switched;
+        }
+    } catch { /* Reload still works without service-worker access. */ }
+    location.reload();
+}
+
+const pendingUpdate = updatePolicy({ inVoice, reload: applyUpdate });
+app.addEventListener("voice", () => pendingUpdate.check());
+app.addEventListener("call", () => pendingUpdate.check());
+
+/** A persistent banner with an Update button (tap = activate + reload). */
+function showUpdateBanner(message) {
+    if (document.querySelector(".banner-update")) return;
+    const bar = h("div", { class: "banner banner-update", role: "alert" }, message, " ",
+        h("button", { class: "btn", onclick: event => {
+            event.currentTarget.disabled = true;
+            applyUpdate();
+        } }, t("update.reload")));
+    document.body.prepend(bar);
+}
+
 async function registerServiceWorker() {
     if (!("serviceWorker" in navigator) || location.protocol !== "https:") return;
     try {
@@ -246,7 +282,8 @@ async function registerServiceWorker() {
             const worker = registration.installing;
             worker?.addEventListener("statechange", () => {
                 if (worker.state === "installed" && navigator.serviceWorker.controller) {
-                    toast(t("update.ready"));
+                    // Outside voice the update applies quietly; resume-v1 restores the session.
+                    if (!pendingUpdate.ready()) showUpdateBanner(t("update.ready"));
                 }
             });
         });
@@ -257,20 +294,25 @@ async function registerServiceWorker() {
 
 // The control protocol this build speaks (internal/web.ProtocolVersion).
 const PROTOCOL_VERSION = 1;
+const FORCED_RELOAD_KEY = "noxa-update-required-reload";
 
 /**
- * A cached older app met a newer server. Reloading fetches the matching
- * bundle; the button waits for the user so a call is never cut off.
+ * A cached older app met a newer server: it cannot work, so it reloads at
+ * once, even in voice. A second mismatch right after that reload (stale
+ * bundle) falls back to the banner instead of a reload loop.
  */
-function showUpdateRequired() {
-    const bar = h("div", { class: "banner banner-update", role: "alert" }, t("update.required"), " ",
-        h("button", { class: "btn", onclick: async () => {
-            const registration = await navigator.serviceWorker?.getRegistration("/app/");
-            registration?.waiting?.postMessage("activate-update");
-            await registration?.update().catch(() => {});
-            location.reload();
-        } }, t("update.reload")));
-    document.body.prepend(bar);
+async function updateRequired() {
+    let recent = false;
+    try {
+        recent = Date.now() - Number(sessionStorage.getItem(FORCED_RELOAD_KEY) || 0) < 60000;
+        if (!recent) sessionStorage.setItem(FORCED_RELOAD_KEY, String(Date.now()));
+    } catch { /* Without storage, the banner is the safe choice. */ recent = true; }
+    if (recent) return showUpdateBanner(t("update.required"));
+    try {
+        const registration = await navigator.serviceWorker?.getRegistration("/app/");
+        await registration?.update();
+    } catch { /* Reload still fetches the current bundle from the network. */ }
+    applyUpdate();
 }
 
 async function boot() {
@@ -281,7 +323,7 @@ async function boot() {
         return;
     }
     registerServiceWorker();
-    if (app.info.protocol_version !== PROTOCOL_VERSION) showUpdateRequired();
+    if (app.info.protocol_version !== PROTOCOL_VERSION) updateRequired();
     // An invitation waits for the session; its token must not stay in the URL.
     const invite = inviteFromLocation();
     if (invite) {
