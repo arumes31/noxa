@@ -396,6 +396,24 @@ func TestSlowBodyIsCutWhileWebSocketsStayOpen(t *testing.T) {
 	}
 	defer func() { _ = ws.Close() }()
 
+	// POST /ws is no upgrade: the mux refuses it and net/http drains the body.
+	for _, target := range []string{"/app/share", "/ws", "/ft"} {
+		slowBodyIsCut(t, ts, target)
+	}
+
+	// The hijacked WebSocket outlives the request read deadline.
+	if _, err := ws.Write([]byte{7}); err != nil {
+		t.Fatal(err)
+	}
+	_ = ws.SetReadDeadline(time.Now().Add(3 * time.Second))
+	got := make([]byte, 1)
+	if _, err := io.ReadFull(ws, got); err != nil || got[0] != 7 {
+		t.Fatalf("websocket after deadline: %v %v", got, err)
+	}
+}
+
+func slowBodyIsCut(t *testing.T, ts *httptest.Server, target string) {
+	t.Helper()
 	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", ts.Listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)
@@ -403,7 +421,7 @@ func TestSlowBodyIsCutWhileWebSocketsStayOpen(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 	// A body under net/http's post-handler discard limit is drained after
 	// the reply, so only the read deadline ends a trickle.
-	if _, err := io.WriteString(conn, "POST /app/share HTTP/1.1\r\nHost: chat.example\r\nX-Forwarded-Proto: https\r\nContent-Length: 200000\r\n\r\n"); err != nil {
+	if _, err := io.WriteString(conn, "POST "+target+" HTTP/1.1\r\nHost: chat.example\r\nX-Forwarded-Proto: https\r\nContent-Length: 200000\r\n\r\n"); err != nil {
 		t.Fatal(err)
 	}
 	closed := make(chan struct{})
@@ -420,19 +438,9 @@ trickle:
 		case <-closed:
 			break trickle
 		case <-timeout:
-			t.Fatal("slow body kept the connection open past the read deadline")
+			t.Fatalf("slow body to %s kept the connection open past the read deadline", target)
 		case <-tick.C:
 			_, _ = conn.Write([]byte{'x'})
 		}
-	}
-
-	// The hijacked WebSocket outlives the request read deadline.
-	if _, err := ws.Write([]byte{7}); err != nil {
-		t.Fatal(err)
-	}
-	_ = ws.SetReadDeadline(time.Now().Add(3 * time.Second))
-	got := make([]byte, 1)
-	if _, err := io.ReadFull(ws, got); err != nil || got[0] != 7 {
-		t.Fatalf("websocket after deadline: %v %v", got, err)
 	}
 }

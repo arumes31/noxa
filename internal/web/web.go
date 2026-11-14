@@ -174,12 +174,14 @@ func (s *Server) Handler() http.Handler {
 // requestReadTimeout bounds how long a request may take to arrive, body
 // included. Without it a client that trickles a large declared body holds the
 // connection while net/http discards it. It is set per request, not as
-// http.Server.ReadTimeout, which would also end hijacked WebSockets.
+// http.Server.ReadTimeout, which would also end hijacked WebSockets; only a
+// real upgrade skips it, and the WebSocket then manages its own deadlines.
 var requestReadTimeout = 30 * time.Second
 
 func bodyReadDeadline(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/ws" && r.URL.Path != "/ft" {
+		upgrade := r.Method == http.MethodGet && strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+		if !upgrade || (r.URL.Path != "/ws" && r.URL.Path != "/ft") {
 			_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(requestReadTimeout))
 		}
 		next.ServeHTTP(w, r)

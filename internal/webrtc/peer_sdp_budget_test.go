@@ -35,4 +35,9 @@ func TestCheckRemoteSDPBudgetCapsMediaSections(t *testing.T) {
 	if err := checkRemoteSDPBudget(sdp.String()); !errors.Is(err, ErrSDPTooManyMediaSections) {
 		t.Fatalf("over-budget description err=%v", err)
 	}
+	// Pion also accepts a bare CR as a line break.
+	crOnly := "v=0\r" + strings.Repeat("c=IN IP4 0.0.0.0\rm=audio 9 UDP/TLS/RTP/SAVPF 111\r", maxRemoteMediaSections+1)
+	if err := checkRemoteSDPBudget(crOnly); !errors.Is(err, ErrSDPTooManyMediaSections) {
+		t.Fatalf("CR-separated sections slipped past the budget: %v", err)
+	}
 }

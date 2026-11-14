@@ -155,7 +155,8 @@ var ErrSDPTooManyMediaSections = errors.New("webrtc: session description declare
 
 func checkRemoteSDPBudget(sdp string) error {
 	ssrcs, sections := 0, 0
-	for line := range strings.Lines(sdp) {
+	// Pion's lexer also ends a line at a bare CR, so split at CR and LF alike.
+	for _, line := range strings.FieldsFunc(sdp, func(r rune) bool { return r == '\r' || r == '\n' }) {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "a=ssrc") {
 			if ssrcs++; ssrcs > maxRemoteSSRCAttributes {

@@ -15,6 +15,7 @@ import (
 	"net/netip"
 	"noxa/internal/netproto"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -182,6 +183,49 @@ func TestOneSiteHoldsOneSlot(t *testing.T) {
 	}
 	if _, err := s.Preview(context.Background(), netproto.LinkPreviewRequest{Provider: "image", Resource: "https://c.slow.example.com/x.png"}); err != nil {
 		t.Fatalf("site not released: %v", err)
+	}
+}
+
+func TestRedirectToABusySiteIsRefused(t *testing.T) {
+	s := New()
+	started, release := make(chan struct{}), make(chan struct{})
+	var hit sync.Map
+	client := newHTTPClient()
+	client.Transport = transportFunc(func(req *http.Request) (*http.Response, error) {
+		hit.Store(req.URL.Host, true)
+		switch req.URL.Host {
+		case "a.slow.example.com":
+			close(started)
+			<-release
+		case "other.example.org":
+			return &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": {"https://b.slow.example.com/"}}, Body: http.NoBody, Request: req}, nil
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/html"}}, Body: io.NopCloser(strings.NewReader("<title>t</title>")), Request: req}, nil
+	})
+	s.client = client
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Preview(context.Background(), netproto.LinkPreviewRequest{Provider: "web", Resource: "https://a.slow.example.com/"})
+		done <- err
+	}()
+	<-started
+	if _, err := s.Preview(context.Background(), netproto.LinkPreviewRequest{Provider: "web", Resource: "https://other.example.org/"}); err == nil {
+		t.Fatal("redirect to a busy site was followed")
+	}
+	if _, ok := hit.Load("b.slow.example.com"); ok {
+		t.Fatal("busy site was fetched through a redirect")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Preview(context.Background(), netproto.LinkPreviewRequest{Provider: "web", Resource: "https://other.example.org/"}); err != nil {
+		t.Fatalf("redirect refused after the site was released: %v", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.hosts) != 0 {
+		t.Fatalf("sites still held: %v", s.hosts)
 	}
 }
 

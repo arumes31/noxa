@@ -177,6 +177,8 @@ func TestTCPPreAuthGroupsIPv6AndCapsPendingPool(t *testing.T) {
 	var b [1]byte
 	if _, err := rejected.Read(b[:]); err == nil {
 		t.Fatal("over-quota stream left open")
+	} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+		t.Fatal("over-quota stream was not promptly closed")
 	}
 	// The pending pool is half the socket limit.
 	for i := 2; limited.pending < limited.maxPending; i++ {
@@ -194,5 +196,7 @@ func TestTCPPreAuthGroupsIPv6AndCapsPendingPool(t *testing.T) {
 	_ = overflow.SetReadDeadline(time.Now().Add(time.Second))
 	if _, err := overflow.Read(b[:]); err == nil {
 		t.Fatal("pending pool overflow left open")
+	} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+		t.Fatal("pending pool overflow was not promptly closed")
 	}
 }

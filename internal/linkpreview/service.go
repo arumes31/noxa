@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -110,8 +111,10 @@ func newHTTPClient() *http.Client {
 		if len(via) >= 3 {
 			return errUnavailable
 		}
-		_, err := pageURL(req.URL.String())
-		return err
+		if _, err := pageURL(req.URL.String()); err != nil {
+			return err
+		}
+		return holdFrom(req.Context()).admit(req.URL)
 	}}
 }
 
@@ -144,11 +147,63 @@ func siteKey(r netproto.LinkPreviewRequest) string {
 	if err != nil {
 		return r.Resource
 	}
+	return siteOf(u)
+}
+
+func siteOf(u *url.URL) string {
 	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
 	if site, err := publicsuffix.EffectiveTLDPlusOne(host); err == nil {
 		return site
 	}
 	return host
+}
+
+func (s *Service) admitSite(site string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, busy := s.hosts[site]; busy {
+		return false
+	}
+	s.hosts[site] = struct{}{}
+	return true
+}
+
+// siteHold lists the sites one web or image preview occupies: its own, plus
+// redirect and thumbnail destinations, which must be free as well.
+type siteHold struct {
+	s     *Service
+	sites []string
+}
+type siteHoldKey struct{}
+
+func holdFrom(ctx context.Context) *siteHold {
+	h, _ := ctx.Value(siteHoldKey{}).(*siteHold)
+	return h
+}
+
+// admit claims the site of u for this preview; nil holds (fixed providers)
+// admit everything. Fetches of one preview are sequential.
+func (h *siteHold) admit(u *url.URL) error {
+	if h == nil {
+		return nil
+	}
+	site := siteOf(u)
+	if slices.Contains(h.sites, site) {
+		return nil
+	}
+	if !h.s.admitSite(site) {
+		return errUnavailable
+	}
+	h.sites = append(h.sites, site)
+	return nil
+}
+
+func (h *siteHold) release() {
+	h.s.mu.Lock()
+	defer h.s.mu.Unlock()
+	for _, site := range h.sites {
+		delete(h.s.hosts, site)
+	}
 }
 func (s *Service) Preview(ctx context.Context, r netproto.LinkPreviewRequest) (netproto.LinkPreviewResult, error) {
 	var empty netproto.LinkPreviewResult
@@ -162,20 +217,12 @@ func (s *Service) Preview(ctx context.Context, r netproto.LinkPreviewRequest) (n
 		return cached.result, nil
 	}
 	if site := siteKey(r); site != "" {
-		s.mu.Lock()
-		_, busy := s.hosts[site]
-		if !busy {
-			s.hosts[site] = struct{}{}
-		}
-		s.mu.Unlock()
-		if busy {
+		if !s.admitSite(site) {
 			return empty, errUnavailable
 		}
-		defer func() {
-			s.mu.Lock()
-			delete(s.hosts, site)
-			s.mu.Unlock()
-		}()
+		hold := &siteHold{s: s, sites: []string{site}}
+		defer hold.release()
+		ctx = context.WithValue(ctx, siteHoldKey{}, hold)
 	}
 	select {
 	case s.slots <- struct{}{}:
@@ -291,6 +338,9 @@ func (s *Service) metadataRequest(req *http.Request, client *http.Client) (*http
 func (s *Service) image(ctx context.Context, value string) (string, error) {
 	u, err := pageURL(value)
 	if err != nil {
+		return "", err
+	}
+	if err := holdFrom(ctx).admit(u); err != nil {
 		return "", err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
