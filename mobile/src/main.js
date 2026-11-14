@@ -126,7 +126,7 @@ function onSignedIn({ offerPasskey: offer } = {}) {
 
 function renderBanner() {
     renderInstallPrompt(root);
-    document.querySelector(".banner")?.remove();
+    document.querySelector(".banner:not(.banner-update)")?.remove();
     const waiting = app.outboxWaiting ? ` · ${t("outbox.count", { count: app.outboxWaiting })}` : "";
     if (app.session && !app.online) root.prepend(h("div", { class: "banner", role: "status" }, t("offline.banner") + waiting));
 }
@@ -244,8 +244,9 @@ const hasDraft = () => [...document.querySelectorAll("textarea, input[type=text]
     .some(field => (field.value ?? field.textContent).trim() !== "");
 const inVoice = () => !!(app.voice?.active || app.calls?.active) || hasDraft();
 
-/** Activates the waiting service worker, then reloads into the new version. */
-async function applyUpdate() {
+/** Activates the waiting service worker, then reloads into the new version.
+ * Automatic updates (auto) step back if a call or draft started meanwhile. */
+async function applyUpdate({ auto = false } = {}) {
     try {
         const registration = await navigator.serviceWorker?.getRegistration("/app/");
         const waiting = registration?.waiting;
@@ -259,10 +260,14 @@ async function applyUpdate() {
             await switched;
         }
     } catch { /* Reload still works without service-worker access. */ }
+    if (auto && inVoice()) {
+        pendingUpdate.ready();
+        return;
+    }
     location.reload();
 }
 
-const pendingUpdate = updatePolicy({ inVoice, reload: applyUpdate });
+const pendingUpdate = updatePolicy({ inVoice, reload: () => applyUpdate({ auto: true }) });
 app.addEventListener("voice", () => pendingUpdate.check());
 app.addEventListener("call", () => pendingUpdate.check());
 for (const type of ["input", "focusout", "visibilitychange"]) document.addEventListener(type, () => pendingUpdate.check());
