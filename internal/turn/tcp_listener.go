@@ -7,6 +7,8 @@ import (
 
 	pion "github.com/pion/turn/v5"
 	"golang.org/x/net/netutil"
+
+	"noxa/internal/auth"
 )
 
 // Unauthenticated streams have a fixed lifetime, a separate global budget and
@@ -17,12 +19,21 @@ type tcpListener struct {
 	closed          bool
 	conns           map[string]*tcpConn
 	pending         int
+	maxPending      int
 	pendingByIP     map[string]int
 	preAuthLifetime time.Duration
 }
 
+// maxPendingPerSource bounds unauthenticated streams from one IPv4 address
+// or IPv6 /64; a client needs one per allocation attempt.
+const maxPendingPerSource = 4
+
 func limitedTCPListener(listener net.Listener, maximum int) *tcpListener {
-	return &tcpListener{Listener: netutil.LimitListener(listener, min(512, maximum)), conns: make(map[string]*tcpConn), pendingByIP: make(map[string]int), preAuthLifetime: 30 * time.Second}
+	maximum = min(512, maximum)
+	// Unauthenticated streams may hold half the sockets, so allocated
+	// streams keep room while many clients connect at once.
+	return &tcpListener{Listener: netutil.LimitListener(listener, maximum), conns: make(map[string]*tcpConn), maxPending: max(1, maximum/2),
+		pendingByIP: make(map[string]int), preAuthLifetime: 10 * time.Second}
 }
 func (l *tcpListener) Accept() (net.Conn, error) {
 	for {
@@ -31,13 +42,14 @@ func (l *tcpListener) Accept() (net.Conn, error) {
 			return nil, err
 		}
 		ip, _, err := net.SplitHostPort(conn.RemoteAddr().String())
+		ip = auth.SourceAddressKey(ip)
 		l.mu.Lock()
 		if l.closed {
 			l.mu.Unlock()
 			_ = conn.Close()
 			return nil, net.ErrClosed
 		}
-		if err != nil || l.pending >= 64 || l.pendingByIP[ip] >= 8 || l.conns[conn.RemoteAddr().String()] != nil {
+		if err != nil || l.pending >= l.maxPending || l.pendingByIP[ip] >= maxPendingPerSource || l.conns[conn.RemoteAddr().String()] != nil {
 			l.mu.Unlock()
 			_ = conn.Close()
 			continue

@@ -14,7 +14,7 @@ type requestBucket struct {
 }
 type sessionRequestBudget struct {
 	mu      sync.Mutex
-	buckets [6]requestBucket
+	buckets [7]requestBucket
 }
 
 func (b *sessionRequestBudget) allow(mt netproto.MessageType, now time.Time) bool {
@@ -31,8 +31,13 @@ func (b *sessionRequestBudget) allow(mt netproto.MessageType, now time.Time) boo
 		class, burst, rate = 4, 400, 16
 	case netproto.MsgChatHistory, netproto.MsgFileList, netproto.MsgFileTransferInit, netproto.MsgJoinChannel:
 		class, burst, rate = 1, 24, 4
-	case netproto.MsgICECandidate, netproto.MsgWebRTCOffer, netproto.MsgWebRTCAnswer:
+	case netproto.MsgICECandidate, netproto.MsgWebRTCAnswer:
 		class, burst, rate = 2, 256, 64
+	case netproto.MsgWebRTCOffer:
+		// Each offer rebuilds the session's transceivers. Clients send one at a
+		// time (each waits for its answer) on source changes, ICE restarts and
+		// up to two glare retries; member joins arrive as server offers.
+		class, burst, rate = 6, 64, 8
 	case netproto.MsgSetStatus, netproto.MsgDisplayNameSet:
 		// Each change rebuilds a snapshot for every recipient.
 		class, burst, rate = 5, 5, 0.5

@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"noxa/internal/auth"
 	"noxa/internal/netproto"
 	"noxa/internal/tlscert"
 	"noxa/internal/traffic"
@@ -1446,6 +1447,9 @@ func (s *Server) ServeExternalConn(ctx context.Context, conn net.Conn) error {
 	return nil
 }
 
+// maxPreauthPerSource bounds unauthenticated connections from one source.
+const maxPreauthPerSource = 8
+
 // admit reserves one bounded connection slot and registers conn before its
 // worker starts. Close can therefore close every blocking accepted connection
 // without racing an admission that would escape its snapshot.
@@ -1481,7 +1485,10 @@ func (s *Server) admit(conn net.Conn) bool {
 	if err != nil {
 		ip = conn.RemoteAddr().String()
 	}
-	if s.preauthByIP[ip] >= 8 {
+	// One IPv6 /64 counts as one source, like the control server; pre-auth
+	// connections may hold at most half the slots so transfers keep room.
+	ip = auth.SourceAddressKey(ip)
+	if s.preauthByIP[ip] >= maxPreauthPerSource || len(s.preauth) >= max(1, cap(s.connSlots)/2) {
 		s.lifecycleMu.Unlock()
 		<-s.connSlots
 		return false
