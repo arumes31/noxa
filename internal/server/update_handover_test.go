@@ -292,3 +292,68 @@ func TestHandoverCommitRefusedByAdmissionKeepsOldSession(t *testing.T) {
 		t.Fatalf("commit at capacity = %+v %v", done, err)
 	}
 }
+
+// readGoodbye reads conn until a goodbye or the close and returns its reason.
+func readGoodbye(t *testing.T, conn net.Conn) (string, bool) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(waitDeadline))
+	for {
+		f, err := netproto.ReadFrame(conn)
+		if err != nil {
+			return "", false
+		}
+		if netproto.MessageType(f.Type) == netproto.MsgGoodbye {
+			var goodbye netproto.Goodbye
+			_ = netproto.Decode(f, &goodbye)
+			return goodbye.Reason, true
+		}
+	}
+}
+
+func TestHandoverCommitTellsOldConnectionAndKeepsItsSlot(t *testing.T) {
+	env := startTestEnvFull(t, nil, func(c *config.Config) { c.MaxClients = 1 })
+	defer env.stop()
+	old, first := dialResumable(t, env.addr, userLogin(""))
+	defer func() { _ = old.Close() }()
+	standby, resp := dialHandover(t, env.addr, userLogin(first.ResumeToken))
+	defer func() { _ = standby.Close() }()
+	if !resp.Standby {
+		t.Fatalf("standby reply = %+v", resp)
+	}
+	// A login racing into the gap between the old session's cleanup and the
+	// commit's publication must not take the reserved slot.
+	raced := make(chan netproto.AuthResponse, 1)
+	afterHandoverTakeover = func() {
+		conn := dialRetry(t, env.addr)
+		defer func() { _ = conn.Close() }()
+		send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "admin-uid", Password: "pw"})
+		var r netproto.AuthResponse
+		_ = netproto.Decode(readOfType(t, conn, netproto.MsgAuthResponse), &r)
+		raced <- r
+	}
+	defer func() { afterHandoverTakeover = nil }()
+	send(t, standby, netproto.MsgHandoverCommit, struct{}{})
+	var done netproto.AuthResponse
+	if err := netproto.Decode(readOfType(t, standby, netproto.MsgAuthResponse), &done); err != nil || !done.OK {
+		t.Fatalf("commit = %+v %v", done, err)
+	}
+	if r := <-raced; r.OK || r.Reason != "server is full" {
+		t.Fatalf("racing login = %+v, want refused as full", r)
+	}
+	if reason, ok := readGoodbye(t, old); !ok || reason != netproto.GoodbyeReasonHandover {
+		t.Fatalf("old connection goodbye = %q %v, want the handover proof", reason, ok)
+	}
+	waitFor(t, "slot reservation released", func() bool { return env.srv.handoverSlots.Load() == 0 })
+}
+
+func TestOrdinaryResumeTakeoverSendsNoHandoverGoodbye(t *testing.T) {
+	env := startTestEnv(t, nil)
+	defer env.stop()
+	old, first := dialResumable(t, env.addr, userLogin(""))
+	defer func() { _ = old.Close() }()
+	resumed, _ := dialResumable(t, env.addr, userLogin(first.ResumeToken))
+	defer func() { _ = resumed.Close() }()
+	if reason, ok := readGoodbye(t, old); ok {
+		t.Fatalf("a plain resume sent goodbye %q", reason)
+	}
+}

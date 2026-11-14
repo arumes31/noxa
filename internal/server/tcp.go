@@ -351,6 +351,9 @@ type TCPServer struct {
 	presence presenceTracker
 	// resume holds the resume tokens and parked sessions (session_resume.go).
 	resume resumeStore
+	// handoverSlots counts sessions whose slot is reserved for a handover
+	// commit between the old connection's takeover and the new publication.
+	handoverSlots atomic.Int64
 	// connecting marks members whose voice is still connecting (voice_connecting.go).
 	connecting voiceConnecting
 	// noxa-olm-v1 admission (frame 202), ON by default and advertised as

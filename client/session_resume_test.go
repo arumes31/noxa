@@ -44,7 +44,7 @@ func TestUpdateEnvelopeCarriesResumeToken(t *testing.T) {
 	tab.cm.conn = local
 	tab.cm.setResumeToken("session-token")
 	a.activate(active)
-	saved := a.snapshotUpdateConnection()
+	saved, _ := a.snapshotUpdateConnection()
 	if saved == nil || saved.ResumeToken != "session-token" {
 		t.Fatalf("snapshot = %+v, want the session's resume token", saved)
 	}

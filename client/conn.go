@@ -96,6 +96,9 @@ type connManager struct {
 	// handoverBegin, set only on an update handover login, is called once the
 	// server holds the login in standby; true commits it.
 	handoverBegin       func() bool
+	// handoverCommitted: the server accepted this login's handover commit, so
+	// the session lives here now even if the connection setup fails later.
+	handoverCommitted bool
 	uniqueID            string
 	deviceID            string              // linked device of this session (devices_v1)
 	callMediaCache      callMediaStateCache // call state behind call media-key targets (#12)
@@ -684,6 +687,15 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 			_ = conn.Close()
 			return netproto.ReasonHandoverUnavailable
 		}
+		if resp.OK {
+			// Keep the issued token before anything else can fail: the server
+			// now holds this session (after a handover commit, the only one)
+			// under it, and a resume needs it.
+			m.mu.Lock()
+			m.resumeToken = resp.ResumeToken
+			m.handoverCommitted = committed
+			m.mu.Unlock()
+		}
 		if resp.OK && resp.MediaLimitsRevision != 0 && !hasCompleteAuthMediaLimits(f) {
 			m.markReconnectTerminal()
 			_ = conn.Close()
@@ -982,7 +994,6 @@ func (m *connManager) terminateConn(conn net.Conn, emitDisconnected bool, reason
 	toClose, waiters, transferConns := m.detachLocked()
 	m.mu.Unlock()
 	log.Printf("control connection closed reason=%s epoch=%d", reason, epoch)
-	noteHandoverClose(m, reason)
 	m.finishDetach(toClose, waiters, transferConns, emitDisconnected)
 	return true
 }
@@ -1333,6 +1344,10 @@ func (m *connManager) dispatchAccepted(conn net.Conn, epoch uint64, checkSource 
 		if err := netproto.Decode(f, &protocolErr); err != nil {
 			return
 		}
+	}
+	if mt == netproto.MsgGoodbye {
+		noteHandoverGoodbye(m, f) // the server moved this session (update handover)
+		return
 	}
 	if hook := m.beforeDispatchLock; hook != nil {
 		hook()

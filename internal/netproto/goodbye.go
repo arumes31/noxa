@@ -17,6 +17,11 @@ type Goodbye struct {
 // GoodbyeReasonUpdate: the client restarts into an update and comes back soon.
 const GoodbyeReasonUpdate = "update"
 
+// GoodbyeReasonHandover (server -> client) tells an old update handover
+// connection, right before the server closes it, that its session moved to
+// the committed replacement. It is the old process's only proof of the move.
+const GoodbyeReasonHandover = "handover"
+
 // ClientFeatureGoodbye announces that the client sends MsgGoodbye before a
 // deliberate close. Clients without it keep the legacy reading of a clean
 // close as a deliberate leave.

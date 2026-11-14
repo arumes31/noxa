@@ -124,18 +124,26 @@ func TestUpdateHandoverLostConfirmationIsUnconfirmed(t *testing.T) {
 		t.Fatal("a commit without confirmation must stay undecided")
 	}
 
-	// Only a clean server close of the handed-over connection is evidence.
+	// Only the server's explicit handover goodbye to the handed-over
+	// connection is evidence: not a plain goodbye, not another tab's.
+	goodbye := func(reason string) *netproto.Frame {
+		f, err := netproto.Encode(netproto.MsgGoodbye, netproto.Goodbye{Reason: reason})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
 	target, other := &connManager{sink: &eventRecorder{}}, &connManager{sink: &eventRecorder{}}
 	beginHandoverSilence(target)
-	noteHandoverClose(other, netproto.ControlCloseEOF)
-	noteHandoverClose(target, netproto.ControlCloseReadError)
-	noteHandoverClose(target, netproto.ControlCloseReadTimeout)
+	other.dispatch(goodbye(netproto.GoodbyeReasonHandover))
+	target.dispatch(goodbye(""))
+	target.dispatch(goodbye(netproto.GoodbyeReasonUpdate))
 	if handoverSessionTaken() {
-		t.Fatal("another tab's close or a network failure counted as a takeover")
+		t.Fatal("another tab's goodbye or a plain one counted as a takeover")
 	}
-	noteHandoverClose(target, netproto.ControlCloseEOF)
+	target.dispatch(goodbye(netproto.GoodbyeReasonHandover))
 	if !handoverSessionTaken() {
-		t.Fatal("the server closing the handed-over connection means the session moved")
+		t.Fatal("the server's handover goodbye means the session moved")
 	}
 	endHandoverSilence(false)
 	if handoverSessionTaken() {
@@ -206,42 +214,52 @@ func TestApplyAndRestartHandsOverOrFallsBack(t *testing.T) {
 	t.Cleanup(func() { restartLaunch, wailsQuit, handOverSession = originalLaunch, originalQuit, originalHandover })
 	client, server := net.Pipe()
 	defer func() { _ = client.Close(); _ = server.Close() }()
-	app := &App{ctx: context.Background(), updateReconnect: "saved"}
-	app.cmStore(&connManager{conn: client, supportsHandover: true, resumeToken: "token"})
+	target := &connManager{conn: client, supportsHandover: true, resumeToken: "token"}
+	app := &App{ctx: context.Background()}
+	prepare := func() { app.updateReconnect, app.updateHandoverCM, app.updateHandoverToken = "saved", target, "token" }
 	var order []string
 	restartLaunch = func(string) error { order = append(order, "restart"); return nil }
 	wailsQuit = func(context.Context) { order = append(order, "quit") }
+	handover := func(moved, fallback bool, err error) {
+		handOverSession = func(_ *App, _ string, got *connManager) (bool, bool, error) {
+			if got != target {
+				t.Error("the handover did not use the prepared session")
+			}
+			order = append(order, "handover")
+			return moved, fallback, err
+		}
+	}
 
-	handOverSession = func(*App, string) (bool, bool, error) { order = append(order, "handover"); return true, false, nil }
+	order = nil
+	prepare()
+	handover(true, false, nil)
 	if got := app.ApplyAndRestart(); got != "" || !slices.Equal(order, []string{"handover", "quit"}) {
 		t.Fatalf("moved: %q order %v", got, order)
 	}
 	quitForUpdate.Store(false)
 
-	order, app.updateReconnect = nil, "saved"
-	handOverSession = func(*App, string) (bool, bool, error) {
-		order = append(order, "handover")
-		return false, true, errors.New("abandoned")
-	}
+	order = nil
+	prepare()
+	handover(false, true, errors.New("abandoned"))
 	if got := app.ApplyAndRestart(); got != "" || !slices.Equal(order, []string{"handover", "restart", "quit"}) {
 		t.Fatalf("fallback: %q order %v", got, order)
 	}
 	quitForUpdate.Store(false)
 
-	order, app.updateReconnect = nil, "saved"
-	handOverSession = func(*App, string) (bool, bool, error) {
-		order = append(order, "handover")
-		return false, false, errors.New("replacement still running")
-	}
+	order = nil
+	prepare()
+	handover(false, false, errors.New("replacement still running"))
 	if got := app.ApplyAndRestart(); got == "" || !slices.Equal(order, []string{"handover"}) {
 		t.Fatalf("unstoppable child: %q order %v", got, order)
 	}
 
-	// Without server support or a saved session the restart path runs directly.
-	order, app.updateReconnect = nil, "saved"
-	app.cmStore(&connManager{conn: client, resumeToken: "token"})
+	// A token that changed since preparation (or no server support) means
+	// the restart path runs directly.
+	order = nil
+	prepare()
+	app.updateHandoverToken = "stale"
 	if got := app.ApplyAndRestart(); got != "" || !slices.Equal(order, []string{"restart", "quit"}) {
-		t.Fatalf("no server support: %q order %v", got, order)
+		t.Fatalf("stale token: %q order %v", got, order)
 	}
 	quitForUpdate.Store(false)
 	_ = os.Unsetenv(updateReconnectEnv)
@@ -366,7 +384,7 @@ func TestHandoverWindowAppearsWhenOldProcessExits(t *testing.T) {
 
 // commitThenDropServer commits a standby login, then drops the connection
 // when the restored client rejoins its channel. It reports any goodbye.
-func commitThenDropServer(t *testing.T) (string, *atomic.Bool) {
+func commitThenDropServer(t *testing.T, badLimits bool) (string, *atomic.Bool) {
 	t.Helper()
 	cert, _, err := tlscert.Ensure(t.TempDir(), "", "", nil)
 	if err != nil {
@@ -400,7 +418,11 @@ func commitThenDropServer(t *testing.T) (string, *atomic.Bool) {
 			}
 			switch netproto.MessageType(frame.Type) {
 			case netproto.MsgHandoverCommit:
-				write(conn, netproto.AuthResponse{OK: true, Resumed: true, ClientID: "c-1", UniqueID: "u", Nickname: "account", ResumeToken: "rotated"})
+				done := netproto.AuthResponse{OK: true, Resumed: true, ClientID: "c-1", UniqueID: "u", Nickname: "account", ResumeToken: "rotated"}
+				if badLimits {
+					done.MediaLimitsRevision = 5 // fails the client's setup after the commit
+				}
+				write(conn, done)
 			case netproto.MsgGoodbye:
 				goodbye.Store(true)
 			case netproto.MsgJoinChannel:
@@ -412,6 +434,14 @@ func commitThenDropServer(t *testing.T) (string, *atomic.Bool) {
 }
 
 func TestHandoverKeepsMovedSessionWhenRestorationLosesConnection(t *testing.T) {
+	for _, badLimits := range []bool{false, true} {
+		t.Run(map[bool]string{false: "dropped at rejoin", true: "setup failed after commit"}[badLimits], func(t *testing.T) {
+			testHandoverKeepsMovedSession(t, badLimits)
+		})
+	}
+}
+
+func testHandoverKeepsMovedSession(t *testing.T, badLimits bool) {
 	originalShow, originalHandover := showUpdateWindow, incomingHandover
 	t.Cleanup(func() { showUpdateWindow, incomingHandover = originalShow, originalHandover })
 	showUpdateWindow = func(context.Context) {}
@@ -420,7 +450,7 @@ func TestHandoverKeepsMovedSessionWhenRestorationLosesConnection(t *testing.T) {
 	var committing atomic.Int32
 	outcome := serveAsync(t.Context(), r, os.Getpid(), nil, &committing)
 
-	addr, goodbye := commitThenDropServer(t)
+	addr, goodbye := commitThenDropServer(t, badLimits)
 	a := newTabApp(t)
 	var mu sync.Mutex
 	var events []string

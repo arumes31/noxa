@@ -107,6 +107,9 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		return s.enterHandoverStandby(client, id)
 	}
 	resumed := s.claimResume(ctx, client, id.uniqueID)
+	if hook := afterHandoverTakeover; hook != nil && client.handoverCommitting() {
+		hook()
+	}
 	if resumed == nil && client.handoverCommitting() {
 		// The session ended or was resumed elsewhere meanwhile: never let a
 		// commit become a second, fresh session.
@@ -162,9 +165,13 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		}
 		// Metadata serialization makes capacity check and publication atomic.
 		// Idle sockets are deliberately excluded from the configured user limit.
-		// A handover commit takes over its old session's slot (already
-		// freed by the takeover) and must not lose it to a racing login.
-		if max := s.EffectiveMaxClients(ctx); max > 0 && (resumed == nil || !client.handoverCommitting()) && s.authenticatedClientCount() >= max {
+		// Slots reserved for handover commits count as sessions; a commit
+		// does not count its own reservation.
+		reserved := int(s.handoverSlots.Load())
+		if client.handoverCommitting() {
+			reserved--
+		}
+		if max := s.EffectiveMaxClients(ctx); max > 0 && s.authenticatedClientCount()+reserved >= max {
 			rejection = "server is full"
 			return authorization.ErrRoleForbidden
 		}

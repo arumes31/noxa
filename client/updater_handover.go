@@ -100,19 +100,23 @@ func endHandoverSilence(replay bool) {
 	}
 }
 
-// noteHandoverClose records how the handed-over connection ended. The server
-// closes it deliberately when it moves the session (a clean end of stream);
-// a network failure looks different and is no evidence of a move.
-func noteHandoverClose(m *connManager, reason netproto.ControlCloseReason) {
+// noteHandoverGoodbye records the server's explicit goodbye to the handed-over
+// connection: sent only when a commit moved its session, right before the
+// server closes it. Nothing else (a shutdown, a network loss) counts.
+func noteHandoverGoodbye(m *connManager, f *netproto.Frame) {
+	var goodbye netproto.Goodbye
+	if netproto.Decode(f, &goodbye) != nil || goodbye.Reason != netproto.GoodbyeReasonHandover {
+		return
+	}
 	handoverSilence.Lock()
 	defer handoverSilence.Unlock()
-	if m == handoverSilence.target && m != nil && reason == netproto.ControlCloseEOF {
+	if m != nil && m == handoverSilence.target {
 		handoverSilence.taken = true
 	}
 }
 
-// handoverSessionTaken reports whether the server closed the handed-over
-// connection during the commit, which it does when it moves the session.
+// handoverSessionTaken reports whether the server told the handed-over
+// connection that its session moved.
 func handoverSessionTaken() bool {
 	handoverSilence.Lock()
 	defer handoverSilence.Unlock()
@@ -129,26 +133,22 @@ func deferHandoverDisconnect(m *connManager) bool {
 	return true
 }
 
-// updateHandoverPossible reports whether the active session can move: the
-// server supports handover and the saved connection carries its token.
-func (a *App) updateHandoverPossible(resume string) bool {
-	if resume == "" || a.ctx == nil {
-		return false
-	}
-	cm := a.cmLoad()
-	if cm == nil || !cm.connected() {
+// updateHandoverPossible reports whether the prepared session can move: it is
+// still connected to a server that supports handover, with the token that
+// travels to the replacement.
+func (a *App) updateHandoverPossible(resume string, cm *connManager, token string) bool {
+	if resume == "" || a.ctx == nil || cm == nil || token == "" || !cm.connected() {
 		return false
 	}
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
-	return cm.supportsHandover && cm.resumeToken != ""
+	return cm.supportsHandover && cm.resumeToken == token
 }
 
 // handOverUpdate tries the handover and reports whether the session moved.
 // fallback is false only when the restart path must not run either (a
 // replacement that could not be stopped).
-func (a *App) handOverUpdate(exe string) (moved, fallback bool, err error) {
-	target := a.cmLoad() // the session whose token the replacement presents
+func (a *App) handOverUpdate(exe string, target *connManager) (moved, fallback bool, err error) {
 	committing := func(pid int) {
 		beginHandoverSilence(target)
 		allowUpdateForeground(pid)

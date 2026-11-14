@@ -604,8 +604,8 @@ func (a *App) ApplyAndRestart() string {
 		return "an update is already processing"
 	}
 	a.update.running = true
-	resume := a.updateReconnect
-	a.updateReconnect = ""
+	resume, target, token := a.updateReconnect, a.updateHandoverCM, a.updateHandoverToken
+	a.updateReconnect, a.updateHandoverCM, a.updateHandoverToken = "", nil, ""
 	a.update.mu.Unlock()
 	defer func() {
 		a.update.mu.Lock()
@@ -636,8 +636,8 @@ func (a *App) ApplyAndRestart() string {
 	}()
 	// Move the session to the replacement before quitting when possible;
 	// otherwise restart as before (the session resumes after the restart).
-	if a.updateHandoverPossible(resume) {
-		moved, fallback, err := handOverSession(a, exe)
+	if a.updateHandoverPossible(resume, target, token) {
+		moved, fallback, err := handOverSession(a, exe, target)
 		if moved {
 			quitForUpdate.Store(true)
 			a.quitting.Store(true)

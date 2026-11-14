@@ -157,8 +157,8 @@ func (s *TCPServer) handleHandoverCommit(ctx context.Context, client *Client) er
 		return errHandoverUnavailable
 	}
 	// Admission first: a commit refused for a ban or a signed-out device must
-	// leave the live old session untouched. (Capacity is not checked: the
-	// commit replaces the old session's slot, see finishAuth.)
+	// leave the live old session untouched. Capacity cannot refuse it: the
+	// old session's slot is reserved for it below.
 	if reason, err := s.handoverAdmission(ctx, client, standby.identity.uniqueID); reason != "" || err != nil {
 		if reason == "" {
 			reason = "internal error"
@@ -170,7 +170,11 @@ func (s *TCPServer) handleHandoverCommit(ctx context.Context, client *Client) er
 	}
 	s.resume.endHandover(standby.clientID, client)
 	client.setResumeOffer(standby.token, true)
+	// The old session's slot passes to this commit: reserved before the old
+	// connection closes and counted until this session is published.
+	s.handoverSlots.Add(1)
 	err := s.finishAuth(ctx, client, standby.identity)
+	s.handoverSlots.Add(-1)
 	client.dropHandover()
 	return err
 }
@@ -186,3 +190,16 @@ func (s *TCPServer) handoverAdmission(ctx context.Context, client *Client, uniqu
 	}
 	return s.sessionDeviceRejection(ctx, client, uniqueID)
 }
+
+// sendHandoverGoodbye tells the old connection, before it is closed, that its
+// session moved. Bounded: a stalled connection is closed without it, and the
+// old process then falls back instead of assuming the move.
+func (s *TCPServer) sendHandoverGoodbye(owner *Client) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = s.writeMessageInContext(ctx, owner, netproto.MsgGoodbye, netproto.Goodbye{Reason: netproto.GoodbyeReasonHandover})
+}
+
+// afterHandoverTakeover lets tests act between the old session's cleanup and
+// the commit's publication.
+var afterHandoverTakeover func()
