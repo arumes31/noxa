@@ -34,12 +34,25 @@ export function createThumbCache(max = THUMB_CACHE_MAX, revoke = url => URL.revo
                 if (url) revoke(url);
             }
         },
+        clear() {
+            for (const url of entries.values()) if (url) revoke(url);
+            entries.clear();
+        },
         get size() { return entries.size; },
     };
 }
 
 const cache = createThumbCache();
 const inflight = new Map();
+let generation = 0;
+
+// Thumbnails hold decrypted image data: drop them all on a server, tab or
+// identity reset. Renders still in flight from before are discarded.
+export function clearInlineThumbnails() {
+    generation++;
+    inflight.clear();
+    cache.clear();
+}
 
 // inlineThumbnail resolves to a cached thumbnail object URL, or null when the
 // original should be shown (GIF animation, already under the cap, no stable key).
@@ -50,8 +63,15 @@ export function inlineThumbnail(key, dataURL, mime) {
     if (hit !== undefined) return Promise.resolve(hit);
     let request = inflight.get(key);
     if (!request) {
-        request = renderThumbnail(dataURL).then(url => { cache.set(key, url); return url; })
-            .finally(() => inflight.delete(key));
+        const started = generation;
+        request = renderThumbnail(dataURL).then(url => {
+            if (started !== generation) {
+                if (url) URL.revokeObjectURL(url);
+                return null;
+            }
+            cache.set(key, url);
+            return url;
+        }).finally(() => { if (inflight.get(key) === request) inflight.delete(key); });
         inflight.set(key, request);
     }
     return request;

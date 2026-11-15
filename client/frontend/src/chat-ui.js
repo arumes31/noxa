@@ -28,7 +28,7 @@ import { resolveParent, directPeer } from "./chat-relations.js";
 import { fileCardText, previewLine } from "./dm-model.js";
 import { manageChatGIFPlayback } from "./chat-gif-playback.js";
 import { openChatMediaLightbox, setFullImageSource } from "./chat-media-lightbox.js";
-import { inlineThumbnail } from "./image-thumbs.js";
+import { clearInlineThumbnails, inlineThumbnail } from "./image-thumbs.js";
 import { createChatUploadQueue } from "./chat-upload-queue.js";
 import { createUnreadTabEffects } from "./chat-unread.js";
 import { createChatTabs } from "./chat-tabs.js";
@@ -420,6 +420,7 @@ function resetDMHistoryView() {
     for (const batch of offlineBatch.values()) if (batch.timer) clearTimeout(batch.timer);
     offlineBatch.clear();
     receipts.clear();
+    clearInlineThumbnails();
     closeQS();
     if (view.kind === "dm") {
         $("chat-scope").value = "channel";
@@ -5803,6 +5804,7 @@ export function resetView(options = {}) {
     customEmoji = [];
     emojiURLs.clear();
     textPreviewCache.clear();
+    clearInlineThumbnails();
     expandedTextPreviews.clear();
     emojiURLRequests.clear(); // late replies from the old server stay with their callers
     customDirty = true;

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createThumbCache, inlineThumbnail, thumbSize, THUMB_MAX_SIDE } from "../src/image-thumbs.js";
+import { clearInlineThumbnails, createThumbCache, inlineThumbnail, thumbSize, THUMB_MAX_SIDE } from "../src/image-thumbs.js";
 
 test("thumbnail size respects the cap and keeps the aspect ratio", () => {
     assert.deepEqual(thumbSize(4000, 3000), { width: THUMB_MAX_SIDE, height: 480 });
@@ -37,4 +37,15 @@ test("GIFs and attachments without a stable key keep the original", async () => 
 
 test("a decode failure rejects so the caller keeps the full-size path", async () => {
     await assert.rejects(inlineThumbnail("broken", "data:image/png;base64,AAAA", "image/png"));
+});
+
+test("clear revokes every cached thumbnail", () => {
+    const revoked = [];
+    const cache = createThumbCache(10, url => revoked.push(url));
+    cache.set("a", "blob:a"); cache.set("b", null); cache.set("c", "blob:c");
+    cache.clear();
+    assert.deepEqual(revoked, ["blob:a", "blob:c"]);
+    assert.equal(cache.size, 0);
+    assert.equal(cache.get("a"), undefined);
+    clearInlineThumbnails(); // the module cache resets without throwing
 });
