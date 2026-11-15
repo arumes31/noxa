@@ -155,6 +155,8 @@ type App struct {
 	identityGeneration uint64
 	// toasts holds Windows notification registration and issued tokens (501).
 	toasts nativeToastState
+	// deepLink holds a noxa:// link until the frontend is ready (90).
+	deepLink deepLinkInbox
 }
 
 // NewApp creates a new App.
@@ -223,6 +225,9 @@ func (a *App) startup(ctx context.Context) {
 	}
 	// (501) Windows Action Center notifications: per-user registration only.
 	go guardCrash("native notifications", a.initNativeToasts)
+	// (88, 90) startup entry path refresh and noxa:// registration.
+	go guardCrash("desktop integration", registerDesktopIntegration)
+	a.deliverDeepLink(launchDeepLink)
 	// (291) restore always-on-top.
 	a.settingsMu.Lock()
 	alwaysOnTop := a.settings.AlwaysOnTop

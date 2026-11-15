@@ -15,3 +15,11 @@ export function buildChannelInvite(address, channelID, token) {
         return "noxa://" + url.host + "/invite/" + channelID + "#" + token;
     } catch { return null; }
 }
+// handleDeepLink takes a noxa:// URL from the OS. Anything but a valid invite
+// is ignored; a valid one is joined only after the user confirms.
+export async function handleDeepLink(value, { confirm, join }) {
+    const invite = parseChannelInvite(value);
+    if (!invite || await confirm(invite) !== true) return false;
+    join(value);
+    return true;
+}

@@ -14,3 +14,7 @@ func runDesktop(app *App) {
 
 	initTray(app, nil)
 }
+
+func startWithWindowsEnabled() bool                              { return false }
+func setStartWithWindows(bool) error                             { return nil }
+func registerDesktopIntegration()                                {}

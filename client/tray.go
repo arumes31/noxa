@@ -43,7 +43,7 @@ type tray struct {
 // initTray starts the tray on the calling goroutine and blocks until quit.
 // When ready is non-nil it is closed after the tray menu is fully wired.
 func initTray(a *App, ready chan<- struct{}) {
-	trayCtl = &tray{app: a, emit: a.emitPlain, visible: true}
+	trayCtl = &tray{app: a, emit: a.emitPlain, visible: !launchHidden}
 	systray.Run(func() {
 		trayCtl.onReady()
 		if ready != nil {
@@ -55,6 +55,9 @@ func initTray(a *App, ready chan<- struct{}) {
 // onReady builds the tray menu (called on the systray thread).
 func (t *tray) onReady() {
 	t.miShowHide = systray.AddMenuItem("Hide noXa", "show/hide the window")
+	if launchHidden {
+		t.miShowHide.SetTitle("Show noXa")
+	}
 	systray.AddSeparator()
 	t.miMute = systray.AddMenuItem("Mute", "toggle microphone mute")
 	t.miDeafen = systray.AddMenuItem("Deafen", "toggle deafen")

@@ -48,6 +48,9 @@ func runApp() {
 		}
 	}
 
+	// Before any update step clears its environment variables.
+	captureLaunch(os.Args[1:], os.Getenv)
+
 	if err := prepareLegacyUpdateBootstrap(); err != nil {
 		log.Printf("update compatibility startup failed: %v", err)
 		return
@@ -73,8 +76,13 @@ func runWails(app *App) {
 		Width:     1024,
 		Height:    768,
 		Frameless: runtime.GOOS == "windows",
-		// An update handover stays hidden until it takes over the session.
-		StartHidden: incomingHandover != nil,
+		// An update handover stays hidden until it takes over the session;
+		// a start-with-Windows launch (--minimized) stays in the tray.
+		StartHidden: incomingHandover != nil || launchHidden,
+		// shortcut: update-launched processes run without the lock (see
+		// singleInstanceAllowed), so until the next normal start a second
+		// launch opens a second window instead of focusing this one.
+		SingleInstanceLock: desktopSingleInstanceLock(app),
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
