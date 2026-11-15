@@ -18,7 +18,9 @@ import (
 // The adopted lock must be found and fed exactly as Wails' SetupSingleInstance
 // in a normally started noXa does it: FindWindowW, then WM_COPYDATA.
 func TestAdoptedSingleInstanceReceivesWailsForward(t *testing.T) {
-	id := fmt.Sprintf("noxa-test-%d", os.Getpid()) // never the real noXa lock
+	// Never the real noXa lock; unique per run because the lock lives until the
+	// process exits (go test -count=2).
+	id := fmt.Sprintf("noxa-test-%d-%d", os.Getpid(), time.Now().UnixNano())
 	got := make(chan options.SecondInstanceData, 1)
 	if !tryAdoptSingleInstance(id, func(data options.SecondInstanceData) { got <- data }) {
 		t.Fatal("free lock not adopted")
