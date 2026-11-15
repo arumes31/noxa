@@ -73,13 +73,27 @@ test("after loading older history, later live messages never evict the loaded pa
     assert.equal(list.length, before + 300, "an expanded scope is not re-capped this session");
 });
 
-test("a pending (unacked) send in the oldest region is never evicted", () => {
+test("an initial/latest-page load does not exempt the scope; it still caps at 5000", async () => {
     const { conn, session } = channelSession();
-    // A queued/unacked own send sits at the very oldest position (small sentAt);
-    // evicting it would re-insert a partial row when its ack later arrives.
-    session.messages.set(7, [{ clientMsgID: "p1", sentAt: 0, pending: true, text: "queued" }]);
+    // Opening a channel loads a page into an empty scope (prevOldestID 0): this
+    // is not scrollback, so the cap must still apply to later live traffic.
+    const opened = Array.from({ length: 10 }, (_, i) => ({ id: i + 1, from_unique_id: "u", from_nickname: "me", sent_at: 1 + i }));
+    conn.request = async () => ({ keys: [], messages: opened });
+    await session.loadHistory(7);
+    liveBurst(conn, 7, 100000, CAP + 200);
+    const list = session.messages.get(7);
+    assert.equal(list.length, CAP, "an opened (not scrolled-back) scope still caps at 5000");
+});
+
+test("an id-less (unacked/queued) local send in the oldest region is never evicted", () => {
+    const { conn, session } = channelSession();
+    // A queued send has no server id yet and sits at the very oldest position
+    // (small sentAt); evicting it would re-insert a partial row when its ack
+    // later arrives. pending is already false after a queue, so the guard keys
+    // on the missing id, not on pending.
+    session.messages.set(7, [{ clientMsgID: "q1", sentAt: 0, queued: true, pending: false, text: "queued" }]);
     liveBurst(conn, 7, 100000, CAP + 50);
     const list = session.messages.get(7);
-    assert.ok(list.some(m => m.clientMsgID === "p1" && m.pending), "the pending send is kept, not trimmed");
-    assert.equal(list[0].clientMsgID, "p1", "it stays at the oldest position");
+    assert.ok(list.some(m => m.clientMsgID === "q1" && !m.id), "the unacked send is kept, not trimmed");
+    assert.equal(list[0].clientMsgID, "q1", "it stays at the oldest position");
 });

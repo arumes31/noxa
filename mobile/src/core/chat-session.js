@@ -209,12 +209,13 @@ export class ChatSession extends EventTarget {
         if (existing >= 0) list[existing] = { ...list[existing], ...message, pending: false };
         else list.push(message);
         list.sort((a, b) => (a.sentAt - b.sentAt) || ((a.id || Infinity) - (b.id || Infinity)));
-        // Cap a busy scope the user never scrolled back in, and never drop a
-        // pending (unacked) send that would re-insert as a partial row on ack.
-        // shortcut: a scope older history was loaded in is not re-capped until the session ends — bounded extra memory for a browsed scope; lift if it matters.
+        // Cap a busy scope the user never scrolled back in, and never drop an
+        // unacked local send (no server id yet: pending/queued/failed-retryable)
+        // that would re-insert as a partial row on ack.
+        // shortcut: a scope the user scrolled further back in (loaded older than it already had) is not re-capped until session end — bounded extra memory for a browsed scope; lift if it matters.
         if (existing < 0 && !this.#expanded.has(scope) && list.length > MAX_MESSAGES) {
             const drop = list.length - MAX_MESSAGES;
-            if (!list.slice(0, drop).some(m => m.pending)) list.splice(0, drop);
+            if (!list.slice(0, drop).some(m => !m.id)) list.splice(0, drop);
         }
         this.messages.set(scope, list);
         this.#emit("messages", { scope });
@@ -472,12 +473,15 @@ export class ChatSession extends EventTarget {
     /** Loads one page of older history for a scope. Returns whether more may exist. */
     async loadHistory(scope, { before } = {}) {
         const list = this.messages.get(scope) || [];
-        const beforeID = before ?? (list.find(m => m.id)?.id || 0);
+        const prevOldestID = list.find(m => m.id)?.id || 0; // captured before merging
+        const beforeID = before ?? prevOldestID;
         const page = await this.conn.request(Msg.ChatHistory, { channel_id: scope, before_id: beforeID, limit: HISTORY_PAGE },
             Msg.ChatHistoryResponse, { accept: r => r.channel_id === scope });
         for (const key of page.keys || []) this.#installKey(key, false);
-        // Mark before merging so the merge itself is never treated as trimmable.
-        if ((page.messages || []).length) this.#expanded.add(scope);
+        // Genuine scrollback only (reached further back than we already had, not an
+        // initial/latest-page load) exempts the scope from the cap; mark before the
+        // merge so the just-loaded older page is itself never treated as trimmable.
+        if (prevOldestID && (page.messages || []).some(m => (m.id || 0) < prevOldestID)) this.#expanded.add(scope);
         for (const entry of page.messages || []) this.#store(scope, this.#entryToMessage(scope, entry));
         return (page.messages || []).length === HISTORY_PAGE;
     }
