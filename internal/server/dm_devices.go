@@ -29,6 +29,8 @@ const historyTTL = 24 * time.Hour
 // historyPage bounds the chunks one history_get returns.
 const historyPage = 2
 
+const errGuestOffline = "this person is offline; guests can message only people who are online"
+
 const errDMUpdateRequired = "this person uses noXa on several devices; update noXa to send them direct messages"
 
 func (s *TCPServer) deviceMessageStore() (DeviceMessageStore, bool) {
@@ -40,7 +42,8 @@ func (s *TCPServer) deviceMessageStore() (DeviceMessageStore, bool) {
 }
 
 // dmDevices lists the principal's active devices that can receive direct
-// messages: the first device and devices with an approval signature.
+// messages: the first device and devices chained to it by approvals of active
+// devices (store.DMTrusted, the clients' rule).
 func (s *TCPServer) dmDevices(ctx context.Context, principal string) ([]netproto.DMDevice, error) {
 	if s.deps == nil || s.deps.Devices == nil || principal == "" {
 		return nil, nil
@@ -49,11 +52,9 @@ func (s *TCPServer) dmDevices(ctx context.Context, principal string) ([]netproto
 	if err != nil {
 		return nil, err
 	}
+	devices = store.DMTrusted(principal, devices)
 	out := make([]netproto.DMDevice, 0, len(devices))
 	for _, d := range devices {
-		if !d.FirstDevice && len(d.ApprovalSignature) == 0 {
-			continue // linked with a passkey, not yet endorsed
-		}
 		if d.X25519Public == "" {
 			continue
 		}
@@ -152,6 +153,23 @@ func (s *TCPServer) sendDirectCopies(ctx context.Context, client *Client, msg ne
 			return s.sendErrorFor(client, origin, errCodeUnavailable, "user lookup failed")
 		}
 	}
+	live := func(principal, device string) bool {
+		for _, session := range s.sessionsOf(principal) {
+			if session.currentDeviceID() == device {
+				return true
+			}
+		}
+		return false
+	}
+	// A guest has no user row to spool from (messages.from_user_id): refuse
+	// before any copy goes out, so a retry cannot duplicate the live ones.
+	if client.userID() <= 0 && s.deps.Spool != nil {
+		for _, c := range msg.Copies {
+			if t := targets[c.DeviceID]; c.DeviceID != senderDevice && userIDs[t.principal] > 0 && !live(t.principal, c.DeviceID) {
+				return s.sendErrorFor(client, origin, errCodeNotFound, errGuestOffline)
+			}
+		}
+	}
 	for _, c := range msg.Copies {
 		t := targets[c.DeviceID]
 		payload, err := eventEnvelope(eventChat, netproto.ChatBroadcast{
@@ -179,8 +197,12 @@ func (s *TCPServer) sendDirectCopies(ctx context.Context, client *Client, msg ne
 			continue
 		}
 		toUserID := userIDs[t.principal]
-		if s.deps.Spool == nil || toUserID <= 0 {
-			continue // guests and spool-less servers receive live copies only
+		if client.userID() <= 0 && toUserID > 0 && s.deps.Spool != nil {
+			// Went offline since the check above: never acknowledge a lost copy.
+			return s.sendErrorFor(client, origin, errCodeNotFound, errGuestOffline)
+		}
+		if s.deps.Spool == nil || toUserID <= 0 || client.userID() <= 0 {
+			continue // guests and spool-less servers exchange live copies only
 		}
 		if err := s.deps.Spool.SpoolMessage(ctx, client.userID(), toUserID, principal, c.Text, store.DMKeyBinding{
 			SenderPublicKey: sender.device.X25519Public, RecipientPublicKey: t.device.X25519Public, ClientMsgID: msg.ClientMsgID,

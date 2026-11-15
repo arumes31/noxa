@@ -130,7 +130,7 @@ func (s *Store) olmSnapshot(ctx context.Context, a OlmSource, scope, peer, conve
 	if target != "" {
 		snap, e = readOlmControlRoster(ctx, tx, a, peer, target)
 	} else {
-		snap, e = readOlmRoster(ctx, tx, ps, a.Device)
+		snap, e = readOlmRoster(ctx, tx, ps, a)
 	}
 	if e != nil {
 		return snap, e
@@ -539,7 +539,7 @@ func (s *Store) finalizeOlmAttempt(ctx context.Context, a OlmSource, id string) 
 		}
 		snap, e = readOlmControlRoster(ctx, tx, a, m.Peer, target.Device)
 	} else {
-		snap, e = readOlmRoster(ctx, tx, ps, a.Device)
+		snap, e = readOlmRoster(ctx, tx, ps, a)
 	}
 	if e != nil {
 		return empty, nil, e

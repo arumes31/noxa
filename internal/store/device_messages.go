@@ -25,6 +25,9 @@ func (s *Store) EndorseDevice(ctx context.Context, principal, deviceID, approver
 	d, err := scanDevice(tx.QueryRowContext(ctx, `UPDATE user_devices SET approved_by=$3, approval_signature=$4
 		WHERE principal=$1 AND device_id=$2 AND revoked_at IS NULL AND NOT first_device
 			AND (approval_signature IS NULL OR length(approval_signature) = 0)
+			-- The caller checked the approver before this transaction; the roster
+			-- lock above serializes revocations, so re-check it here.
+			AND EXISTS (SELECT 1 FROM user_devices a WHERE a.principal=$1 AND a.device_id=$3 AND a.revoked_at IS NULL)
 		RETURNING `+deviceColumns, principal, deviceID, approverID, signature))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Device{}, ErrDeviceNotFound

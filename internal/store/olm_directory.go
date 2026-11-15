@@ -203,7 +203,10 @@ func (s *Store) ClaimOlmKey(ctx context.Context, principal, id, target, targetID
 		if foundDevice != targetID || claimDevice != id || storedUntil != claimUntil || claimedEpoch != sourceEpoch {
 			return out, ErrOlmConflict
 		}
-		if lifecycle == "closed" {
+		// Only a still-reserved key is handed out again (a lost reply, or a
+		// client retrying after a restart); a used key's bundle copy may be
+		// cleared (ExpireOlmDirectory) and must never seed a second session.
+		if lifecycle != "reserved" {
 			return out, ErrOlmExhausted
 		}
 	} else {
@@ -255,11 +258,22 @@ func (s *Store) ClaimOlmKey(ctx context.Context, principal, id, target, targetID
 	return out, nil
 }
 
-// ExpireOlmDirectory bounds each sweep to 256 immutable publications. The
-// monotonic state watermark is deliberately retained until device deletion.
+// ExpireOlmDirectory bounds each sweep to 256 immutable publications and
+// returns how many it deleted. The monotonic state watermark is deliberately
+// retained until device deletion. It also trims one-time-key rows, 256 each:
+// a key's bundle copy is read only while it is reserved or admitted, so it is
+// cleared once the key is closed or received; rows of devices deleted or
+// revoked a day ago (outside the claim budget window) are no longer read.
 func (s *Store) ExpireOlmDirectory(ctx context.Context) (int64, error) {
 	r, e := s.db.ExecContext(ctx, `DELETE FROM olm_directory_publications WHERE (device_id,generation) IN (SELECT device_id,generation FROM olm_directory_publications WHERE expires_at<now()-interval '24 hours' ORDER BY expires_at LIMIT 256)`)
 	if e != nil {
+		return 0, e
+	}
+	if _, e = s.db.ExecContext(ctx, `UPDATE olm_directory_keys SET bundle=''::bytea WHERE ctid IN (SELECT ctid FROM olm_directory_keys WHERE lifecycle IN ('closed','received') AND octet_length(bundle)>0 LIMIT 256 FOR UPDATE SKIP LOCKED)`); e != nil {
+		return 0, e
+	}
+	if _, e = s.db.ExecContext(ctx, `DELETE FROM olm_directory_keys WHERE ctid IN (SELECT k.ctid FROM olm_directory_keys k LEFT JOIN user_devices d USING(device_id)
+ WHERE (d.device_id IS NULL OR d.revoked_at < now()-interval '24 hours') AND (k.claimed_at IS NULL OR k.claimed_at < now()-interval '24 hours') LIMIT 256 FOR UPDATE OF k SKIP LOCKED)`); e != nil {
 		return 0, e
 	}
 	return r.RowsAffected()
