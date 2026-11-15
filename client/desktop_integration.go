@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"runtime"
 	"strings"
 	"sync"
@@ -168,6 +169,7 @@ func (a *App) adoptSingleInstance() {
 	for !singleInstanceAdoptReady(incomingHandover) || !tryAdoptSingleInstance(singleInstanceID, a.secondInstanceLaunch) {
 		time.Sleep(singleInstanceAdoptRetry)
 	}
+	log.Print("single instance: lock adopted after update start")
 }
 
 // singleInstanceAdoptReady: the old process acknowledged the commit or exited.
