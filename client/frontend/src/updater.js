@@ -4,7 +4,7 @@ import { t } from "./i18n.js";
 import { formatBytes } from "./connection-stats.js";
 import { createUpdateCountdown } from "./update-countdown.js";
 import { createPeriodicUpdateCheck } from "./update-periodic.js";
-import { measuredUpdateProgress } from "./update-core.js";
+import { measuredUpdateProgress, updateDownloadLabel } from "./update-core.js";
 import { createUpdateLogo } from "./update-logo.js";
 import { announceConnectedUpdate, UPDATE_ANNOUNCEMENT_DELAY_MS } from "./update-announcement.js";
 import { createRecommendedUpdate } from "./update-recommended.js";
@@ -158,6 +158,7 @@ async function startDownload(m, info) {
     const cancel = m.querySelector(".upd-cancel");
     let phase = "downloading";
     let attemptActive = true;
+    let cancelError = false; // a failed cancel keeps its message over progress labels
     cancel.classList.remove("hidden");
     cancel.disabled = false;
     cancel.textContent = t("updater.cancelDownload");
@@ -170,6 +171,7 @@ async function startDownload(m, info) {
             if (!accepted) cancel.classList.add("hidden");
         } catch (error) {
             if (!attemptActive || phase !== "downloading") return;
+            cancelError = true;
             status.textContent = t("updater.cancelFailed", { error });
             cancel.disabled = false;
             cancel.textContent = t("updater.cancelDownload");
@@ -209,6 +211,8 @@ async function startDownload(m, info) {
     const onProgress = (p, details) => {
         if (!attemptActive || phase !== "downloading" || !m.isConnected) return;
         const measured = measuredUpdateProgress(p, details);
+        const label = updateDownloadLabel(details);
+        if (!cancelError) status.textContent = t(label.key, { size: label.size === null ? "" : formatBytes(label.size) });
         const percent = measured.ratio === null ? null : Math.floor(measured.ratio * 100);
         fill.style.width = `${percent ?? 0}%`;
         pct.textContent = percent === null ? "—" : `${percent}%`;

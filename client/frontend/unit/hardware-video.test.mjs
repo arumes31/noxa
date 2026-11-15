@@ -1,6 +1,6 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {hardwareVideoEvidence as evidence} from "../src/hardware-video.js";
+import {hardwareVideoEvidence as evidence, softwareShareNotice} from "../src/hardware-video.js";
 const rows=(extra)=>new Map([["v",{type:"outbound-rtp",kind:"video",...extra}]]);
 test("only actual hardware evidence releases a stream",()=>{
  assert.equal(evidence(rows({powerEfficientEncoder:true,encoderImplementation:"ExternalEncoder"})),"pending");
@@ -17,4 +17,17 @@ test("proof must describe exactly one active encoder of the current capture",()=
  assert.equal(evidence(report,"old"),"pending");
  report.set("second",{...report.get("v")});assert.equal(evidence(report,"current"),"pending","multiple encodings violate the one-upload policy");
  report.delete("second");report.get("v").active=false;assert.equal(evidence(report,"current"),"pending");
+});
+
+test("software share notice shows once per share session",()=>{
+ const software={power_efficient:false,encoder_implementation:"libvpx"};
+ const session={warned:false};
+ const sample=s=>{if(!softwareShareNotice(session.warned,s))return false;session.warned=true;return true;};
+ assert.equal(sample(null),false,"no sample yet");
+ assert.equal(sample({power_efficient:null,encoder_implementation:"unknown"}),false,"unclassified encoder");
+ assert.equal(sample({power_efficient:true,encoder_implementation:"NvEnc"}),false,"hardware encoder");
+ assert.equal(sample(software),true);
+ assert.equal(sample(software),false,"already warned this session");
+ assert.equal(sample({power_efficient:true,encoder_implementation:"OpenH264"}),false);
+ assert.equal(softwareShareNotice(false,software),true,"a new share session warns again");
 });

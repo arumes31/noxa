@@ -3,7 +3,7 @@
 export function hardwareVideoEvidence(rows, trackID) {
     const row = hardwareVideoRow(rows, trackID);
     if (!row) return "pending";
-    if (row.powerEfficientEncoder === false || /libvpx|openh264|libaom|software|svt-av1/i.test(row.encoderImplementation || "")) return "software";
+    if (softwareVideoEncoder(row.powerEfficientEncoder, row.encoderImplementation)) return "software";
     // Efficiency is not a hardware guarantee in the stats standard. Require
     // an identified hardware backend too; generic ExternalEncoder is unknown.
     const hardware = /quicksync|\bqsv\b|\bmft\b|mediafoundation|d3d11|nvenc|videotoolbox|vaapi|va-api|v4l2|\bamf\b|hardware/i.test(row.encoderImplementation || "");
@@ -17,4 +17,14 @@ export function hardwareVideoRow(rows, trackID) {
         !/video\/(rtx|red|ulpfec)/i.test(rows.get(row.codecId)?.mimeType || "") &&
         (!trackID || rows.get(row.mediaSourceId)?.trackIdentifier === trackID));
     return video.length === 1 ? video[0] : null;
+}
+
+export function softwareVideoEncoder(powerEfficient, implementation) {
+    return powerEfficient === false || /libvpx|openh264|libaom|software|svt-av1/i.test(implementation || "");
+}
+
+// The screen-share software-encoder notice shows once per share session: the
+// caller keeps `warned` on its session, so a new share starts unwarned.
+export function softwareShareNotice(warned, sample) {
+    return !warned && !!sample && softwareVideoEncoder(sample.power_efficient, sample.encoder_implementation);
 }

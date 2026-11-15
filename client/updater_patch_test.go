@@ -79,30 +79,36 @@ func digest(b []byte) []byte {
 }
 
 // run downloads into a fresh directory and checks the verified result.
-func (f *patchFixture) run(t *testing.T, info UpdateInfo, sums string) {
+func (f *patchFixture) run(t *testing.T, info UpdateInfo, sums string) []updateProgress {
 	t.Helper()
 	root, err := os.OpenRoot(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = root.Close() }()
-	var progress int
-	if err := downloadClientAsset(t.Context(), root, info, sums, func(updateProgress) { progress++ }); err != nil {
+	var progress []updateProgress
+	if err := downloadClientAsset(t.Context(), root, info, sums, func(p updateProgress) { progress = append(progress, p) }); err != nil {
 		t.Fatalf("downloadClientAsset: %v", err)
 	}
 	if got, err := root.ReadFile(clientAssetName); err != nil || !bytes.Equal(got, f.newFile) {
 		t.Fatalf("client asset differs from the new release (%v)", err)
 	}
-	if progress == 0 {
+	if len(progress) == 0 {
 		t.Fatal("no progress reported")
 	}
+	return progress
 }
 
 func TestDownloadClientAssetUsesSignedPatch(t *testing.T) {
 	f := newPatchFixture(t)
-	f.run(t, f.info(), f.sums(digest(f.patch), digest(f.newFile)))
+	progress := f.run(t, f.info(), f.sums(digest(f.patch), digest(f.newFile)))
 	if f.patched.Load() != 1 || f.full.Load() != 0 {
 		t.Fatalf("patch requests %d, full requests %d; want patch only", f.patched.Load(), f.full.Load())
+	}
+	for _, p := range progress {
+		if !p.Patch {
+			t.Fatalf("patch download progress %+v is not flagged as a patch", p)
+		}
 	}
 }
 
@@ -150,7 +156,11 @@ func TestDownloadClientAssetFallsBackToFullClient(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newPatchFixture(t)
 			info, sums := tc.setup(t, f)
-			f.run(t, info, sums)
+			progress := f.run(t, info, sums)
+			// The fallback switches the UI back to the full-download wording.
+			if last := progress[len(progress)-1]; last.Patch {
+				t.Fatalf("full download progress %+v is flagged as a patch", last)
+			}
 			if f.full.Load() != 1 || (f.patched.Load() == 1) != tc.wantPatch {
 				t.Fatalf("patch requests %d, full requests %d", f.patched.Load(), f.full.Load())
 			}

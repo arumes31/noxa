@@ -2,6 +2,12 @@ import { originalGIFSource } from "./chat-gif-playback.js";
 import { closeDialog, mountServerDialog } from "./modal.js";
 
 const expanded = new WeakMap();
+const fullSources = new WeakMap();
+
+// Inline image thumbnails register their original so the viewer shows full size.
+export function setFullImageSource(image, src) {
+    fullSources.set(image, src);
+}
 const serverGeneration = () => Number(window.__noxa?.state?.serverGeneration || 0);
 
 function moveVideo(parent, video, before = null) {
@@ -24,7 +30,7 @@ export function openChatMediaLightbox(node) {
     overlay.className = "dlg-overlay lightbox";
     if (node.tagName === "IMG") {
         const big = node.cloneNode(true);
-        big.src = originalGIFSource(node);
+        big.src = fullSources.get(node) || originalGIFSource(node);
         big.removeAttribute("class"); big.removeAttribute("title");
         overlay.append(big);
         overlay.onclick = event => { if (event.target === overlay) closeDialog(overlay); };

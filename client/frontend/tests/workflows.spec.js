@@ -10471,6 +10471,25 @@ test("discards stale inline attachment previews and configures lazy image and vi
     expect(await page.locator(".lightbox video").evaluate(el => el.paused)).toBe(true);
 });
 
+test("large inline images render a capped thumbnail and open the original in the viewer", async ({ page }) => {
+    await page.evaluate(() => {
+        window.__noxa.showWorkspace(false);
+        const state = window.__noxa.state;
+        state.myChannelID = 42;
+        state.channels = [{ ChannelID: 42, Name: "Uploads" }];
+        window.__noxaChat.onMyChannelChanged();
+        const canvas = Object.assign(document.createElement("canvas"), { width: 1600, height: 800 });
+        canvas.getContext("2d").fillRect(0, 0, 1600, 800);
+        window.__attachmentData = canvas.toDataURL("image/png").split(",")[1];
+        window.__noxaChat.addChat({ enc_verified: true, enc_mode: "server", id: 704, channel_id: 42, from: "Bob", text: "[file:big.vcx#dGVzdA==#big.png]" });
+    });
+    const image = page.locator(".msg-file img.msg-img");
+    await expect(image).toHaveAttribute("src", /^blob:/);
+    await expect.poll(() => image.evaluate(el => [el.naturalWidth, el.naturalHeight])).toEqual([640, 320]);
+    await image.click();
+    await expect(page.locator(".lightbox img")).toHaveAttribute("src", /^data:image\/png;base64,/);
+});
+
 test("does not construct stale attachment data URLs after channel or view changes", async ({ page }) => {
     await page.evaluate(() => {
         window.__noxa.showWorkspace(false);
