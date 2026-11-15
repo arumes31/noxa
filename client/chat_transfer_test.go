@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"testing"
+	"time"
 
 	"noxa/internal/netproto"
 )
@@ -291,7 +292,7 @@ func verifyFileStreamsBeyondLegacyBufferLimit(t *testing.T, scoped bool) {
 	app.tabs = map[string]*tabState{"a": {cm: cm}}
 	if scoped {
 		for _, tabID := range []string{"", "b", "missing"} {
-			if _, err := app.VerifyFileForTab(tabID, 1, "", "large.bin", "digest"); err == nil {
+			if _, err := app.VerifyFileForTab(tabID, "vf-1", 1, "", "large.bin", "digest"); err == nil {
 				t.Fatalf("accepted checksum request from %q", tabID)
 			}
 		}
@@ -333,12 +334,86 @@ func verifyFileStreamsBeyondLegacyBufferLimit(t *testing.T, scoped bool) {
 	var ok bool
 	var err error
 	if scoped {
-		ok, err = app.VerifyFileForTab("a", 1, "", "large.bin", transferDigest(chunks...))
+		ok, err = app.VerifyFileForTab("a", "vf-1", 1, "", "large.bin", transferDigest(chunks...))
 	} else {
-		ok, err = app.VerifyFile(1, "", "large.bin", transferDigest(chunks...))
+		ok, err = app.VerifyFile("vf-1", 1, "", "large.bin", transferDigest(chunks...))
 	}
 	if err != nil || !ok {
 		t.Fatalf("streaming verify = %v, %v", ok, err)
 	}
 	<-serverDone
+}
+
+// TestVerifyFileCancelReachesFrontendID proves the checksum transfer is
+// registered under the caller's frontend id (not the server-assigned
+// TransferID), so CancelTransfer with that id aborts the re-download.
+func TestVerifyFileCancelReachesFrontendID(t *testing.T) {
+	controlClient, controlServer := net.Pipe()
+	wrappedControl := fixedRemoteAddrConn{Conn: controlClient, remote: fixedTransferAddr("127.0.0.1:12333")}
+	cm := newConnManager(context.Background())
+	cm.sink = &eventRecorder{}
+	cm.mu.Lock()
+	cm.conn = wrappedControl
+	cm.acceptingTransfers = true
+	cm.transferEpoch = 1
+	cm.mu.Unlock()
+	go serveFrames(controlServer, func(frame *netproto.Frame) (netproto.MessageType, any, bool) {
+		if netproto.MessageType(frame.Type) != netproto.MsgFileTransferInit {
+			return 0, nil, false
+		}
+		return netproto.MsgFileTransferInitResponse, netproto.FileTransferInitResponse{
+			Token: "token", TransferID: "server-assigned", Port: 12334,
+		}, true
+	})
+	go cm.readLoop(wrappedControl)
+	t.Cleanup(func() {
+		cm.disconnect()
+		_ = controlServer.Close()
+	})
+
+	// The data server never writes, so ftDownloadTo blocks until cancellation.
+	dataClient, dataServer := net.Pipe()
+	t.Cleanup(func() { _ = dataServer.Close() })
+	originalDial := transferDial
+	transferDial = func(ftEndpoint) (net.Conn, error) { return dataClient, nil }
+	t.Cleanup(func() { transferDial = originalDial })
+
+	const frontendID = "vf-cancel"
+	done := make(chan error, 1)
+	go func() {
+		_, err := cm.verifyFile(frontendID, 1, "", "large.bin", "digest")
+		done <- err
+	}()
+
+	// Wait until the transfer is registered under the frontend id, then cancel.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		cm.transfers.mu.Lock()
+		_, registered := func() (uint64, bool) {
+			for token, entry := range cm.transfers.entries {
+				if entry.frontendID == frontendID {
+					return token, true
+				}
+			}
+			return 0, false
+		}()
+		cm.transfers.mu.Unlock()
+		if registered {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("transfer was not registered under the frontend id")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cm.cancelTransfers(frontendID)
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("verify returned success after cancellation")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancel by frontend id did not reach the verify transfer")
+	}
 }

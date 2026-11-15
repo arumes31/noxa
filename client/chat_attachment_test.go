@@ -187,6 +187,29 @@ func TestSaveChatAttachment(t *testing.T) {
 		}
 	})
 
+	t.Run("temp cleanup failure after a successful link still succeeds", func(t *testing.T) {
+		dest := filepath.Join(t.TempDir(), "cleaned.txt")
+		a, _ := attachmentSaveApp(dest, blob)
+		originalLink := chatAttachmentLink
+		chatAttachmentLink = func(oldname, newname string) error {
+			if err := os.Link(oldname, newname); err != nil {
+				return err
+			}
+			// Drop the temp file so the post-link cleanup fails: the save has
+			// already succeeded and must not be reported as a failure.
+			return os.Remove(oldname)
+		}
+		t.Cleanup(func() { chatAttachmentLink = originalLink })
+		path, err := a.SaveChatAttachment(7, "blob.vcx", keyB64, "cleaned.txt")
+		if err != nil || path != dest {
+			t.Fatalf("save = %q, %v", path, err)
+		}
+		got, err := os.ReadFile(dest)
+		if err != nil || string(got) != string(plain) {
+			t.Fatalf("saved contents = %q, %v", got, err)
+		}
+	})
+
 	for _, test := range []struct {
 		name string
 		blob []byte

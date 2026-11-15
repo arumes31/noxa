@@ -517,7 +517,7 @@ async function verifyFile(e, tr) {
     if (!current()) return;
     sha.textContent = "…";
     try {
-        const ok = await App().VerifyFileForTab(scope.tabID, scope.channelID, scope.folder, e.name, e.sha256);
+        const ok = await App().VerifyFileForTab(scope.tabID, `vf-${++xferSeq}`, scope.channelID, scope.folder, e.name, e.sha256);
         if (!current()) return;
         sha.textContent = ok ? t("files.verifyOK") : t("files.verifyBad");
         sha.className = "mono fb-sha " + (ok ? "verify-ok" : "verify-bad");

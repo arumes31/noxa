@@ -1214,12 +1214,12 @@ export function UploadPathProgressForTab(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['UploadPathProgressForTab'](arg1, arg2, arg3, arg4, arg5);
 }
 
-export function VerifyFile(arg1, arg2, arg3, arg4) {
-  return window['go']['main']['App']['VerifyFile'](arg1, arg2, arg3, arg4);
+export function VerifyFile(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['VerifyFile'](arg1, arg2, arg3, arg4, arg5);
 }
 
-export function VerifyFileForTab(arg1, arg2, arg3, arg4, arg5) {
-  return window['go']['main']['App']['VerifyFileForTab'](arg1, arg2, arg3, arg4, arg5);
+export function VerifyFileForTab(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['VerifyFileForTab'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
 export function VideoStreamControlForTab(arg1, arg2) {

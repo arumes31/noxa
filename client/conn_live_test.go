@@ -508,11 +508,11 @@ func TestLiveFileManagement(t *testing.T) {
 	}
 
 	// Checksum verify (280).
-	ok, err := app.VerifyFile(channelID, "", "moved.txt", sha256Hex([]byte("docs")))
+	ok, err := app.VerifyFile("vf-1", channelID, "", "moved.txt", sha256Hex([]byte("docs")))
 	if err != nil || !ok {
 		t.Fatalf("VerifyFile match = %v, %v", ok, err)
 	}
-	ok, err = app.VerifyFile(channelID, "", "moved.txt", sha256Hex([]byte("different")))
+	ok, err = app.VerifyFile("vf-2", channelID, "", "moved.txt", sha256Hex([]byte("different")))
 	if err != nil || ok {
 		t.Fatalf("VerifyFile mismatch = %v, %v, want false", ok, err)
 	}

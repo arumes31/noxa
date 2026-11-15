@@ -385,10 +385,9 @@ func writeChatAttachmentAtomically(dest string, data []byte) (err error) {
 		}
 		return fmt.Errorf("publishing attachment: %w", err)
 	}
-	if err := os.Remove(temp); err != nil {
-		return fmt.Errorf("cleaning attachment temporary file: %w", err)
-	}
-	temp = ""
+	// The hard link succeeded: the attachment is saved. Removing the temp name
+	// is best-effort via the defer; its failure must not fail the save, or the
+	// user's retry would hit errChatAttachmentDestinationExists on a real file.
 	return nil
 }
 
