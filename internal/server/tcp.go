@@ -1859,6 +1859,21 @@ func (s *TCPServer) clientByUniqueID(uniqueID string) (*Client, bool) {
 	return nil, false
 }
 
+// sessionIDsByUniqueID returns the client IDs of every registered session for
+// the given unique ID. A principal may hold several sessions (linked devices),
+// so a visibility check must consider all of them, not just the first match.
+func (s *TCPServer) sessionIDsByUniqueID(uniqueID string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var ids []string
+	for _, c := range s.clients {
+		if c.uniqueID() == uniqueID {
+			ids = append(ids, c.ID)
+		}
+	}
+	return ids
+}
+
 // newClientID returns a short random hex identifier suitable for logging and
 // registry keys. It is not a security-sensitive value.
 func newClientID() string {

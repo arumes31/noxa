@@ -470,6 +470,9 @@ func newGuestUniqueID() string {
 // remoteIP extracts the host part of the connection's remote address, used
 // for IP ban lookups.
 func remoteIP(conn net.Conn) string {
+	if conn == nil {
+		return ""
+	}
 	host, _, err := net.SplitHostPort(conn.RemoteAddr().String())
 	if err != nil {
 		return conn.RemoteAddr().String()

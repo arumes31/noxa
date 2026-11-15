@@ -109,16 +109,35 @@ func (s *TCPServer) lookupSessionKey(ctx context.Context, client *Client, f *net
 	// Keep public-key lookups separate from chat traffic, while still
 	// bounding their database cost and preventing user enumeration at scale.
 	// A rekey of encrypted channel media looks up every recipient device's
-	// keys at once (Task 2a review A P1-1), so lookups have their own
-	// per-principal budget instead of the 5-per-3 s chat window.
+	// keys at once (Task 2a review A P1-1), so lookups have their own budget
+	// instead of the 5-per-3 s chat window. Key it by source /64, not by the
+	// caller's own unique ID: an anonymous guest draws a fresh unique ID on
+	// every connection, so a per-caller budget resets on reconnect and never
+	// bounds enumeration (red-team 2026-11: guest key-directory harvesting).
 	if s.keyLookupRate != nil {
-		allowed, retry := s.keyLookupRate.allowWithRetry(client.UniqueID+":key", time.Now(), s.keyLookupRate.max)
+		rateKey := "key:" + auth.SourceAddressKey(remoteIP(client.Conn))
+		allowed, retry := s.keyLookupRate.allowWithRetry(rateKey, time.Now(), s.keyLookupRate.max)
 		if !allowed {
 			return s.writeMessage(client, netproto.MsgError, netproto.Error{
 				Code: errCodeMalformed, Message: "key lookup rate limit exceeded — slow down",
 				OriginType: uint16(requestOrigin(ctx)), RetryAfterMS: retry.Milliseconds() + 1,
 			})
 		}
+	}
+
+	// A device-less anonymous guest (user id 0, no registered device) may
+	// resolve only a principal it shares a visible scope with: its own
+	// just-published key, or an online, VISIBLE co-member of a channel it can
+	// see. Otherwise it gets the same empty response as an unknown user, so the
+	// directory cannot be harvested at scale (a fresh ephemeral guest per
+	// connection, zero cost) nor used to probe which unique IDs exist (red-team
+	// 2026-11). Everyone else is unrestricted: members cold-DM saved contacts,
+	// and a guest that linked a device is an accountable DM participant (device
+	// linking needs approval), not the at-scale harvester this bounds.
+	// Self-lookup is always allowed — the PWA guest reads back its own key right
+	// after publishing it.
+	if client.userID() == 0 && client.currentDeviceID() == "" && msg.UniqueID != client.uniqueID() && !s.guestSharesScope(ctx, client, msg.UniqueID) {
+		return s.writeMessage(client, netproto.MsgKeyResponse, netproto.KeyResponse{UniqueID: msg.UniqueID})
 	}
 
 	// Registered account keys resolve from durable storage even while online.
@@ -141,9 +160,17 @@ func (s *TCPServer) lookupSessionKey(ctx context.Context, client *Client, f *net
 		}
 	}
 
+	// The per-device directory (device count, kinds, per-device keys) is a
+	// fingerprinting surface and is only needed to seal a per-device DM, which
+	// requires the caller to hold a registered device itself. A device-less
+	// anonymous guest cannot send per-device DMs, so it gets the account key
+	// only, never the directory (red-team 2026-11). Members always receive it:
+	// a member resolving a contact to DM may issue the lookup before its own
+	// device row is observed on this session, and withholding it then would
+	// break the DM's device trust (untrusted_device).
 	var devices []netproto.DMDevice
 	var revocations []netproto.DeviceRevocation
-	if msg.Devices {
+	if msg.Devices && (client.userID() != 0 || client.currentDeviceID() != "") {
 		var err error
 		if devices, err = s.dmDevices(ctx, msg.UniqueID); err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "encryption directory unavailable")
@@ -161,6 +188,30 @@ func (s *TCPServer) lookupSessionKey(ctx context.Context, client *Client, f *net
 		Devices:     devices,
 		Revocations: revocations,
 	})
+}
+
+// guestSharesScope reports whether a guest caller shares a visible scope with
+// the target principal, so it may resolve the target's directory key. It is
+// true when some online session of the target is visible to the guest under
+// the same invisible-member rule as a social poke: a current member of a
+// channel the guest can view, and not a hidden/invisible member (which only an
+// admin may see — and a guest is never an admin). Self is handled by the
+// caller. There is no guest conversation / DM-spool clause: conversations and
+// the DM spool are keyed by a registered user id, which a guest never has.
+func (s *TCPServer) guestSharesScope(ctx context.Context, guest *Client, targetUniqueID string) bool {
+	if s.deps == nil || s.deps.State == nil {
+		return false
+	}
+	lease, ok := ctx.Value(roleLeaseKey{}).(roleLease)
+	if !ok {
+		return false
+	}
+	for _, id := range s.sessionIDsByUniqueID(targetUniqueID) {
+		if s.rolePokeTargetVisible(lease.evaluator, guest, id) {
+			return true
+		}
+	}
+	return false
 }
 
 // deliverScopeKey seals the scope's current chat key for the client and
