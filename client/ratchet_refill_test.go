@@ -44,7 +44,9 @@ func TestRatchetRefillFollowsClaimableKeys(t *testing.T) {
 			t.Cleanup(func() { _ = s.Close() })
 			var published []int64
 			c, err := newRatchetConsumer(ratchetDeps{Store: s, Core: engine, Namespace: ns, AttemptTTL: 300,
-				Admission: func(context.Context, netproto.OlmAdmissionRequest) (json.RawMessage, error) { return json.Marshal([]any{}) },
+				Admission: func(context.Context, netproto.OlmAdmissionRequest) (json.RawMessage, error) {
+					return json.Marshal([]any{})
+				},
 				Directory: func(_ context.Context, r netproto.OlmDirectoryRequest) (netproto.OlmDirectoryResult, error) {
 					if r.Action != "publish" {
 						t.Fatalf("unexpected directory %s", r.Action)
@@ -52,7 +54,9 @@ func TestRatchetRefillFollowsClaimableKeys(t *testing.T) {
 					published = append(published, r.Bundle.Generation)
 					return netproto.OlmDirectoryResult{RequestID: r.RequestID, Action: r.Action, Available: tc.available}, nil
 				},
-				DeviceKey:     func(context.Context, string, string) (ed25519.PublicKey, error) { return nil, rfail("untrusted_device") },
+				DeviceKey: func(context.Context, string, string) (ed25519.PublicKey, error) {
+					return nil, rfail("untrusted_device")
+				},
 				SignBundle:    func(b olmdir.Bundle) (olmdir.Bundle, error) { return b, nil },
 				AssertCurrent: func() error { return nil }})
 			if err != nil {

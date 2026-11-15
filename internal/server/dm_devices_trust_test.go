@@ -106,4 +106,3 @@ func TestGuestLegacyDMToOfflineMemberRefused(t *testing.T) {
 		t.Fatal("guest message spooled")
 	}
 }
-
