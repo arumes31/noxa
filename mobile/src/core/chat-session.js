@@ -214,8 +214,11 @@ export class ChatSession extends EventTarget {
         // that would re-insert as a partial row on ack.
         // shortcut: a scope the user scrolled further back in (loaded older than it already had) is not re-capped until session end — bounded extra memory for a browsed scope; lift if it matters.
         if (existing < 0 && !this.#expanded.has(scope) && list.length > MAX_MESSAGES) {
-            const drop = list.length - MAX_MESSAGES;
-            if (!list.slice(0, drop).some(m => !m.id)) list.splice(0, drop);
+            let drop = list.length - MAX_MESSAGES;
+            if (drop > 0) {
+                const kept = list.filter(m => (drop > 0 && m.id) ? (drop--, false) : true); // drop oldest ACKED only; never an unacked local send
+                if (kept.length !== list.length) { list.length = 0; list.push(...kept); }
+            }
         }
         this.messages.set(scope, list);
         this.#emit("messages", { scope });
@@ -471,17 +474,15 @@ export class ChatSession extends EventTarget {
     }
 
     /** Loads one page of older history for a scope. Returns whether more may exist. */
-    async loadHistory(scope, { before } = {}) {
+    async loadHistory(scope, { before, older } = {}) {
         const list = this.messages.get(scope) || [];
-        const prevOldestID = list.find(m => m.id)?.id || 0; // captured before merging
-        const beforeID = before ?? prevOldestID;
+        const beforeID = before ?? (list.find(m => m.id)?.id || 0);
         const page = await this.conn.request(Msg.ChatHistory, { channel_id: scope, before_id: beforeID, limit: HISTORY_PAGE },
             Msg.ChatHistoryResponse, { accept: r => r.channel_id === scope });
         for (const key of page.keys || []) this.#installKey(key, false);
-        // Genuine scrollback only (reached further back than we already had, not an
-        // initial/latest-page load) exempts the scope from the cap; mark before the
-        // merge so the just-loaded older page is itself never treated as trimmable.
-        if (prevOldestID && (page.messages || []).some(m => (m.id || 0) < prevOldestID)) this.#expanded.add(scope);
+        // Only an explicit user scrollback / older-pagination load (older:true)
+        // exempts the scope from the cap; an initial or latest-page load never does.
+        if (older) this.#expanded.add(scope);
         for (const entry of page.messages || []) this.#store(scope, this.#entryToMessage(scope, entry));
         return (page.messages || []).length === HISTORY_PAGE;
     }
@@ -492,7 +493,7 @@ export class ChatSession extends EventTarget {
      */
     async loadUntil(scope, id, maxPages = 10) {
         for (let i = 0; i < maxPages && !this.messageByID(scope, id); i++) {
-            if (!await this.loadHistory(scope)) break;
+            if (!await this.loadHistory(scope, { older: true })) break;
         }
         return this.messageByID(scope, id);
     }
@@ -504,7 +505,7 @@ export class ChatSession extends EventTarget {
     async search(scope, query, { maxPages = 6, from = "" } = {}) {
         const needle = query.trim().toLowerCase();
         for (let i = 0; i < maxPages; i++) {
-            if (!await this.loadHistory(scope).catch(() => false)) break;
+            if (!await this.loadHistory(scope, { older: true }).catch(() => false)) break;
         }
         return (this.messages.get(scope) || [])
             .filter(m => !m.deleted && typeof m.text === "string" && (!needle || m.text.toLowerCase().includes(needle)) && (!from || m.fromUniqueID === from))

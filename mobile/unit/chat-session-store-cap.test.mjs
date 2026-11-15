@@ -50,7 +50,7 @@ test("loading an older history page is not immediately trimmed away", async () =
     // An older page loaded on scroll: entries older than everything held.
     const older = Array.from({ length: 10 }, (_, i) => ({ id: i + 1, from_unique_id: "u", from_nickname: "me", sent_at: 1 + i }));
     conn.request = async () => ({ keys: [], messages: older });
-    await session.loadHistory(7);
+    await session.loadHistory(7, { older: true });
     const list = session.messages.get(7);
     assert.equal(list.length, CAP + older.length, "older page added, nothing trimmed from the top");
     assert.equal(list[0].id, 1, "the oldest loaded entry is present, not trimmed away");
@@ -64,7 +64,7 @@ test("after loading older history, later live messages never evict the loaded pa
     liveBurst(conn, 7, 100000, CAP + 200);
     const older = Array.from({ length: 10 }, (_, i) => ({ id: i + 1, from_unique_id: "u", from_nickname: "me", sent_at: 1 + i }));
     conn.request = async () => ({ keys: [], messages: older });
-    await session.loadHistory(7); // the scope is now expanded
+    await session.loadHistory(7, { older: true }); // the scope is now expanded
     const before = session.messages.get(7).length;
     // A burst of new live messages must not trim away the page the user is reading.
     liveBurst(conn, 7, 200000, 300);
@@ -75,8 +75,8 @@ test("after loading older history, later live messages never evict the loaded pa
 
 test("an initial/latest-page load does not exempt the scope; it still caps at 5000", async () => {
     const { conn, session } = channelSession();
-    // Opening a channel loads a page into an empty scope (prevOldestID 0): this
-    // is not scrollback, so the cap must still apply to later live traffic.
+    // Opening a channel loads a page with no `older` flag: this is not
+    // scrollback, so the cap must still apply to later live traffic.
     const opened = Array.from({ length: 10 }, (_, i) => ({ id: i + 1, from_unique_id: "u", from_nickname: "me", sent_at: 1 + i }));
     conn.request = async () => ({ keys: [], messages: opened });
     await session.loadHistory(7);
@@ -96,4 +96,8 @@ test("an id-less (unacked/queued) local send in the oldest region is never evict
     const list = session.messages.get(7);
     assert.ok(list.some(m => m.clientMsgID === "q1" && !m.id), "the unacked send is kept, not trimmed");
     assert.equal(list[0].clientMsgID, "q1", "it stays at the oldest position");
+    // The acked overflow is still trimmed around the stuck unacked row: the list
+    // stays bounded to the cap (old guard left it to grow unbounded at CAP + 50).
+    assert.equal(list.length, CAP, "acked overflow trimmed around the kept unacked row; not unbounded");
+    assert.ok(list.filter(m => m.id).length <= CAP, "bounded to cap + the unacked count");
 });
