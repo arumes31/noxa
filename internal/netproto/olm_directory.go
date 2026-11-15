@@ -38,6 +38,9 @@ type OlmDirectoryResult struct {
 	Error      string         `json:"error,omitempty"`
 	Bundle     *olmdir.Bundle `json:"bundle,omitempty"`
 	KeyID      string         `json:"key_id,omitempty"`
+	// Available is, on a successful publish, how many of the device's keys
+	// can still be claimed; nil from servers that do not report it.
+	Available *int `json:"available,omitempty"`
 }
 
 // DecodeOlmDirectoryRequest rejects duplicate fields, unknown fields, nesting

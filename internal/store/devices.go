@@ -190,7 +190,8 @@ func (s *Store) AddDevice(ctx context.Context, d NewDevice, limit int) (Device, 
 		}
 	}
 	if len(claimants) > 0 {
-		// Dependent rows (push subscriptions, passkeys, Olm keys, ...) cascade.
+		// Dependent rows (push subscriptions, passkeys, Olm state, ...) cascade;
+		// Olm one-time-key rows have no FK and are swept by ExpireOlmDirectory.
 		if _, err := tx.ExecContext(ctx, `DELETE FROM user_devices WHERE NOT key_proven AND principal = ANY($3)
 			AND (ed25519_public=$1 OR ed25519_public=$2)`, d.Ed25519Public, submitted, pq.Array(claimants)); err != nil {
 			return Device{}, fmt.Errorf("adding device: %w", err)

@@ -156,3 +156,32 @@ func TestOlmRosterSkipsIdleExpiredPublication(t *testing.T) {
 		}
 	}
 }
+
+// F14: closed/received one-time keys drop their bundle copy, and rows of
+// devices revoked a day ago are deleted, by the bounded directory sweep.
+func TestExpireOlmDirectoryTrimsKeyRows(t *testing.T) {
+	s := pollTestStore(t)
+	kept := publishedChainDevice(t, s, "alice", DeviceKindDesktop, nil)
+	gone := publishedChainDevice(t, s, "alice", DeviceKindDesktop, &kept)
+	if _, err := s.db.ExecContext(t.Context(), `UPDATE olm_directory_keys SET lifecycle=CASE WHEN key_id=(SELECT min(key_id) FROM olm_directory_keys WHERE device_id=$1) THEN 'closed' ELSE 'received' END
+ WHERE device_id=$1 AND key_id IN (SELECT key_id FROM olm_directory_keys WHERE device_id=$1 ORDER BY key_id LIMIT 2)`, kept.d.DeviceID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RevokeDevice(t.Context(), "alice", gone.d.DeviceID, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(t.Context(), `UPDATE user_devices SET revoked_at=now()-interval '2 days' WHERE device_id=$1`, gone.d.DeviceID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ExpireOlmDirectory(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var cleared, full, goneRows int
+	if err := s.db.QueryRowContext(t.Context(), `SELECT count(*) FILTER(WHERE octet_length(bundle)=0 AND lifecycle IN ('closed','received')),count(*) FILTER(WHERE octet_length(bundle)>0 AND lifecycle='available'),
+ (SELECT count(*) FROM olm_directory_keys WHERE device_id=$2) FROM olm_directory_keys WHERE device_id=$1`, kept.d.DeviceID, gone.d.DeviceID).Scan(&cleared, &full, &goneRows); err != nil {
+		t.Fatal(err)
+	}
+	if cleared != 2 || full != 8 || goneRows != 0 {
+		t.Fatalf("cleared %d, untouched available %d, revoked device rows %d", cleared, full, goneRows)
+	}
+}

@@ -76,6 +76,14 @@ func (s *TCPServer) handleOlmDirectory(ctx context.Context, client *Client, f *n
 		switch r.Action {
 		case "publish":
 			e = db.PublishOlmBundle(opCtx, principal, id, binding, *r.Bundle)
+			if counter, ok := db.(interface {
+				AvailableOlmKeys(context.Context, string, string) (int, error)
+			}); ok && e == nil {
+				var n int
+				if n, e = counter.AvailableOlmKeys(opCtx, id, binding); e == nil {
+					response.Available = &n
+				}
+			}
 		case "own_state":
 			// Read-only, only the authenticated principal/device's own row.
 			var own olmdir.Bundle
