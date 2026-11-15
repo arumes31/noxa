@@ -67,7 +67,11 @@ export function renderChat(root, scope) {
     const older = h("button", { class: "btn", style: "align-self:center;margin:8px 0" }, t("chat.loadOlder"));
     older.onclick = async () => {
         older.disabled = true;
-        try { hasOlder = await session.loadHistory(scope); } catch (error) { toast(t("common.error", { error: error.message }), "warn"); }
+        // Older-pagination exempts the scope from the message cap; the auto-click
+        // that fills an empty scope on open (below) is an initial load, not
+        // scrollback, so only flag it when messages are already shown.
+        const older_ = (session.messages.get(scope) || []).length > 0;
+        try { hasOlder = await session.loadHistory(scope, { older: older_ }); } catch (error) { toast(t("common.error", { error: error.message }), "warn"); }
         older.disabled = false;
         render(false);
     };
@@ -195,7 +199,7 @@ export function renderChat(root, scope) {
         tag: `channel:${scope}`, log,
         entries: () => (session.messages.get(scope) || []).filter(m => m.id).map(m => channelEntry(scope, m)),
         loadOlder: async () => {
-            if (hasOlder) hasOlder = await session.loadHistory(scope);
+            if (hasOlder) hasOlder = await session.loadHistory(scope, { older: true });
             render(false);
             return hasOlder;
         },
@@ -294,7 +298,7 @@ export function renderChat(root, scope) {
 
     /** Loads up to EXPORT_PAGES older pages and returns the normalized log. */
     async function exportLoad() {
-        for (let page = 0; page < EXPORT_PAGES && hasOlder; page++) hasOlder = await session.loadHistory(scope);
+        for (let page = 0; page < EXPORT_PAGES && hasOlder; page++) hasOlder = await session.loadHistory(scope, { older: true });
         render(false);
         const messages = (session.messages.get(scope) || []).filter(m => m.id).map(m => ({
             id: m.id, from: m.from, fromUniqueID: m.fromUniqueID, sentAt: m.sentAt, text: m.text, deleted: !!m.deleted, edited: !!m.edited, encryption: "server",
