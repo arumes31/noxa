@@ -193,11 +193,25 @@ func (s *TCPServer) broadcastChannelScoped(ctx context.Context, channelID int64,
 	if err != nil {
 		return
 	}
-	for _, sc := range s.deps.State.ListClients() {
-		if channelID != 0 && sc.ChannelID != channelID && !s.deps.State.IsSubscribed(sc.ClientID, channelID) {
-			continue
+	// For a channel-scoped fanout the reverse index yields exactly the old
+	// filter's set (members have ChannelID == channelID, subscribers are
+	// IsSubscribed), so iterate it instead of cloning every client. A client
+	// that is both a member and a subscriber is deduped to one delivery.
+	recipients := make(map[string]struct{})
+	if channelID == 0 {
+		for _, sc := range s.deps.State.ListClients() {
+			recipients[sc.ClientID] = struct{}{}
 		}
-		if client, ok := s.clientByID(sc.ClientID); ok {
+	} else {
+		for _, sc := range s.deps.State.ChannelMembers(channelID) {
+			recipients[sc.ClientID] = struct{}{}
+		}
+		for _, sc := range s.deps.State.ChannelSubscribers(channelID) {
+			recipients[sc.ClientID] = struct{}{}
+		}
+	}
+	for id := range recipients {
+		if client, ok := s.clientByID(id); ok {
 			_ = s.withRoleAccess(ctx, client, channelID, authorization.ViewChannel, func(context.Context) error {
 				return s.deps.Broadcast.BroadcastToClient(client.ID, guarded)
 			})

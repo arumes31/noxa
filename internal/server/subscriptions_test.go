@@ -8,9 +8,68 @@ import (
 	"testing"
 
 	"noxa/internal/authorization"
+	"noxa/internal/broadcast"
 	"noxa/internal/netproto"
 	"noxa/internal/state"
 )
+
+// TestChannelScopedBroadcastTargetsReverseIndex verifies broadcastChannelScoped
+// reaches a channel's members and subscribers (deduped) and no one else, using
+// the reverse index rather than every connected client.
+func TestChannelScopedBroadcastTargetsReverseIndex(t *testing.T) {
+	backend := serverRoleFixture() // @everyone (role 10) on channel 1
+	backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel}
+	authority, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	sm := state.New(testLogger())
+	sm.AddChannel(&state.Channel{ChannelID: 1, Name: "ch"})
+	bc := broadcast.New(testLogger(), sm)
+	srv := &TCPServer{deps: &Deps{State: sm, Broadcast: bc, Authority: authority}, clients: map[string]*Client{}}
+
+	recv := map[string]<-chan []byte{}
+	for cid, uid := range map[string]int64{"m1": 11, "m2": 12, "sub": 13, "x1": 14, "x2": 15} {
+		sm.AddClient(&state.Client{ClientID: cid, UserID: uid, UniqueID: cid + "-uid"})
+		ch, err := bc.Register(cid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		recv[cid] = ch
+		srv.clients[cid] = &Client{ID: cid, UserID: uid, UniqueID: cid + "-uid"}
+	}
+	if err := sm.JoinChannel("m1", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := sm.JoinChannel("m2", 1); err != nil {
+		t.Fatal(err)
+	}
+	// A member that also subscribed must still be delivered to exactly once.
+	sm.Subscribe("m2", []int64{1})
+	sm.Subscribe("sub", []int64{1})
+
+	srv.broadcastChannelScoped(t.Context(), 1, []byte(`{"type":"user_joined"}`))
+
+	for _, cid := range []string{"m1", "m2", "sub"} {
+		select {
+		case <-recv[cid]:
+		default:
+			t.Errorf("%s did not receive channel-scoped broadcast", cid)
+		}
+		select {
+		case <-recv[cid]:
+			t.Errorf("%s received the broadcast more than once", cid)
+		default:
+		}
+	}
+	for _, cid := range []string{"x1", "x2"} {
+		select {
+		case <-recv[cid]:
+			t.Errorf("%s received a broadcast it should not have", cid)
+		default:
+		}
+	}
+}
 
 func TestSubscriptionSetIsAuthoritativeDeduplicatedAndSorted(t *testing.T) {
 	env := startTestEnv(t, nil)

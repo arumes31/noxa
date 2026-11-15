@@ -474,9 +474,6 @@ func (s *channelCapture) consume(entry capturePacket) error {
 	}
 	d := entry.delivery
 	video := d.Slot == webrtc.SlotCam || d.Slot == webrtc.SlotScreen
-	if video && d.Codec != "video/VP8" {
-		return fmt.Errorf("recording codec %q is unsupported", d.Codec)
-	}
 	if !video && d.Slot != webrtc.SlotMic && d.Slot != webrtc.SlotScreenAudio {
 		return ErrInvalidPacket
 	}
@@ -491,6 +488,24 @@ func (s *channelCapture) consume(entry capturePacket) error {
 	}
 	if skip, ok := s.skipped[source]; ok && skip == (captureStream{entry.packet.SSRC, d.SourceEpoch}) {
 		return nil
+	}
+	if video && d.Codec != "video/VP8" {
+		// Only VP8 is recordable. Skip an unsupported codec (e.g. H264 under
+		// E2EE, or a mid-stream switch) and keep recording the others, like the
+		// capacity case below; a VP8 restart of the source retries.
+		if child != nil {
+			if err := s.finishChild(child); err != nil {
+				return err
+			}
+			delete(s.children, source)
+		}
+		if s.skipped == nil {
+			s.skipped = make(map[captureSource]captureStream)
+		}
+		s.skipped[source] = captureStream{entry.packet.SSRC, d.SourceEpoch}
+		s.owner.processes.logger.Warn("recording source skipped: unsupported video codec", zap.Int64("channel_id", s.channelID), zap.String("publisher", d.SenderID), zap.String("slot", d.Slot), zap.String("codec", d.Codec))
+		s.manifest.Notes = append(s.manifest.Notes, fmt.Sprintf("%s %s from %dms not recorded: unsupported video codec %q", d.SenderID, d.Slot, entry.at.Sub(s.started).Milliseconds(), d.Codec))
+		return s.writeManifest()
 	}
 	if child == nil {
 		if len(s.manifest.Tracks) >= 1024 {

@@ -269,11 +269,45 @@ func TestSourceRecordingRequiresCoordinatorRoot(t *testing.T) {
 	}
 }
 
-func TestRecordingRejectsUnsupportedVideoBeforeAllocation(t *testing.T) {
-	s := &channelCapture{children: make(map[captureSource]*captureChild)}
-	err := s.consume(capturePacket{packet: &rtp.Packet{}, delivery: webrtc.MediaDelivery{Slot: webrtc.SlotCam, Codec: "video/H264"}, commit: func(write func() error) error { return write() }})
-	if err == nil || !strings.Contains(err.Error(), "unsupported") {
-		t.Fatalf("unsupported codec accepted: %v", err)
+func TestChannelRecordingSkipsUnsupportedVideoCodec(t *testing.T) {
+	c := NewChannelRecorder(testConfig(privateTempDir(t)), testLogger())
+	var launches atomic.Int32
+	c.processes.Exec = func(ctx context.Context, name string, args ...string) Command {
+		launches.Add(1)
+		return autoRecordingProcess(ctx, name, args...)
+	}
+	session, err := c.Start(context.Background(), 1, &fakeTapRouter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	capture := c.sessions[1]
+	c.mu.Unlock()
+	packet := &rtp.Packet{Header: rtp.Header{Version: 2, SSRC: 1}, Payload: []byte{1}}
+	// An unsupported video codec is skipped once and must not tear down the
+	// recording or start a process.
+	for range 3 {
+		if err := capture.WriteMedia(packet, webrtc.MediaDelivery{SenderID: "bob", Slot: webrtc.SlotCam, Codec: "video/H264"}, func(write func() error) error { return write() }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A VP8 audio source still records (video needs a real keyframe to start).
+	commitRecordingPacket(t, capture, packet, webrtc.MediaDelivery{SenderID: "alice", Slot: webrtc.SlotMic, Codec: "audio/opus"})
+	waitProcesses(t, c, 1)
+	select {
+	case <-session.Done():
+		t.Fatalf("unsupported codec ended the whole recording: %v", capture.result)
+	default:
+	}
+	if got := launches.Load(); got != 1 {
+		t.Fatalf("ffmpeg launches = %d, want 1 (bob skipped without a process)", got)
+	}
+	if err := c.Stop(1); err != nil {
+		t.Fatalf("stop = %v", err)
+	}
+	manifest := readCaptureManifest(t, session.FilePath)
+	if len(manifest.Tracks) != 1 || manifest.Tracks[0].Publisher != "alice" || len(manifest.Notes) != 1 || !strings.Contains(manifest.Notes[0], "bob") || !strings.Contains(manifest.Notes[0], "unsupported video codec") {
+		t.Fatalf("manifest = %+v", manifest)
 	}
 }
 

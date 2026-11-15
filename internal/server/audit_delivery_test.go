@@ -206,6 +206,41 @@ func TestSlowModeMarksOnlyAcceptedSends(t *testing.T) {
 	}
 }
 
+// TestSlowModeConcurrentRejectReleasesSlot covers two concurrent sends by one
+// user into a slow-mode channel: the second is held off while the first is in
+// flight, and once the first is rejected (finish(false)) the second is not left
+// wrongly blocked. A retry carrying the first send's client id also passes.
+func TestSlowModeConcurrentRejectReleasesSlot(t *testing.T) {
+	tr := newSlowTracker()
+	now := time.Now()
+	// First send reserves the slot.
+	wait, finishFirst := tr.reserve("u", 1, 60, "a", now)
+	if wait != 0 || finishFirst == nil {
+		t.Fatalf("first send did not reserve the slot: wait=%v", wait)
+	}
+	// A second, concurrent send of the same user is held off while the first is
+	// still pending (no reservation handed out).
+	if wait, finish := tr.reserve("u", 1, 60, "b", now); wait <= 0 || finish != nil {
+		t.Fatalf("concurrent send was not held off: wait=%v finish!=nil=%v", wait, finish != nil)
+	}
+	// The first send is rejected, which must restore the (previously empty) slot.
+	finishFirst(false)
+	wait, finishSecond := tr.reserve("u", 1, 60, "b", now.Add(time.Millisecond))
+	if wait != 0 || finishSecond == nil {
+		t.Fatalf("second send stayed blocked after the first was rejected: wait=%v", wait)
+	}
+	finishSecond(true)
+	// A retry of the now-stored second message (same client id) is idempotent and
+	// is not charged a fresh wait.
+	if wait, _ := tr.reserve("u", 1, 60, "b", now.Add(2*time.Millisecond)); wait != 0 {
+		t.Fatalf("idempotent retry of the stored message waits %v", wait)
+	}
+	// A different message within the window is still blocked.
+	if wait, _ := tr.reserve("u", 1, 60, "c", now.Add(3*time.Millisecond)); wait <= 0 {
+		t.Fatal("a different message inside the window was allowed")
+	}
+}
+
 func TestSpamIgnoresRetriesOfTheSameMessage(t *testing.T) {
 	tr := newSpamTracker()
 	now := time.Now()
