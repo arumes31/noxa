@@ -52,6 +52,10 @@ export async function deliver(session, target, share) {
     }
 }
 
+// One delivery at a time: a reconnect remounts this screen while an earlier
+// send may still be running, and its store checkpoint is not deduplicated.
+let delivering = false;
+
 export function renderShare(root) {
     const session = app.session;
     const body = h("div", { class: "screen-body share-body" }, h("p", { class: "hint", role: "status" }, t("file.loading")));
@@ -69,7 +73,14 @@ export function renderShare(root) {
         const list = h("ul", { class: "list" });
         const fileRows = () => share.files.map(file => h("li", {}, h("span", { class: "file-icon", "aria-hidden": "true" }, "📄"), h("span", { class: "file-name" }, file.name), h("span", { class: "file-size" }, formatSize(file.size))));
         const files = h("ul", { class: "share-files" }, fileRows());
+        const discard = h("button", { class: "btn", type: "button", onclick: async () => { await clearShare().catch(() => {}); location.hash = "#/home"; } }, t("rich.share.discard"));
         const pick = async target => {
+            if (delivering) { // an earlier mount's send is still running
+                status.textContent = t("rich.share.sending", { name: target.name });
+                return;
+            }
+            delivering = true;
+            discard.disabled = true; // a discard now would be undone by the next checkpoint
             for (const button of list.querySelectorAll("button")) button.disabled = true;
             text.disabled = true; // the caption is taken now; later edits would be lost
             status.textContent = t("rich.share.sending", { name: target.name });
@@ -80,11 +91,14 @@ export function renderShare(root) {
                 toast(t("rich.share.sent", { name: target.name }));
                 location.hash = target.href;
             } catch (error) {
+                discard.disabled = false;
                 text.value = share.text; // empty once the caption went out
                 text.disabled = false;
                 files.replaceChildren(...fileRows());
                 status.textContent = t("chat.sendFailed", { error: error.message });
                 for (const button of list.querySelectorAll("button")) button.disabled = false;
+            } finally {
+                delivering = false;
             }
         };
         list.append(...destinations(session).map(target => h("li", {},
@@ -96,7 +110,7 @@ export function renderShare(root) {
             h("div", { class: "card share-preview" },
                 text,
                 share.files.length ? files : null,
-                h("button", { class: "btn", type: "button", onclick: async () => { await clearShare().catch(() => {}); location.hash = "#/home"; } }, t("rich.share.discard"))),
+                discard),
             status,
             h("p", { class: "section-label" }, t("rich.share.to")),
             list.childElementCount ? list : h("p", { class: "hint" }, t("home.empty")));
