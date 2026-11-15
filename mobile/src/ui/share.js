@@ -54,7 +54,7 @@ export async function deliver(session, target, share) {
 
 // One delivery at a time: a reconnect remounts this screen while an earlier
 // send may still be running, and its store checkpoint is not deduplicated.
-let delivering = null; // the target of the running delivery
+let delivering = null; // {target, done} of the running delivery
 
 export function renderShare(root) {
     const session = app.session;
@@ -73,25 +73,31 @@ export function renderShare(root) {
         const list = h("ul", { class: "list" });
         const fileRows = () => share.files.map(file => h("li", {}, h("span", { class: "file-icon", "aria-hidden": "true" }, "📄"), h("span", { class: "file-name" }, file.name), h("span", { class: "file-size" }, formatSize(file.size))));
         const files = h("ul", { class: "share-files" }, fileRows());
+        // A screen remounted (e.g. on reconnect) while an earlier mount still
+        // sends: wait for that send, then show the stored remainder (empty once
+        // it went out) instead of a stale "sending".
+        const waitForEarlier = async () => {
+            status.textContent = t("rich.share.sending", { name: delivering.target.name });
+            await delivering.done.catch(() => {});
+            if (location.hash.startsWith("#/share")) renderShare(root);
+        };
         const discard = h("button", { class: "btn", type: "button", onclick: async () => {
             // Also from a remounted screen: a running send's checkpoint would restore it.
-            if (delivering) { status.textContent = t("rich.share.sending", { name: delivering.name }); return; }
+            if (delivering) return waitForEarlier();
             await clearShare().catch(() => {});
             location.hash = "#/home";
         } }, t("rich.share.discard"));
         const pick = async target => {
-            if (delivering) { // an earlier mount's send is still running
-                status.textContent = t("rich.share.sending", { name: target.name });
-                return;
-            }
-            delivering = target;
+            if (delivering) return waitForEarlier();
             discard.disabled = true; // a discard now would be undone by the next checkpoint
             for (const button of list.querySelectorAll("button")) button.disabled = true;
             text.disabled = true; // the caption is taken now; later edits would be lost
             status.textContent = t("rich.share.sending", { name: target.name });
             share.text = text.value.trim();
+            const done = deliver(session, target, share);
+            delivering = { target, done };
             try {
-                await deliver(session, target, share);
+                await done;
                 await clearShare().catch(() => {});
                 toast(t("rich.share.sent", { name: target.name }));
                 location.hash = target.href;
