@@ -27,21 +27,26 @@ function destinations(session) {
     return out.sort((a, b) => b.at - a.at);
 }
 
-/** Uploads the files into the destination's storage and sends them, the text with the first. */
-async function deliver(session, target, text, files) {
+/**
+ * Uploads the files into the destination's storage and sends them, the text
+ * with the first. What was sent leaves `share`, so a retry after a failure
+ * resumes instead of sending the first files again.
+ */
+export async function deliver(session, target, share) {
     const location = target.kind === "channel" ? target.scope : target.kind === "group" ? { channelID: 0, folder: `private-groups/${target.id}` } : 0;
     const send = body => target.kind === "channel" ? session.send(target.scope, body)
         : target.kind === "dm" ? app.dm.send(target.peer, body, target.name)
             : app.groups.send(target.id, body);
-    if (!files.length) {
-        await send(text);
+    if (!share.files.length) {
+        await send(share.text);
+        share.text = "";
         return;
     }
-    let caption = text;
-    for (const file of files) {
-        const token = await uploadAttachment(session.conn, location, file);
-        await send(caption ? `${caption} ${token}` : token);
-        caption = "";
+    while (share.files.length) {
+        const token = await uploadAttachment(session.conn, location, share.files[0]);
+        await send(share.text ? `${share.text} ${token}` : token);
+        share.text = "";
+        share.files.shift();
     }
 }
 
@@ -63,12 +68,14 @@ export function renderShare(root) {
         const pick = async target => {
             for (const button of list.querySelectorAll("button")) button.disabled = true;
             status.textContent = t("rich.share.sending", { name: target.name });
+            share.text = text.value.trim();
             try {
-                await deliver(session, target, text.value.trim(), share.files);
+                await deliver(session, target, share);
                 await clearShare().catch(() => {});
                 toast(t("rich.share.sent", { name: target.name }));
                 location.hash = target.href;
             } catch (error) {
+                text.value = share.text; // empty once the caption went out
                 status.textContent = t("chat.sendFailed", { error: error.message });
                 for (const button of list.querySelectorAll("button")) button.disabled = false;
             }

@@ -14,7 +14,9 @@ import { INTENT_CACHE, announceRead, registerSubscription, saveAnswerIntent } fr
 import { currentFence } from "./core/db.js";
 import { putShare, shareText } from "./core/share-store.js";
 
-const VERSION = "noxa-shell-v3";
+// One cache per build (vite.sw.config.js), so activate drops the previous
+// build's content-hashed assets instead of piling them up forever.
+const VERSION = `noxa-shell-${typeof __SHELL_BUILD__ === "string" ? __SHELL_BUILD__ : "dev"}`;
 const SHELL = ["/app/", "/app/manifest.webmanifest", "/app/icons/icon-192.png", "/app/icons/icon-512.png"];
 
 self.addEventListener("install", event => {
@@ -255,6 +257,10 @@ async function notificationAction(action, tag, reply, data) {
     const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     if (windows.length) {
         for (const client of windows) client.postMessage({ type: "notification-action", action, tag, flush: !!(target && reply) });
+    } else if (target && reply && target.kind !== "channel") {
+        // The worker has no ratchet consumer, so a private reply could not be
+        // sent here; the app opened on the conversation flushes it on start.
+        await self.clients.openWindow(routeFor(tag));
     } else {
         await signedIn(async session => {
             announceRead(session.conn, scope, id);

@@ -155,6 +155,14 @@ export function micTestSheet(voice) {
     let timer = 0;
     let recorder = null;
     let playback = null;
+    let closed = false;
+    const dropPlayback = () => {
+        if (!playback) return;
+        playback.pause();
+        URL.revokeObjectURL(playback.src);
+        playback.remove();
+        playback = null;
+    };
     const status = h("p", { class: "hint", role: "status" });
     const record = h("button", { class: "btn btn-block", type: "button" }, t("vc.record", { seconds: RECORD_SECONDS }));
     const echo = h("button", { class: "btn btn-block", type: "button" }, t("vc.echoTest"));
@@ -185,8 +193,9 @@ export function micTestSheet(voice) {
         recorder.onstop = () => {
             record.disabled = false;
             recorder = null;
-            if (!chunks.length) return;
-            playback?.pause();
+            // Closing the sheet stops the recorder too; nothing plays after that.
+            if (closed || !chunks.length) return;
+            dropPlayback();
             playback = h("audio", { class: "vc-playback", controls: true, "aria-label": t("vc.playback") });
             playback.src = URL.createObjectURL(new Blob(chunks, { type: chunks[0].type }));
             record.after(playback);
@@ -222,9 +231,10 @@ export function micTestSheet(voice) {
         echo,
         status);
     const close = panel(t("vc.micTest"), content, { onClose: () => {
+        closed = true;
         clearInterval(timer);
         if (recorder?.state === "recording") recorder.stop();
-        playback?.pause();
+        dropPlayback();
         levels?.close();
         stream?.getTracks().forEach(track => track.stop());
     } });
