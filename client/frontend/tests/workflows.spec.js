@@ -4315,7 +4315,11 @@ test("@quickwins file actions and checksum stay accessible in both languages", a
     await expect(page.getByRole("button", { name: "Verify checksum", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Verify checksum", exact: true }).click();
     await expect(page.locator(".fb-sha")).toHaveText("✓ ok");
-    expect(await page.evaluate(() => window.__callArgs.VerifyFileForTab.at(-1))).toEqual([await page.evaluate(() => window.__noxa.state.activeTabID), 42, "", "notes.txt", "a".repeat(64)]);
+    const verifyArgs = await page.evaluate(() => window.__callArgs.VerifyFileForTab.at(-1));
+    expect(verifyArgs[0]).toBe(await page.evaluate(() => window.__noxa.state.activeTabID));
+    expect(typeof verifyArgs[1]).toBe("string");
+    expect(verifyArgs[1].startsWith("vf-")).toBe(true);
+    expect(verifyArgs.slice(2)).toEqual([42, "", "notes.txt", "a".repeat(64)]);
     await page.evaluate(() => { window.__noxa.state.settings.language = "de"; window.__noxa.applyAppearance(); });
     await expect(page.locator(".fb-details summary")).toHaveText("Dateidetails");
     await page.locator(".fb-details summary").click();
@@ -9810,7 +9814,12 @@ test.describe("tab-bound file inspection", () => {
         await page.locator(".fb-action-menu summary").click();
         await page.evaluate(() => { window.__fileScope.nativeTab = "server-b"; });
         await page.getByRole("button", { name: "Verify checksum", exact: true }).click();
-        await expect.poll(() => page.evaluate(() => window.__fileScope.calls)).toEqual([["VerifyFile", "server-a", 42, "", "report.txt", "abc"]]);
+        await expect.poll(() => page.evaluate(() => window.__fileScope.calls.length)).toBe(1);
+        const verifyCall = await page.evaluate(() => window.__fileScope.calls[0]);
+        expect(verifyCall.slice(0, 2)).toEqual(["VerifyFile", "server-a"]);
+        expect(typeof verifyCall[2]).toBe("string");
+        expect(verifyCall[2].startsWith("vf-")).toBe(true);
+        expect(verifyCall.slice(3)).toEqual([42, "", "report.txt", "abc"]);
         expect(await page.evaluate(() => window.__fileScope.effects)).toEqual([]);
     });
     test("late checksum cannot render after frontend tab identity changes", async ({ page }) => {

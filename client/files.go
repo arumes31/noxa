@@ -997,24 +997,24 @@ func (m *connManager) ftDownloadApproved(id string, ep ftEndpoint, token, transf
 
 // VerifyFile re-downloads a file and compares its SHA-256 against the
 // expected value from the listing (280). It returns true when they match.
-func (a *App) VerifyFile(channelID int64, folder, name, expectedSHA string) (bool, error) {
+func (a *App) VerifyFile(id string, channelID int64, folder, name, expectedSHA string) (bool, error) {
 	cm, err := a.requireCM()
 	if err != nil {
 		return false, err
 	}
-	return cm.verifyFile(channelID, folder, name, expectedSHA)
+	return cm.verifyFile(id, channelID, folder, name, expectedSHA)
 }
 
 // VerifyFileForTab keeps the checksum transfer on the originating connection.
-func (a *App) VerifyFileForTab(tabID string, channelID int64, folder, name, expectedSHA string) (bool, error) {
+func (a *App) VerifyFileForTab(tabID, id string, channelID int64, folder, name, expectedSHA string) (bool, error) {
 	cm, err := a.requireTabCM(tabID)
 	if err != nil {
 		return false, err
 	}
-	return cm.verifyFile(channelID, folder, name, expectedSHA)
+	return cm.verifyFile(id, channelID, folder, name, expectedSHA)
 }
 
-func (cm *connManager) verifyFile(channelID int64, folder, name, expectedSHA string) (bool, error) {
+func (cm *connManager) verifyFile(id string, channelID int64, folder, name, expectedSHA string) (bool, error) {
 	f, err := cm.request(netproto.MsgFileTransferInit, netproto.MsgFileTransferInitResponse,
 		netproto.FileTransferInit{ChannelID: channelID, Direction: "download", Folder: folder, Name: name},
 		10*time.Second)
@@ -1034,7 +1034,7 @@ func (cm *connManager) verifyFile(channelID int64, folder, name, expectedSHA str
 		return false, err
 	}
 	defer func() { _ = conn.Close() }()
-	untrack, ok := cm.trackTransferAt(init.TransferID, ep.epoch, conn)
+	untrack, ok := cm.trackTransferAt(id, ep.epoch, conn)
 	if !ok {
 		return false, errTransferCanceled
 	}

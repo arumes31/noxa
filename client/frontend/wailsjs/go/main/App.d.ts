@@ -611,9 +611,9 @@ export function UploadPathProgress(arg1:string,arg2:number,arg3:string,arg4:stri
 
 export function UploadPathProgressForTab(arg1:string,arg2:string,arg3:number,arg4:string,arg5:string):Promise<string>;
 
-export function VerifyFile(arg1:number,arg2:string,arg3:string,arg4:string):Promise<boolean>;
+export function VerifyFile(arg1:string,arg2:number,arg3:string,arg4:string,arg5:string):Promise<boolean>;
 
-export function VerifyFileForTab(arg1:string,arg2:number,arg3:string,arg4:string,arg5:string):Promise<boolean>;
+export function VerifyFileForTab(arg1:string,arg2:string,arg3:number,arg4:string,arg5:string,arg6:string):Promise<boolean>;
 
 export function VideoStreamControlForTab(arg1:string,arg2:netproto.VideoStreamControl):Promise<netproto.VideoStreamResult>;
 

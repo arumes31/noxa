@@ -125,6 +125,7 @@ func (a *App) PrepareUpdateReconnect(muted, deafened, mutedBeforeDeafen bool) st
 	return ""
 }
 
+// shortcut: only the active tab's session resumes across an update; lift when multi-tab update continuity is wanted
 func (a *App) snapshotUpdateConnection() (*updateReconnectEnvelope, *connManager) {
 	a.tabsMu.Lock()
 	tab := a.tabs[a.activeID]
