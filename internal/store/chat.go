@@ -306,12 +306,45 @@ func (s *Store) ChatPins(ctx context.Context, channelID int64) ([]PinnedMessage,
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	if len(out) == 0 {
+		return out, nil
+	}
+	// Fetch every pinned message in one query instead of one GetChatMessage per
+	// pin (bounded to MaxPinsPerChannel). A missing row leaves Message nil, as
+	// GetChatMessage returned nil for sql.ErrNoRows.
+	ids := make([]int64, len(out))
 	for i := range out {
-		m, err := s.GetChatMessage(ctx, out[i].MessageID)
-		if err != nil {
-			return nil, err
+		ids[i] = out[i].MessageID
+	}
+	const mq = `SELECT id, channel_id, from_unique_id, from_nickname, reply_to_id, version,
+	                 COALESCE(client_msg_id, ''), body_enc, key_id, sent_at, edited_at, deleted_at
+	          FROM chat_messages WHERE id = ANY($1)`
+	msgRows, err := s.db.QueryContext(ctx, mq, pq.Array(ids))
+	if err != nil {
+		return nil, fmt.Errorf("querying pinned messages: %w", err)
+	}
+	defer closeRows(msgRows)
+	byID := make(map[int64]*ChatMessage, len(ids))
+	for msgRows.Next() {
+		m := &ChatMessage{}
+		var keyID int64
+		var replyToID sql.NullInt64
+		if err := msgRows.Scan(&m.ID, &m.ChannelID, &m.FromUniqueID, &m.FromNickname, &replyToID, &m.Version,
+			&m.ClientMsgID, &m.BodyEnc, &keyID, &m.SentAt, &m.EditedAt, &m.DeletedAt); err != nil {
+			return nil, fmt.Errorf("scanning pinned message: %w", err)
 		}
-		out[i].Message = m
+		m.KeyID, err = safecast.Int64ToUint32(keyID)
+		if err != nil {
+			return nil, fmt.Errorf("querying chat message %d returned invalid key id %d: %w", m.ID, keyID, err)
+		}
+		m.ReplyToID = replyToID.Int64
+		byID[m.ID] = m
+	}
+	if err := msgRows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Message = byID[out[i].MessageID]
 	}
 	return out, nil
 }

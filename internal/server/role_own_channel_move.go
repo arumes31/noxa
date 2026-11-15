@@ -70,7 +70,11 @@ func (c *Client) commitStagedSnapshot() {
 	}
 }
 
-// roleSnapshotFullFrame always encodes a snapshot and stages its digest.
+// roleSnapshotFullFrame always encodes a snapshot and stages its digest. It
+// deliberately does NOT reuse snapshotUnchanged (unlike roleSnapshotFrame): a
+// queued structural event may be the one that carries a moved recipient's
+// own-move cause, and async commit timing makes suppressing an "unchanged"
+// snapshot here racy and lossy (TestRoleSnapshotRetainsOwnMoveCauseAcrossQueuedStructuralEvents).
 func (s *TCPServer) roleSnapshotFullFrame(client *Client, e *authorization.RoleEvaluator) (*netproto.Frame, error) {
 	snapshot := s.roleSnapshotWithOwnMove(client, e)
 	client.stageSnapshot(snapshot)

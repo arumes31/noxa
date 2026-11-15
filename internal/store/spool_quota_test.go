@@ -133,4 +133,10 @@ func TestPinChatMessageEnforcesChannelCap(t *testing.T) {
 	if err != nil || len(pins) != MaxPinsPerChannel {
 		t.Fatalf("pins = %d, %v", len(pins), err)
 	}
+	// The batch message fetch must populate every pin with its own message.
+	for i, p := range pins {
+		if p.Message == nil || p.Message.ID != p.MessageID {
+			t.Fatalf("pin %d: message = %+v, want id %d", i, p.Message, p.MessageID)
+		}
+	}
 }
