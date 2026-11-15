@@ -51,8 +51,9 @@ export function animatedWebP(bytes) {
     return text.startsWith("RIFF") && text.slice(8, 12) === "WEBP" && text.slice(12, 16) === "VP8X" && (bytes[20] & 0x02) !== 0;
 }
 
-// An animated PNG has an acTL chunk before its first IDAT. Only chunk headers
-// in the given prefix are scanned; an APNG whose acTL lies past it is missed.
+// An animated PNG has an acTL chunk before its first IDAT. Scans the chunk
+// headers in the given prefix: true for acTL, false at IDAT, and null when the
+// prefix ends before either (a large ancillary chunk can push acTL past it).
 export function animatedPNG(bytes) {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     for (let at = 8; at + 8 <= bytes.length;) {
@@ -61,7 +62,7 @@ export function animatedPNG(bytes) {
         if (type === "IDAT") return false;
         at += 12 + view.getUint32(at);
     }
-    return false;
+    return null;
 }
 
 const cache = createThumbCache();
@@ -127,10 +128,16 @@ export function inlineThumbnail(key, dataURL, mime, isCurrent = () => true) {
     return entry.request;
 }
 
+const PNG_SCAN_BYTES = 4096;
+
 async function renderThumbnail(dataURL, mime) {
     const source = await (await fetch(dataURL)).blob();
     if (mime === "image/webp" && animatedWebP(new Uint8Array(await source.slice(0, 21).arrayBuffer()))) return null;
-    if (mime === "image/png" && animatedPNG(new Uint8Array(await source.slice(0, 4096).arrayBuffer()))) return null;
+    if (mime === "image/png") {
+        const animated = animatedPNG(new Uint8Array(await source.slice(0, PNG_SCAN_BYTES).arrayBuffer()));
+        // An incomplete scan of a larger file cannot rule animation out: keep the original.
+        if (animated === true || (animated === null && source.size > PNG_SCAN_BYTES)) return null;
+    }
     const bitmap = await createImageBitmap(source);
     let canvas;
     try {

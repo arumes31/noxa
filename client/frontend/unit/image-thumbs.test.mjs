@@ -109,10 +109,15 @@ test("animated PNG bypasses the thumbnail; plain PNG is thumbnailed", async (t) 
     const plain = png(chunk("IHDR", 13), chunk("IDAT", 4), chunk("acTL", 8), chunk("IEND"));
     assert.equal(animatedPNG(apng), true);
     assert.equal(animatedPNG(plain), false, "acTL after IDAT is not an animation control");
+    // A large ancillary chunk pushes acTL past the scanned prefix: unknown, not "no animation".
+    const late = png(chunk("IHDR", 13), chunk("iTXt", 6000), chunk("acTL", 8), chunk("IDAT", 4), chunk("IEND"));
+    assert.equal(animatedPNG(late.subarray(0, 4096)), null);
     let decodes = 0;
     stubBitmap(t, async () => { decodes++; return { width: 10, height: 10, close() {} }; });
     assert.equal(await inlineThumbnail("apng", pngURL(apng), "image/png"), null);
     assert.equal(decodes, 0, "an APNG is never decoded for a thumbnail");
+    assert.equal(await inlineThumbnail("late-apng", pngURL(late), "image/png"), null);
+    assert.equal(decodes, 0, "a PNG whose scan ends before IDAT keeps its original");
     assert.equal(await inlineThumbnail("plain-png", pngURL(plain), "image/png"), null, "under the cap");
     assert.equal(decodes, 1, "a plain PNG goes through the thumbnail path");
 });
