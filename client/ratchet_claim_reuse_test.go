@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -18,9 +19,9 @@ import (
 )
 
 // F5: a retry from a new consumer (after a reconnect or restart) first
-// replays the durable claim reservation for the same device, so the server
-// hands out the same key instead of another; only if that replay fails is a
-// new claim reserved.
+// replays the durable claim reservations for the same device, so the server
+// hands out the same key instead of another; only if those replays fail is a
+// new claim reserved, under an ID the next consumer finds as well.
 func TestRatchetRetryReplaysDurableClaim(t *testing.T) {
 	ns := durable.Namespace{Server: "tls-sha256:" + strings.Repeat("e", 64), Principal: "alice", Device: "a1"}
 	s, err := durable.Open(t.TempDir(), ns, durable.IdentityProtection(bytes.Repeat([]byte{9}, 32)), 0)
@@ -69,7 +70,10 @@ func TestRatchetRetryReplaysDurableClaim(t *testing.T) {
 	}
 	send(consumer())
 	send(consumer()) // fresh in-memory state: a reconnect or restart
-	if len(claims) != 3 || claims[1] != claims[0] || claims[2] == claims[0] {
-		t.Fatalf("claim requests %v: want the durable claim replayed, then one new claim", claims)
+	send(consumer()) // and again: the second consumer's new claim is found too
+	s0, s1 := claims[0], claims[2]
+	want := []string{s0, s0, s1, s0, s1}
+	if len(claims) != 6 || !slices.Equal(claims[:5], want) || claims[5] == s0 || claims[5] == s1 || s0 == s1 || !strings.HasPrefix(claims[5], "claim:") {
+		t.Fatalf("claim requests %v: want every earlier durable claim replayed before one new discoverable claim", claims)
 	}
 }

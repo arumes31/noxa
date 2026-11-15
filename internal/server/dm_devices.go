@@ -197,6 +197,10 @@ func (s *TCPServer) sendDirectCopies(ctx context.Context, client *Client, msg ne
 			continue
 		}
 		toUserID := userIDs[t.principal]
+		if client.userID() <= 0 && toUserID > 0 && s.deps.Spool != nil {
+			// Went offline since the check above: never acknowledge a lost copy.
+			return s.sendErrorFor(client, origin, errCodeNotFound, errGuestOffline)
+		}
 		if s.deps.Spool == nil || toUserID <= 0 || client.userID() <= 0 {
 			continue // guests and spool-less servers exchange live copies only
 		}

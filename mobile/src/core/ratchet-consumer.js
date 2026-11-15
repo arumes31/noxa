@@ -271,45 +271,25 @@ export class RatchetConsumer {
         // refill (the account holds at most 100 private one-time keys).
         try { await this.#closeKeys(a); }
         catch (e) { if (e.code === "fenced" || e.code === "recovery_required") throw e; }
-        const refill = async () => {
+        if (latest.bundle.expires_at - now() < 86400) {
+            // Refresh before expiry with new one-time keys and next generation.
             s = await this.store.read([["account", a.accountID]]);
             const refreshed = await this.core.apply({ op: "prekeys", key: this.store.coreKey(s), account: dec.decode(rec(s, "account", a.accountID).data), count: Limits.refill });
             this.#check();
             await this.#commitBundle(s, a, refreshed, latest.bundle.generation + 1, latest.bundle);
             latest = await this.#latestPublication(a);
-        };
-        const publish = async () => {
-            try {
-                await this.store.checkAccountAuthority(await this.store.read(), a);
-                return await this.directory({ action: "publish", request_id: crypto.randomUUID(), bundle: latest.bundle });
-            } catch (e) {
-                if (e.code === "account-change-required") throw fail("recovery_required");
-                throw e;
-            }
-        };
-        // Refresh before expiry with new one-time keys and next generation.
-        if (latest.bundle.expires_at - now() < 86400) await refill();
-        const published = await publish();
-        // Refill as soon as few keys are left to claim (a busy device), while
-        // the account has room: the core never evicts a private key that is
-        // still published, so a full account would fail the refill.
-        if (Number.isInteger(published?.available) && published.available < Limits.refill && await this.#openKeys(a) + Limits.refill <= 100) {
-            await refill();
-            await publish();
+        }
+        try {
+            await this.store.checkAccountAuthority(await this.store.read(), a);
+            await this.directory({ action: "publish", request_id: crypto.randomUUID(), bundle: latest.bundle });
+        } catch (e) {
+            if (e.code === "account-change-required") throw fail("recovery_required");
+            throw e;
         }
         this.#check();
         this.identity = latest.bundle.identity;
         this.epoch = a.epoch;
         return { identity: this.identity, epoch: a.epoch, expiresAt: latest.bundle.expires_at };
-    }
-    /** One-time keys of the account neither consumed nor closed (held privately). */
-    async #openKeys(a) {
-        let open = 0;
-        for (const [, r] of await this.#readMany(await this.#refs("obligation"))) {
-            const o = parse(r.data);
-            if (o.account_id === a.accountID && !o.consumed && !o.closed) open++;
-        }
-        return open;
     }
     /**
      * One-time-key closure lifecycle (server rule: close_keys closes an

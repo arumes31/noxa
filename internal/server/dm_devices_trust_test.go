@@ -106,3 +106,30 @@ func TestGuestLegacyDMToOfflineMemberRefused(t *testing.T) {
 		t.Fatal("guest message spooled")
 	}
 }
+
+// F15: a copy for a member device that is listed online but cannot take it
+// (gone after the preflight) fails the guest's send instead of being
+// acknowledged as queued.
+func TestGuestDeviceCopyLostAfterPreflightIsNotAcknowledged(t *testing.T) {
+	e := startDMTestEnv(t)
+	_, desktopID := e.desktopAs(t, "user-uid", newLinkTestKeys(t))
+	for _, session := range e.env.srv.sessionsOf("user-uid") {
+		e.env.deps.Broadcast.Unregister(session.ID) // still a session, but delivery fails
+	}
+	guest, guestDevice := keyGuestWithDevice(t, e.env.addr, newLinkTestKeys(t))
+	send(t, guest, netproto.MsgChatSend, netproto.ChatSend{ToUniqueID: "user-uid", Enc: true, AckRequested: true, ClientMsgID: "guest-2",
+		Copies: []netproto.DMCopy{{DeviceID: desktopID, Text: "ZGVza3RvcA=="}, {DeviceID: guestDevice, Text: "bWU="}}})
+	for {
+		frame := readFrame(t, guest)
+		switch netproto.MessageType(frame.Type) {
+		case netproto.MsgError:
+			var got netproto.Error
+			if err := netproto.Decode(frame, &got); err != nil || got.Message != errGuestOffline {
+				t.Fatalf("guest send = %+v, %v", got, err)
+			}
+			return
+		case netproto.MsgChatAccepted:
+			t.Fatal("a lost guest copy was acknowledged")
+		}
+	}
+}

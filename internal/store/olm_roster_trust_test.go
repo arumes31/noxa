@@ -186,13 +186,10 @@ func TestExpireOlmDirectoryTrimsKeyRows(t *testing.T) {
 	}
 }
 
-// F4/F5 server side: the claimable count drops with a claim, and a replayed
-// claim request returns the same key only while that key is still reserved.
+// F5 server side: a replayed claim request returns the same key only while
+// that key is still reserved.
 func TestOlmClaimReplayOnlyWhileReserved(t *testing.T) {
 	s, a, b, m, parts := admissionFixture(t)
-	if n, err := s.AvailableOlmKeys(t.Context(), b.Device, b.Server); err != nil || n != 9 {
-		t.Fatalf("available after one claim of ten: %d %v", n, err)
-	}
 	first, err := s.ClaimOlmKey(t.Context(), a.Principal, a.Device, b.Principal, b.Device, "claim", m.Deadline, a.Server)
 	if err != nil {
 		t.Fatal(err)

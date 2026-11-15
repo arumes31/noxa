@@ -152,14 +152,6 @@ func (s *Store) PublishOlmBundle(ctx context.Context, principal, id, server stri
 	return tx.Commit()
 }
 
-// AvailableOlmKeys counts the device's keys ClaimOlmKey can still hand out
-// for server: available, current epoch, in an unexpired publication.
-func (s *Store) AvailableOlmKeys(ctx context.Context, id, server string) (int, error) {
-	var n int
-	e := s.db.QueryRowContext(ctx, `SELECT count(*) FROM olm_directory_keys k JOIN olm_directory_publications p USING(device_id,generation) WHERE k.device_id=$1 AND p.server=$2 AND k.lifecycle='available' AND k.account_epoch=(SELECT account_epoch FROM olm_directory_state WHERE device_id=k.device_id) AND p.expires_at>now()`, id, server).Scan(&n)
-	return n, e
-}
-
 // ClaimOlmKey is single-target and idempotent per requester principal/request ID.
 // The durable account-pair and device-pair budgets survive reconnects.
 func (s *Store) ClaimOlmKey(ctx context.Context, principal, id, target, targetID, requestID string, claimUntil int64, server string, expectedEpoch ...int64) (OlmClaim, error) {
