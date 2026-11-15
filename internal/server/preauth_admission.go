@@ -62,20 +62,28 @@ func (s *TCPServer) guestSessionsFrom(self *Client) int {
 	source, excluding := auth.SourceAddressKey(remoteIP(self.Conn)), self.handoverTarget()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	count := 0
+	// Keyed by session: a commit's slot and its still-open old connection are
+	// one session (like sessionCount), not two.
+	sessions := map[string]struct{}{}
 	for id, c := range s.clients {
 		if c == self || id == excluding || auth.SourceAddressKey(remoteIP(c.Conn)) != source {
 			continue
 		}
-		if (c.isAuthed() && c.userID() == 0) || c.holdsGuestHandoverSlot() {
-			count++
+		if target := c.guestHandoverSlot(); target != "" && target != excluding {
+			sessions[target] = struct{}{}
+		} else if c.isAuthed() && c.userID() == 0 {
+			sessions[id] = struct{}{}
 		}
 	}
-	return count
+	return len(sessions)
 }
 
-func (c *Client) holdsGuestHandoverSlot() bool {
+// guestHandoverSlot is the session a guest commit holds a slot for, else "".
+func (c *Client) guestHandoverSlot() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.handover != nil && c.handover.slotHeld && c.handover.identity.userID == 0
+	if c.handover != nil && c.handover.slotHeld && c.handover.identity.userID == 0 {
+		return c.handover.clientID
+	}
+	return ""
 }

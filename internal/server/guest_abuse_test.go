@@ -48,6 +48,23 @@ func guestOn(ip string, web bool) *Client {
 	return c
 }
 
+// A guest commit holding its slot while its old connection is still open is
+// one session, not two (CodeRabbit on #360).
+func TestGuestSessionsCountHandoverOnce(t *testing.T) {
+	s := New(&config.Config{}, zap.NewNop(), &Deps{})
+	old := guestOn("203.0.113.7", false)
+	old.authed = true
+	standby := guestOn("203.0.113.7", false)
+	standby.handover = &handoverStandby{clientID: "b-old", committing: true, slotHeld: true}
+	other := guestOn("203.0.113.7", false)
+	other.authed = true
+	self := guestOn("203.0.113.7", false)
+	s.clients = map[string]*Client{"b-old": old, "b-new": standby, "c": other, "self": self}
+	if got := s.guestSessionsFrom(self); got != 2 {
+		t.Fatalf("guest sessions = %d, want 2 (b counted once, plus c)", got)
+	}
+}
+
 func TestGuestBanIPSkipsMembersAndPossibleProxies(t *testing.T) {
 	s := New(&config.Config{Web: config.WebConfig{TrustedProxies: []string{"10.0.0.0/8"}}}, zap.NewNop(), &Deps{})
 	member := guestOn("203.0.113.7", false)
