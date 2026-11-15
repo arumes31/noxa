@@ -142,6 +142,34 @@ func (e *ratchetError) Unwrap() error { return e.Err }
 
 func rfail(code string) *ratchetError { return &ratchetError{Code: code} }
 
+// ratchetDetail is the code plus the wrapped cause for logs; Error() alone
+// shows only the code.
+func ratchetDetail(err error) string {
+	var r *ratchetError
+	if errors.As(err, &r) && r.Err != nil {
+		return r.Code + ": " + r.Err.Error()
+	}
+	return err.Error()
+}
+
+// ratchetClaimError relabels a claim the server answered "exhausted": the peer
+// device has no claimable key (expired or used up). The bare code would read
+// as this device's own store being full.
+func ratchetClaimError(err error) error {
+	if ratchetCode(err) == "exhausted" {
+		return &ratchetError{Code: "device_unpublished", Err: err}
+	}
+	return err
+}
+
+// ratchetShortID keeps logs readable without the full principal.
+func ratchetShortID(principal string) string {
+	if len(principal) > 8 {
+		return principal[:8]
+	}
+	return principal
+}
+
 // ratchetCode maps consumer, store and transport errors to their string code;
 // "" means uncoded (transport loss, unexpected local error).
 func ratchetCode(err error) string {
@@ -1434,9 +1462,11 @@ func (c *ratchetConsumer) seal(a durable.AccountAuthority, in ratchetIntent, reu
 		}
 		trusted, err := c.trust(t.Principal, t.Device)
 		if err != nil {
+			log.Printf("ratchet: device %s of %s is not trusted: %s", t.Device, ratchetShortID(t.Principal), ratchetDetail(err))
 			return RatchetOutcome{}, err
 		}
 		if trusted, err = c.promote(a, trusted, t.Principal, t.Device, t.AccountEpoch, t.Identity, false); err != nil {
+			log.Printf("ratchet: device %s of %s changed keys: %s", t.Device, ratchetShortID(t.Principal), ratchetDetail(err))
 			return RatchetOutcome{}, err
 		}
 		p := ratchetPlan{t: t, trusted: trusted, binding: admission.ExpectedBinding(m, t), context: c.sessionContext(a, t)}
@@ -1489,7 +1519,8 @@ func (c *ratchetConsumer) seal(a durable.AccountAuthority, in ratchetIntent, reu
 			}
 			result, err := c.directory(request)
 			if err != nil {
-				return RatchetOutcome{}, err
+				log.Printf("ratchet: key claim for device %s of %s failed: %s", t.Device, ratchetShortID(t.Principal), ratchetDetail(err))
+				return RatchetOutcome{}, ratchetClaimError(err)
 			}
 			expected := t.Identity
 			if trusted.pin != nil {

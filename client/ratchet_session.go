@@ -325,11 +325,12 @@ func (m *connManager) startRatchet(conn net.Conn) error {
 		} else {
 			log.Printf("ratchet: history replay: %v", err)
 		}
-		last := ""
+		last, lastErr := "", ""
 		for {
 			drainedAt := time.Now()
 			list, err := consumer.drain()
 			if err == nil {
+				lastErr = ""
 				// Placeholders are announced only when the list changes.
 				if key := string(ratchetJSON(list)); key != last && consumer.check() == nil {
 					last = key
@@ -337,6 +338,10 @@ func (m *connManager) startRatchet(conn net.Conn) error {
 				}
 			} else if ratchetCode(err) == "fenced" {
 				return
+			} else if detail := ratchetDetail(err); detail != lastErr {
+				// Once per distinct error, not on every retry.
+				lastErr = detail
+				log.Printf("ratchet: drain failed: %s", detail)
 			}
 			select {
 			case <-s.quit:
@@ -490,6 +495,9 @@ func ratchetSent(out RatchetOutcome, err error) (RatchetOutcome, bool) {
 // committed attempt without a terminal receipt is still pending: its ORIGINAL
 // text stays queued and later resolves exactly; it is never resent changed.
 func ratchetFailure(err error) error {
+	if err != nil {
+		log.Printf("ratchet: send failed: %s", ratchetDetail(err))
+	}
 	var r *ratchetError
 	if ratchetCode(err) == "logical_mismatch" {
 		return errors.New("a different message was already sent with this operation; nothing new was sent")
