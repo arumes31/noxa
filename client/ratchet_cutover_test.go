@@ -62,6 +62,17 @@ func TestRatchetCutoverGates(t *testing.T) {
 	if got := ratchetFailure(rfail("exhausted")).Error(); !strings.Contains(got, "store is full") || strings.Contains(got, "device in this conversation") {
 		t.Fatalf("local exhaustion text: %q", got)
 	}
+	// A peer device without a claimable key is the peer's setup, not this store.
+	claim := ratchetClaimError(rfail("exhausted"))
+	if got := ratchetFailure(claim).Error(); !strings.Contains(got, "has not set up secure messaging yet") {
+		t.Fatalf("claim exhaustion text: %q", got)
+	}
+	if got := ratchetDetail(claim); got != "device_unpublished: ratchet: exhausted" {
+		t.Fatalf("claim detail: %q", got)
+	}
+	if err := ratchetClaimError(rfail("limit")); ratchetCode(err) != "limit" {
+		t.Fatalf("other claim codes pass through: %v", err)
+	}
 	if got := ratchetFailure(errRatchetServerOutdated).Error(); got != errRatchetServerOutdated.Error() {
 		t.Fatalf("server outdated text: %q", got)
 	}
