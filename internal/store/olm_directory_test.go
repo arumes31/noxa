@@ -23,7 +23,16 @@ func olmFixture(t *testing.T, s *Store, principal string) (Device, ed25519.Priva
 	t.Helper()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	pubText := string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pub}))
-	d, e := s.AddDevice(t.Context(), NewDevice{Principal: principal, Kind: DeviceKindDesktop, Ed25519Public: pubText}, 24)
+	return olmFixtureFor(t, s, NewDevice{Principal: principal, Kind: DeviceKindDesktop, Ed25519Public: pubText}, priv)
+}
+
+// olmFixtureFor registers nd (whose Ed25519Public is priv's key) and returns
+// it with an unpublished signed bundle.
+func olmFixtureFor(t *testing.T, s *Store, nd NewDevice, priv ed25519.PrivateKey) (Device, ed25519.PrivateKey, olmdir.Bundle) {
+	t.Helper()
+	pub := priv.Public().(ed25519.PublicKey)
+	principal := nd.Principal
+	d, e := s.AddDevice(t.Context(), nd, 24)
 	if e != nil {
 		t.Fatal(e)
 	}

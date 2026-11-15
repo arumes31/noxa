@@ -3,7 +3,6 @@ package devicetrust
 import (
 	"crypto/ed25519"
 
-	"noxa/internal/auth"
 	"noxa/internal/netproto"
 )
 
@@ -54,7 +53,7 @@ func VerifyRevocations(principal string, trusted []Device, list []netproto.Devic
 		if r.DeviceID == root && r.SignerDeviceID != root {
 			continue
 		}
-		if _, err := auth.LoadPublicKey(r.Ed25519Public); err != nil {
+		if _, err := LoadPublicKey(r.Ed25519Public); err != nil {
 			continue
 		}
 		transcript := netproto.DeviceRevocationTranscript(principal, r.SignerDeviceID, r.DeviceID, r.Ed25519Public, r.X25519Public, r.SignedAt, r.Reason)

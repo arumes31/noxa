@@ -7,7 +7,6 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
-	"noxa/internal/auth"
 	"noxa/internal/e2ee/olmdir"
 	"noxa/internal/netproto"
 )
@@ -23,6 +22,20 @@ type Device struct {
 }
 
 func Verify(principal string, signing ed25519.PublicKey, encryption [32]byte, list []netproto.DMDevice) ([]Device, error) {
+	out, err := Chain(principal, list)
+	if err != nil || len(out) == 0 {
+		return out, err
+	}
+	if len(signing) != 32 || !bytes.Equal(out[0].Signing, signing) || out[0].Encryption != encryption {
+		return nil, ErrUntrusted
+	}
+	return out, nil
+}
+
+// Chain applies Verify's approval-chain rule with the listed first device
+// trusted by its own keys. The server uses it: it has no pinned identity, but
+// must list exactly the devices a client's Verify will accept.
+func Chain(principal string, list []netproto.DMDevice) ([]Device, error) {
 	if !olmdir.ValidText(principal) || len(list) > 64 {
 		return nil, ErrUntrusted
 	}
@@ -49,7 +62,7 @@ func Verify(principal string, signing ed25519.PublicKey, encryption [32]byte, li
 		if len(d.Ed25519Public) > 256 || len(d.X25519Public) != 44 {
 			continue
 		}
-		k, e := auth.LoadPublicKey(d.Ed25519Public)
+		k, e := LoadPublicKey(d.Ed25519Public)
 		x, e2 := base64.StdEncoding.Strict().DecodeString(d.X25519Public)
 		if d.RevokedAt != 0 || e != nil || e2 != nil || len(x) != 32 || base64.StdEncoding.EncodeToString(x) != d.X25519Public || !olmdir.ValidSigning(base64.RawStdEncoding.EncodeToString(k)) || !olmdir.ValidCurve(base64.RawStdEncoding.EncodeToString(x)) {
 			continue
@@ -59,7 +72,7 @@ func Verify(principal string, signing ed25519.PublicKey, encryption [32]byte, li
 		keys[d.DeviceID] = Device{d.DeviceID, d.Kind, k, enc, d.FirstDevice}
 	}
 	first, ok := keys[root]
-	if !ok || len(signing) != 32 || !bytes.Equal(first.Signing, signing) || first.Encryption != encryption {
+	if !ok {
 		return nil, ErrUntrusted
 	}
 	trusted := map[string]bool{root: true}
