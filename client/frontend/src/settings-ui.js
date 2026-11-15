@@ -344,8 +344,12 @@ function selectOf(options, value, onchange) {
 // (88) The Windows Run entry is the source of truth and, like window opacity,
 // changes immediately rather than with the dialog's Apply. Windows only.
 function startWithWindowsRow() {
+    // One write at a time; the switch then shows what the registry holds.
     const toggle = checkbox(false, async (on) => {
-        try { await window.go.main.App.SetStartWithWindows(on); } catch { toggle.checked = !on; }
+        toggle.disabled = true;
+        try { await window.go.main.App.SetStartWithWindows(on); } catch { /* the read below shows the real state */ }
+        try { toggle.checked = await window.go.main.App.GetStartWithWindows() === true; } catch { toggle.checked = !on; }
+        toggle.disabled = false;
     });
     const el = row(t("settings.start.with.windows"), toggle, "", { help: t("settings.start.with.windows.help") });
     el.hidden = true;

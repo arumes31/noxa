@@ -3912,13 +3912,22 @@ async function openDeepLink(url) {
             confirm: invite => confirmDialog({ title: t("midnight.deepLinkTitle"),
                 message: t("midnight.deepLinkConfirm", { channel: invite.channelID, address: invite.address }),
                 confirmLabel: t("midnight.deepLinkOpen"), cancelLabel: t("common.cancel") }),
-            join: link => { showLogin(); $("login-addr").value = link; void connectFromLogin(); },
+            join: async link => {
+                // A login already in flight would swallow this one: refuse it visibly.
+                if ($("login-connect").disabled) { toast(t("midnight.deepLinkBusy"), "warn"); return; }
+                showLogin();
+                // select() clears typed and saved passwords, so no secret for
+                // another server reaches the invite's server; the nickname stays.
+                await loginMemory.select({ addr: link, nickname: $("login-nick").value.trim(), display_name: $("login-display-name").value.trim() });
+                void connectFromLogin();
+            },
         });
     } finally { deepLinkPrompt = false; }
 }
 window.runtime?.EventsOn?.("deep_link", url => { void openDeepLink(url); });
-void startupInitialized.then(async ready => {
-    if (ready) await openDeepLink(await window.go.main.App.TakeDeepLink());
+// Drained even when the settings read failed, so later links are not held.
+void startupInitialized.catch(() => false).then(async () => {
+    await openDeepLink(await window.go.main.App.TakeDeepLink());
 }).catch(error => console.warn("Deep link failed", error));
 
 // C20: the first start after an update restart greets with the wordmark.

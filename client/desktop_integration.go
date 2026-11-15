@@ -121,7 +121,9 @@ func (a *App) TakeDeepLink() string {
 // secondInstanceLaunch raises the running window and forwards a noxa:// URL
 // from the second launch; every other argument is ignored.
 func (a *App) secondInstanceLaunch(data options.SecondInstanceData) {
-	nativeToastRaise(a) // the same show/unminimize/tray bookkeeping as a toast click
+	if a.ctx != nil { // no window yet: nothing to raise, the link still queues
+		nativeToastRaise(a) // the same show/unminimize/tray bookkeeping as a toast click
+	}
 	_, link := readLaunchArgs(data.Args)
 	a.deliverDeepLink(link)
 }

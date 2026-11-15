@@ -20,6 +20,6 @@ export function buildChannelInvite(address, channelID, token) {
 export async function handleDeepLink(value, { confirm, join }) {
     const invite = parseChannelInvite(value);
     if (!invite || await confirm(invite) !== true) return false;
-    join(value);
+    await join(value);
     return true;
 }

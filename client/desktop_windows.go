@@ -84,6 +84,10 @@ func singleInstanceRunning() bool {
 	return true
 }
 
+// startupEntryMu serializes the toggle with the startup path refresh, so a
+// refresh cannot write back an entry the user just removed.
+var startupEntryMu sync.Mutex
+
 func startWithWindowsEnabled() bool {
 	key, err := registry.OpenKey(registry.CURRENT_USER, autostartRunKey, registry.QUERY_VALUE)
 	if err != nil {
@@ -95,6 +99,8 @@ func startWithWindowsEnabled() bool {
 }
 
 func setStartWithWindows(enabled bool) error {
+	startupEntryMu.Lock()
+	defer startupEntryMu.Unlock()
 	key, _, err := registry.CreateKey(registry.CURRENT_USER, autostartRunKey, registry.SET_VALUE)
 	if err != nil {
 		return fmt.Errorf("open startup entry: %w", err)
@@ -121,6 +127,7 @@ func registerDesktopIntegration() {
 		log.Printf("desktop integration: %v", err)
 		return
 	}
+	startupEntryMu.Lock()
 	if key, err := registry.OpenKey(registry.CURRENT_USER, autostartRunKey, registry.QUERY_VALUE|registry.SET_VALUE); err == nil {
 		if current, _, err := key.GetStringValue(autostartValueName); err == nil && current != autostartCommand(exe) {
 			if err := key.SetStringValue(autostartValueName, autostartCommand(exe)); err != nil {
@@ -129,6 +136,7 @@ func registerDesktopIntegration() {
 		}
 		_ = key.Close()
 	}
+	startupEntryMu.Unlock()
 	for _, v := range []struct{ path, name, value string }{
 		{protocolKey, "", protocolDescription},
 		{protocolKey, "URL Protocol", ""},
