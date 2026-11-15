@@ -10,6 +10,7 @@ import { maintainRelay } from "./relay-renewal.js";
 import { manageAvatarPlayback } from "./avatar-playback.js";
 import { closeContextMenu } from "./context-menu.js";
 import { createConnectionOverlay } from "./connection-overlay.js";
+import { createShutdownNotice } from "./shutdown-notice.js";
 import { initializeUpdateTransition, updateStartupBlocked, refreshUpdateTransition } from "./update-transition.js";
 import "./update-transition.css";
 import { stopDisplayCapture } from "./display-capture-lease.js";
@@ -713,6 +714,9 @@ async function rememberTabConnect(c, expectedGeneration = null, tabID = "", curr
     if (tabID && (active?.id !== tabID || (state.activeTabID && state.activeTabID !== tabID))) return false;
     state.lastSuccessfulConnect = { ...c };
     state.lastConnect = c;
+    // A fresh connection starts with no pending shutdown: a marker replayed from
+    // the previous session must not suppress this one's first genuine loss.
+    shutdownNotice.forget(tabID || active?.id);
     return true;
 }
 
@@ -957,6 +961,9 @@ function showReconnectNotice(tabID) {
 // Hints come from every tab, also background ones (tab_shutdown_hint), and
 // expire a few minutes after the announced shutdown.
 const shutdownJitter = new Map(); // tabID -> { seconds, expires }
+// Marks a tab whose server announced a shutdown, so the following drop does not
+// re-announce "connection lost" (the shutdown notice already covered it).
+const shutdownNotice = createShutdownNotice();
 window.runtime.EventsOn("tab_shutdown_hint", hint => {
     const tabID = String(hint?.tab_id || "");
     const seconds = Math.min(60, Math.max(0, Math.round(Number(hint?.reconnect_jitter) || 0)));
@@ -1059,6 +1066,9 @@ window.addEventListener("noxa-language-changed", () => {
     tabReconnects.refresh(state.activeTabID);
 });
 function startTabReconnect(tabID) {
+    // A background tab's drop is handled here, not by "disconnected"; clear any
+    // shutdown marker so it cannot carry into a later, unrelated loss.
+    shutdownNotice.forget(String(tabID));
     connectionOverlay.lost(String(tabID));
     if (scopedReconnectAvailable()) tabReconnects.start(String(tabID), state.tabConnects.get(String(tabID)));
 }
@@ -1211,9 +1221,13 @@ window.runtime.EventsOn("disconnected", () => {
     connectionOverlay.lost(state.activeTabID);
     const unexpected = !!state.lastConnect;
     if (unexpected) notePresenceDrop(state);
-    if (unexpected && state.settings?.notify_connection !== false) toast(t("runtime.connectionLost"), "warn", "conn");
-    if (unexpected) playAlert("connection_lost", { delay: 1200 });
-    sysMsg(t("runtime.serverDisconnected"));
+    // A drop the server already announced as a shutdown needs no second
+    // "connection lost" alert: the shutdown notice said it and a reconnect is
+    // scheduled. Suppress the toast and sound (not the overlay/reconnect).
+    const announcedShutdown = shutdownNotice.consume(state.activeTabID);
+    if (unexpected && !announcedShutdown && state.settings?.notify_connection !== false) toast(t("runtime.connectionLost"), "warn", "conn");
+    if (unexpected && !announcedShutdown) playAlert("connection_lost", { delay: 1200 });
+    if (!announcedShutdown) sysMsg(t("runtime.serverDisconnected"));
     // (32/33) whisper state is per-connection: client IDs and the server-side
     // whisper list do not survive a reconnect.
     activeWhisperers.clear();
@@ -1908,12 +1922,20 @@ window.runtime.EventsOn("event", (json) => {
                 ? t("runtime.shutdownScheduledMinutes", { minutes: seconds / 60 })
                 : t("runtime.shutdownScheduledSeconds", { seconds });
             toast(text, "warn", "conn");
+            // Only the imminent server_shutdown (below) arms drop suppression:
+            // the server always sends it right before closing, so an unrelated
+            // network loss during a long countdown still announces normally.
             return;
         }
         case "server_shutdown":
             if (!actionSoundsSuppressed()) {
                 playAlert("server_shutdown");
                 toast(t("runtime.shutdown"), "warn", "conn");
+                // A live shutdown's socket closes imminently, so the following
+                // drop is expected and needs no second alert. Guarded by the
+                // replay check: a journal replay (tab switch) must not arm a
+                // marker for a connection that already dropped.
+                shutdownNotice.announce(state.activeTabID, 30000);
             }
             break;
         case "kicked": {
