@@ -825,8 +825,8 @@ members whose voice is still connecting (also after a normal join) show a wave
 across their name (static with reduced motion). A deliberate leave, kick, ban or
 expiry ends the session as before; a server restart forgets all tokens. A page
 reload of the web app starts a new session. A guest without a linked device gets
-no kept place after a dropped connection and signs in again as a new session;
-its update restart still resumes.
+no kept place after a dropped connection or an update restart and signs in
+again as a new session; the update handover below still moves its session.
 
 **Update handover.** On an updated server, a connected desktop client moves its
 session to the new version before the old one exits. The new process starts

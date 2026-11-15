@@ -55,16 +55,27 @@ func (s *TCPServer) guestSessionsPerAddress() int {
 	return defaultGuestSessionsPerAddress
 }
 
-// guestSessionsFrom counts authenticated guest sessions from source, except
-// the session a handover commit takes over.
-func (s *TCPServer) guestSessionsFrom(source, excluding string) int {
+// guestSessionsFrom counts guest sessions from self's source: authenticated
+// ones, except the session self's handover commit takes over, plus other
+// guest commits holding a slot their old session already gave up.
+func (s *TCPServer) guestSessionsFrom(self *Client) int {
+	source, excluding := auth.SourceAddressKey(remoteIP(self.Conn)), self.handoverTarget()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	count := 0
 	for id, c := range s.clients {
-		if id != excluding && c.isAuthed() && c.userID() == 0 && auth.SourceAddressKey(remoteIP(c.Conn)) == source {
+		if c == self || id == excluding || auth.SourceAddressKey(remoteIP(c.Conn)) != source {
+			continue
+		}
+		if (c.isAuthed() && c.userID() == 0) || c.holdsGuestHandoverSlot() {
 			count++
 		}
 	}
 	return count
+}
+
+func (c *Client) holdsGuestHandoverSlot() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.handover != nil && c.handover.slotHeld && c.handover.identity.userID == 0
 }

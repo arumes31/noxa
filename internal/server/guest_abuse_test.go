@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 	"noxa/internal/auth"
 	"noxa/internal/config"
+	"noxa/internal/netproto"
 	"noxa/internal/store"
 )
 
@@ -87,30 +88,70 @@ func TestGuestBanCreatesLinkedIPBan(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	const ip, guestID = "203.0.113.77", "guest:ban-link-test"
+	// Two guests banned separately from one address, with the same reason.
+	const ip, guestA, guestB = "203.0.113.77", "guest:ban-link-a", "guest:ban-link-b"
 	t.Cleanup(func() {
-		_, _ = st.DB().ExecContext(ctx, `DELETE FROM bans WHERE value IN ($1, $2)`, ip, guestID)
+		_, _ = st.DB().ExecContext(ctx, `DELETE FROM bans WHERE value IN ($1, $2, $3)`, ip, guestA, guestB)
 	})
 	s := New(&config.Config{}, zap.NewNop(), &Deps{Bans: st, BanAdmin: st})
-	if err := s.insertBan(ctx, guestID, s.guestBanIP(guestOn("::ffff:"+ip, false)), "spam", nil, nil); err != nil {
-		t.Fatal(err)
+	for _, guest := range []string{guestA, guestB} {
+		if err := s.insertBan(ctx, guest, s.guestBanIP(guestOn("::ffff:"+ip, false)), "spam", nil, nil); err != nil {
+			t.Fatal(err)
+		}
 	}
 	authSvc := auth.New(st, zap.NewNop())
+	lift := func(guest string, wantRows int, wantBanned bool) {
+		t.Helper()
+		var uidBan int64
+		if err := st.DB().QueryRowContext(ctx, `SELECT id FROM bans WHERE ban_type = 1 AND value = $1`, guest).Scan(&uidBan); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.removeRoleBan(ctx, "actor", uidBan); err != nil {
+			t.Fatal(err)
+		}
+		var left int
+		if err := st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM bans WHERE value IN ($1, $2, $3)`, ip, guestA, guestB).Scan(&left); err != nil || left != wantRows {
+			t.Fatalf("after lifting %s: %d rows (err %v), want %d", guest, left, err, wantRows)
+		}
+		if ban, err := authSvc.LookupActiveBan(ctx, "guest:a-fresh-id", ip); err != nil || (ban != nil) != wantBanned {
+			t.Fatalf("after lifting %s: address ban %+v err %v, want banned %v", guest, ban, err, wantBanned)
+		}
+	}
 	if ban, err := authSvc.LookupActiveBan(ctx, "guest:a-fresh-id", ip); err != nil || ban == nil || ban.Type != 0 || ban.Reason != "spam" {
 		t.Fatalf("login of a new guest ID from the banned address: ban %+v err %v", ban, err)
 	}
-	var uidBan int64
-	if err := st.DB().QueryRowContext(ctx, `SELECT id FROM bans WHERE ban_type = 1 AND value = $1`, guestID).Scan(&uidBan); err != nil {
-		t.Fatal(err)
+	lift(guestA, 2, true) // B's ID and IP bans stay
+	lift(guestB, 0, false)
+}
+
+// A guest login racing into the gap between a guest handover's takeover of
+// the old session and the commit's publication must not take its slot.
+func TestGuestHandoverKeepsItsSlotAgainstARacingGuest(t *testing.T) {
+	env := startTestEnvFull(t, nil, func(cfg *config.Config) { cfg.Web.WSConnectionsPerIP = 1 })
+	defer env.stop()
+	login := func(token string) netproto.Authenticate {
+		return netproto.Authenticate{Anonymous: true, Nickname: "visitor", ResumeToken: token}
 	}
-	if err := s.removeRoleBan(ctx, "actor", uidBan); err != nil {
-		t.Fatal(err)
+	old, first := dialResumable(t, env.addr, login(""))
+	defer func() { _ = old.Close() }()
+	standby, resp := dialHandover(t, env.addr, login(first.ResumeToken))
+	defer func() { _ = standby.Close() }()
+	if !resp.Standby {
+		t.Fatalf("standby reply = %+v", resp)
 	}
-	var left int
-	if err := st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM bans WHERE value IN ($1, $2)`, ip, guestID).Scan(&left); err != nil || left != 0 {
-		t.Fatalf("unban left %d rows (err %v)", left, err)
+	raced := make(chan netproto.AuthResponse, 1)
+	afterHandoverTakeover = func() {
+		conn, r := dialGuest(t, env.addr, "racer", "")
+		_ = conn.Close()
+		raced <- r
 	}
-	if ban, err := authSvc.LookupActiveBan(ctx, "guest:a-fresh-id", ip); err != nil || ban != nil {
-		t.Fatalf("address still banned after unban: %+v %v", ban, err)
+	defer func() { afterHandoverTakeover = nil }()
+	send(t, standby, netproto.MsgHandoverCommit, struct{}{})
+	var done netproto.AuthResponse
+	if err := netproto.Decode(readOfType(t, standby, netproto.MsgAuthResponse), &done); err != nil || !done.OK || !done.Resumed || done.ClientID != first.ClientID {
+		t.Fatalf("guest handover commit = %+v %v", done, err)
+	}
+	if r := <-raced; r.OK || r.Reason != "too many guest sessions from your address" {
+		t.Fatalf("racing guest = %+v, want refused at the cap", r)
 	}
 }

@@ -387,15 +387,17 @@ func (s *TCPServer) adoptClientID(client *Client, id string) bool {
 // reconnecting) or "" for an ordinary departure, whose token it revokes.
 func (s *TCPServer) parkSession(client *Client, removed *state.Client, reason string, revoked bool, now time.Time) string {
 	kept := ""
+	// A device-less guest costs nothing to recreate: keeping its place would
+	// let a login/leave loop fill everyone's member list outside max_clients.
+	// Its update handover (a resume takeover) still keeps the session.
+	keepable := client.userID() != 0 || client.currentDeviceID() != ""
 	switch {
 	case revoked:
 	case client.resumeTakeover.Load():
 		kept = netproto.DepartureReconnecting
-	case reason == netproto.DepartureUpdating:
+	case reason == netproto.DepartureUpdating && keepable:
 		kept = reason
-	// A device-less guest costs nothing to recreate: keeping its place would
-	// let a login/drop loop fill everyone's member list outside max_clients.
-	case reason == netproto.DepartureConnectionLost && client.resumable() && (client.userID() != 0 || client.currentDeviceID() != ""):
+	case reason == netproto.DepartureConnectionLost && client.resumable() && keepable:
 		kept = netproto.DepartureReconnecting
 	}
 	if kept == "" {

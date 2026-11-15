@@ -1599,6 +1599,8 @@ func (s *TCPServer) onDisconnect(client *Client) {
 					departure = client.departureReason()
 					if reason := s.parkSession(client, removed, departure, revoked, now); reason != "" {
 						departure, kept = reason, true
+					} else if departure == netproto.DepartureUpdating {
+						departure = "" // not kept: an ordinary leave, no "updating" place
 					}
 					s.presence.noteDeparture(client.ID, key, departure, channelID, wasInvisible, now)
 					// A session taken over by its own resume needs no kept place.

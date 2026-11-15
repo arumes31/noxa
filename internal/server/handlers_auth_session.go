@@ -171,7 +171,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 			rejection = "server is full"
 			return authorization.ErrRoleForbidden
 		}
-		if id.userID == 0 && s.guestSessionsFrom(auth.SourceAddressKey(remoteIP(client.Conn)), client.handoverTarget()) >= s.guestSessionsPerAddress() {
+		if id.userID == 0 && s.guestSessionsFrom(client) >= s.guestSessionsPerAddress() {
 			rejection = "too many guest sessions from your address"
 			return authorization.ErrRoleForbidden
 		}
