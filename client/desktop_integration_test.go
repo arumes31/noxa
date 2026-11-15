@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/wailsapp/wails/v2/pkg/options"
 )
@@ -89,5 +90,45 @@ func TestSecondInstanceLinkReplacesColdStartLink(t *testing.T) {
 	a.secondInstanceLaunch(options.SecondInstanceData{Args: []string{"noxa://newer"}})
 	if got := a.TakeDeepLink(); got != "noxa://newer" {
 		t.Fatalf("TakeDeepLink = %q, want the newer link", got)
+	}
+}
+
+func TestSingleInstanceAdoptWaitsForSettledHandover(t *testing.T) {
+	if !singleInstanceAdoptReady(nil) {
+		t.Fatal("a plain update-started process adopts at once")
+	}
+	h := &incomingUpdateHandover{parentGone: make(chan struct{})}
+	if singleInstanceAdoptReady(h) {
+		t.Fatal("a hidden handover child must not adopt before it is settled")
+	}
+	h.confirmed.Store(true)
+	if !singleInstanceAdoptReady(h) {
+		t.Fatal("a committed handover adopts")
+	}
+	gone := &incomingUpdateHandover{parentGone: make(chan struct{})}
+	close(gone.parentGone)
+	if !singleInstanceAdoptReady(gone) {
+		t.Fatal("adopts once the old process exited")
+	}
+}
+
+func TestParseSecondInstanceCopy(t *testing.T) {
+	encode := func(s string) []uint16 { return utf16.Encode([]rune(s)) }
+	payload := append(encode(`{"Args":["noxa://h/invite/1#x"],"WorkingDirectory":"C:\\"}`), 0, 'j', 'u', 'n', 'k')
+	data, ok := parseSecondInstanceCopy(singleInstanceCopyKind, payload)
+	if !ok || len(data.Args) != 1 || data.Args[0] != "noxa://h/invite/1#x" || data.WorkingDirectory != `C:\` {
+		t.Fatalf("parsed %+v, %v", data, ok)
+	}
+	for name, bad := range map[string]struct {
+		kind    uintptr
+		payload []uint16
+	}{
+		"kind":      {7, payload},
+		"json":      {singleInstanceCopyKind, encode("{")},
+		"oversized": {singleInstanceCopyKind, make([]uint16, singleInstanceCopyMax+1)},
+	} {
+		if _, ok := parseSecondInstanceCopy(bad.kind, bad.payload); ok {
+			t.Errorf("%s accepted", name)
+		}
 	}
 }

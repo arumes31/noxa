@@ -2,7 +2,10 @@
 
 package main
 
-import "github.com/getlantern/systray"
+import (
+	"github.com/getlantern/systray"
+	"github.com/wailsapp/wails/v2/pkg/options"
+)
 
 // runDesktop preserves the systray-required main-thread topology on macOS.
 func runDesktop(app *App) {
@@ -18,3 +21,5 @@ func runDesktop(app *App) {
 func startWithWindowsEnabled() bool  { return false }
 func setStartWithWindows(bool) error { return nil }
 func registerDesktopIntegration()    {}
+
+func tryAdoptSingleInstance(string, func(options.SecondInstanceData)) bool { return true }
