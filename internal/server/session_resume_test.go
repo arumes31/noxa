@@ -452,20 +452,38 @@ func TestSessionResumeTakesOverHalfOpenConnection(t *testing.T) {
 	}
 }
 
-func TestEphemeralGuestResumesItsIdentity(t *testing.T) {
+// A device-less guest that drops its connection or says an update goodbye
+// leaves no kept place: a login/leave loop would fill every member list.
+// Its handover commit still moves the session (TestGuestHandoverKeepsItsSlotAgainstARacingGuest).
+func TestDevicelessGuestLeavesNoKeptPlace(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
+	noKeptPlace := func(what string) {
+		t.Helper()
+		waitFor(t, "token revoked", func() bool { return env.srv.resume.len() == 0 })
+		env.srv.presence.mu.Lock()
+		kept := len(env.srv.presence.updating)
+		env.srv.presence.mu.Unlock()
+		if kept != 0 {
+			t.Fatalf("a device-less guest kept a place after %s", what)
+		}
+	}
 	guest, first := dialResumable(t, env.addr, netproto.Authenticate{Anonymous: true, Nickname: "visitor"})
 	if !first.Guest || first.ResumeToken == "" {
 		t.Fatalf("guest login: guest %v token %q", first.Guest, first.ResumeToken)
 	}
 	_ = guest.Close()
-	waitFor(t, "guest parked", func() bool { _, ok := env.state.GetClient(first.ClientID); return !ok })
+	waitFor(t, "guest departed", func() bool { _, ok := env.state.GetClient(first.ClientID); return !ok })
+	noKeptPlace("a dropped connection")
 	back, second := dialResumable(t, env.addr, netproto.Authenticate{Anonymous: true, Nickname: "visitor", ResumeToken: first.ResumeToken})
-	defer func() { _ = back.Close() }()
-	if !second.Resumed || second.ClientID != first.ClientID || second.UniqueID != first.UniqueID {
-		t.Fatalf("guest resume: %+v, want client %q identity %q", second, first.ClientID, first.UniqueID)
+	if second.Resumed || second.ClientID == first.ClientID {
+		t.Fatalf("a dropped guest resumed: %+v", second)
 	}
+	send(t, back, netproto.MsgGoodbye, netproto.Goodbye{Reason: netproto.GoodbyeReasonUpdate})
+	goodbyeSeen(t, env, second.ClientID)
+	_ = back.Close()
+	waitFor(t, "guest departed", func() bool { _, ok := env.state.GetClient(second.ClientID); return !ok })
+	noKeptPlace("an update goodbye")
 }
 
 func TestLegacyClientKeepsLostConnectionAnnouncement(t *testing.T) {

@@ -142,6 +142,34 @@ func (e *ratchetError) Unwrap() error { return e.Err }
 
 func rfail(code string) *ratchetError { return &ratchetError{Code: code} }
 
+// ratchetDetail is the code plus the wrapped cause for logs; Error() alone
+// shows only the code.
+func ratchetDetail(err error) string {
+	var r *ratchetError
+	if errors.As(err, &r) && r.Err != nil {
+		return r.Code + ": " + r.Err.Error()
+	}
+	return err.Error()
+}
+
+// ratchetClaimError relabels a claim the server answered "exhausted": the peer
+// device has no claimable key (expired or used up). The bare code would read
+// as this device's own store being full.
+func ratchetClaimError(err error) error {
+	if ratchetCode(err) == "exhausted" {
+		return &ratchetError{Code: "device_unpublished", Err: err}
+	}
+	return err
+}
+
+// ratchetShortID keeps logs readable without the full principal.
+func ratchetShortID(principal string) string {
+	if len(principal) > 8 {
+		return principal[:8]
+	}
+	return principal
+}
+
 // ratchetCode maps consumer, store and transport errors to their string code;
 // "" means uncoded (transport loss, unexpected local error).
 func ratchetCode(err error) string {
@@ -1341,6 +1369,61 @@ func ratchetBodySentAt(body json.RawMessage, fallback float64) float64 {
 	return fallback
 }
 
+// ratchetClaimBucket is the window (seconds) of one deterministic claim ID;
+// a claim is reserved for an hour, so one from two windows back may still cover.
+// Each window has ratchetClaimSlots deterministic IDs.
+const (
+	ratchetClaimBucket = 1800
+	ratchetClaimSlots  = 4
+)
+
+// ratchetClaimID names a claim reservation slot for a target device in one
+// window, so a later consumer finds it again (ratchetSavedClaim).
+func ratchetClaimID(scope string, bucket int64, slot int) string {
+	sum := sha256.Sum256([]byte(scope))
+	return "claim:" + hex.EncodeToString(sum[:16]) + ":" + strconv.FormatInt(bucket, 10) + ":" + strconv.Itoa(slot)
+}
+
+// ratchetSavedClaim returns the request of a durable claim reservation made
+// by this account for target t under the same trust record.
+func ratchetSavedClaim(r durable.Record, a durable.AccountAuthority, trustID string, t admission.Target) (netproto.OlmDirectoryRequest, bool) {
+	var saved struct {
+		AccountID    string
+		AccountEpoch int64
+		TrustID      string
+		Request      []byte
+	}
+	var request netproto.OlmDirectoryRequest
+	if r.Revision == 0 || json.Unmarshal(r.Data, &saved) != nil || json.Unmarshal(saved.Request, &request) != nil {
+		return request, false
+	}
+	return request, saved.AccountID == a.AccountID && saved.AccountEpoch == a.Epoch && saved.TrustID == trustID &&
+		request.Action == "claim" && request.Principal == t.Principal && request.DeviceID == t.Device && request.AccountEpoch == a.Epoch
+}
+
+// claimFrom sends a reserved claim request and verifies and adopts the
+// returned key's bundle for target t.
+func (c *ratchetConsumer) claimFrom(m admission.Manifest, t admission.Target, trusted ratchetTrusted, request netproto.OlmDirectoryRequest) (ratchetTrusted, *ratchetKeptClaim, error) {
+	result, err := c.directory(request)
+	if err != nil {
+		log.Printf("ratchet: key claim for device %s of %s failed: %s", t.Device, ratchetShortID(t.Principal), ratchetDetail(err))
+		return trusted, nil, ratchetClaimError(err)
+	}
+	expected := t.Identity
+	if trusted.pin != nil {
+		expected = trusted.pin.Identity
+	}
+	selected, err := verifyReservedClaim(result.Bundle, olmTrustExpectation{SigningKey: trusted.key, Server: m.Server, Principal: t.Principal, Device: t.Device,
+		AccountEpoch: t.AccountEpoch, Identity: expected}, result.KeyID, request.ClaimUntil, c.d.Now())
+	if err != nil {
+		return trusted, nil, &ratchetError{Code: "invalid_claim", Err: err}
+	}
+	if trusted, err = c.adopt(trusted, *result.Bundle); err != nil {
+		return trusted, nil, err
+	}
+	return trusted, &ratchetKeptClaim{id: request.RequestID, key: selected.Key, until: request.ClaimUntil}, nil
+}
+
 func (c *ratchetConsumer) seal(a durable.AccountAuthority, in ratchetIntent, reused bool) (RatchetOutcome, error) {
 	if in.Purpose == "" {
 		in.Purpose = "chat"
@@ -1434,9 +1517,11 @@ func (c *ratchetConsumer) seal(a durable.AccountAuthority, in ratchetIntent, reu
 		}
 		trusted, err := c.trust(t.Principal, t.Device)
 		if err != nil {
+			log.Printf("ratchet: device %s of %s is not trusted: %s", t.Device, ratchetShortID(t.Principal), ratchetDetail(err))
 			return RatchetOutcome{}, err
 		}
 		if trusted, err = c.promote(a, trusted, t.Principal, t.Device, t.AccountEpoch, t.Identity, false); err != nil {
+			log.Printf("ratchet: device %s of %s changed keys: %s", t.Device, ratchetShortID(t.Principal), ratchetDetail(err))
 			return RatchetOutcome{}, err
 		}
 		p := ratchetPlan{t: t, trusted: trusted, binding: admission.ExpectedBinding(m, t), context: c.sessionContext(a, t)}
@@ -1474,37 +1559,69 @@ func (c *ratchetConsumer) seal(a durable.AccountAuthority, in ratchetIntent, reu
 			// the server; reuse it instead of spending more claim budget.
 			p.claim = &kept
 		} else if p.prior == "" {
-			claimID, until := newClientMsgID(), c.now()+3600
-			request := netproto.OlmDirectoryRequest{RequestID: claimID, Action: "claim", Principal: t.Principal, DeviceID: t.Device, AccountEpoch: a.Epoch, ClaimUntil: until}
-			cs, err := c.read(durable.Ref{Kind: durable.Trust, ID: trusted.id}, durable.Ref{Kind: durable.Claim, ID: claimID})
+			// A retry after a reconnect or restart first replays a durable
+			// reservation for this device that still covers the deadline: the
+			// server answers a replayed request ID with the same key, so retry
+			// waves do not drain the device's one-time keys.
+			bucket := c.now() / ratchetClaimBucket
+			scope := c.d.Namespace.Device + "\x00" + p.claimKey // claimed_by is the principal, shared by its devices
+			var refs []durable.Ref
+			for back := int64(0); back < 3; back++ {
+				for slot := 0; slot < ratchetClaimSlots; slot++ {
+					refs = append(refs, durable.Ref{Kind: durable.Claim, ID: ratchetClaimID(scope, bucket-back, slot)})
+				}
+			}
+			saved, err := c.read(refs...)
 			if err != nil {
 				return RatchetOutcome{}, err
 			}
-			raw, _ := json.Marshal(request)
-			if _, err = c.d.Store.ReserveClaim(cs, claimID, trusted.id, raw); err != nil {
-				return RatchetOutcome{}, err
+			for _, ref := range refs {
+				request, ok := ratchetSavedClaim(saved.Records[ref], a, trusted.id, t)
+				if !ok || !covers(request.ClaimUntil) {
+					continue
+				}
+				replayed, claim, err := c.claimFrom(m, t, trusted, request)
+				if err != nil {
+					continue // used or lapsed on the server: claim afresh
+				}
+				trusted, p.claim = replayed, claim
+				break
 			}
-			if err = c.d.Store.CheckAccountAuthority(a); err != nil {
-				return RatchetOutcome{}, err
+			// A fresh claim takes the next unused slot of this window, so a
+			// later consumer finds it too; random only once all are used.
+			slot := 0
+			nextID := func() string {
+				for ; slot < ratchetClaimSlots; slot++ {
+					if saved.Records[refs[slot]].Revision == 0 {
+						slot++
+						return refs[slot-1].ID
+					}
+				}
+				return newClientMsgID()
 			}
-			result, err := c.directory(request)
-			if err != nil {
-				return RatchetOutcome{}, err
-			}
-			expected := t.Identity
-			if trusted.pin != nil {
-				expected = trusted.pin.Identity
-			}
-			selected, err := verifyReservedClaim(result.Bundle, olmTrustExpectation{SigningKey: trusted.key, Server: m.Server, Principal: t.Principal, Device: t.Device,
-				AccountEpoch: t.AccountEpoch, Identity: expected}, result.KeyID, until, c.d.Now())
-			if err != nil {
-				return RatchetOutcome{}, &ratchetError{Code: "invalid_claim", Err: err}
-			}
-			if trusted, err = c.adopt(trusted, *result.Bundle); err != nil {
-				return RatchetOutcome{}, err
+			for claimID := nextID(); p.claim == nil; {
+				until := c.now() + 3600
+				request := netproto.OlmDirectoryRequest{RequestID: claimID, Action: "claim", Principal: t.Principal, DeviceID: t.Device, AccountEpoch: a.Epoch, ClaimUntil: until}
+				cs, err := c.read(durable.Ref{Kind: durable.Trust, ID: trusted.id}, durable.Ref{Kind: durable.Claim, ID: claimID})
+				if err != nil {
+					return RatchetOutcome{}, err
+				}
+				raw, _ := json.Marshal(request)
+				if _, err = c.d.Store.ReserveClaim(cs, claimID, trusted.id, raw); err != nil {
+					return RatchetOutcome{}, err
+				}
+				if err = c.d.Store.CheckAccountAuthority(a); err != nil {
+					return RatchetOutcome{}, err
+				}
+				if trusted, p.claim, err = c.claimFrom(m, t, trusted, request); ratchetCode(err) == "conflict" && strings.HasPrefix(claimID, "claim:") {
+					claimID = nextID() // the server knows this ID from a wiped store
+					continue
+				}
+				if err != nil {
+					return RatchetOutcome{}, err
+				}
 			}
 			p.trusted = trusted
-			p.claim = &ratchetKeptClaim{id: claimID, key: selected.Key, until: until}
 			c.claims[p.claimKey] = *p.claim
 		}
 		plans = append(plans, p)

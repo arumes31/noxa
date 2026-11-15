@@ -287,6 +287,9 @@ func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, ms
 	if s.deps.Spool == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target user is offline")
 	}
+	if client.userID() <= 0 {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, errGuestOffline)
+	}
 	if msg.RecipientPublicKey != "" {
 		storedKey, err := s.deps.Auth.GetE2EPublicKey(ctx, msg.ToUniqueID)
 		if err != nil {

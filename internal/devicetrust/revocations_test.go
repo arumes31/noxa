@@ -1,9 +1,10 @@
-package devicetrust
+package devicetrust_test
 
 import (
 	"testing"
 
 	"noxa/internal/auth"
+	"noxa/internal/devicetrust"
 	"noxa/internal/netproto"
 )
 
@@ -21,13 +22,13 @@ func newTestDevice(t *testing.T, id string, first bool) testDevice {
 	return testDevice{id: id, pub: pub, priv: priv, first: first}
 }
 
-func (d testDevice) trusted(t *testing.T) Device {
+func (d testDevice) trusted(t *testing.T) devicetrust.Device {
 	t.Helper()
 	k, err := auth.LoadPublicKey(d.pub)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Device{ID: d.id, Signing: k, First: d.first}
+	return devicetrust.Device{ID: d.id, Signing: k, First: d.first}
 }
 
 const testX25519 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
@@ -48,7 +49,7 @@ func TestVerifyRevocationsAcceptsOnlyChainedSignatures(t *testing.T) {
 	laptop := newTestDevice(t, "laptop", false)
 	phone := newTestDevice(t, "phone", false)
 	stranger := newTestDevice(t, "stranger", false)
-	trusted := []Device{root.trusted(t), laptop.trusted(t)}
+	trusted := []devicetrust.Device{root.trusted(t), laptop.trusted(t)}
 
 	good := signRevocation(t, "alice", laptop, phone, 1_800_000_000)
 	byStranger := signRevocation(t, "alice", stranger, phone, 1_800_000_000)
@@ -64,7 +65,7 @@ func TestVerifyRevocationsAcceptsOnlyChainedSignatures(t *testing.T) {
 	tamperedTime.SignedAt++
 	unsigned := netproto.DeviceRevocation{DeviceID: "old", Ed25519Public: phone.pub, X25519Public: testX25519, RevokedAt: 1, Reason: "admin_reset"}
 
-	got := VerifyRevocations("alice", trusted, []netproto.DeviceRevocation{
+	got := devicetrust.VerifyRevocations("alice", trusted, []netproto.DeviceRevocation{
 		byStranger, otherAccount, rootByLaptop, retargeted, tamperedKey, tamperedTime, unsigned, good, good, rootBySelf,
 	})
 	if len(got) != 2 || got[0].DeviceID != "phone" || got[0].SignerID != "laptop" || got[1].DeviceID != "root" || got[1].SignerID != "root" {
@@ -79,7 +80,7 @@ func TestVerifyRevocationsBoundsTheList(t *testing.T) {
 		target := newTestDevice(t, "d"+string(rune('a'+i%26))+string(rune('a'+i/26)), false)
 		list = append(list, signRevocation(t, "alice", root, target, 1_800_000_000))
 	}
-	if got := VerifyRevocations("alice", []Device{root.trusted(t)}, list); len(got) != netproto.MaxListedRevocations {
+	if got := devicetrust.VerifyRevocations("alice", []devicetrust.Device{root.trusted(t)}, list); len(got) != netproto.MaxListedRevocations {
 		t.Fatalf("verified %d, want the first %d", len(got), netproto.MaxListedRevocations)
 	}
 }

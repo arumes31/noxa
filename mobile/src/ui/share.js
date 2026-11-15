@@ -3,7 +3,7 @@
 import { app } from "../app.js";
 import { uploadAttachment } from "../core/files.js";
 import { formatSize } from "../core/message-format.js";
-import { clearShare, getShare } from "../core/share-store.js";
+import { clearShare, getShare, putShare } from "../core/share-store.js";
 import { t } from "../i18n.js";
 import { avatar, h, toast } from "./dom.js";
 import { dmHref, header, lastMessage, scopeName } from "./common.js";
@@ -27,23 +27,34 @@ function destinations(session) {
     return out.sort((a, b) => b.at - a.at);
 }
 
-/** Uploads the files into the destination's storage and sends them, the text with the first. */
-async function deliver(session, target, text, files) {
+/**
+ * Uploads the files into the destination's storage and sends them, the text
+ * with the first. What was sent leaves `share`, so a retry after a failure
+ * resumes instead of sending the first files again.
+ */
+export async function deliver(session, target, share) {
     const location = target.kind === "channel" ? target.scope : target.kind === "group" ? { channelID: 0, folder: `private-groups/${target.id}` } : 0;
     const send = body => target.kind === "channel" ? session.send(target.scope, body)
         : target.kind === "dm" ? app.dm.send(target.peer, body, target.name)
             : app.groups.send(target.id, body);
-    if (!files.length) {
-        await send(text);
+    if (!share.files.length) {
+        await send(share.text);
+        share.text = "";
         return;
     }
-    let caption = text;
-    for (const file of files) {
-        const token = await uploadAttachment(session.conn, location, file);
-        await send(caption ? `${caption} ${token}` : token);
-        caption = "";
+    while (share.files.length) {
+        const token = await uploadAttachment(session.conn, location, share.files[0]);
+        await send(share.text ? `${share.text} ${token}` : token);
+        share.text = "";
+        share.files.shift();
+        // Stored too: a reconnect remounts the screen from the store.
+        if (share.files.length) await putShare(share).catch(() => {});
     }
 }
+
+// One delivery at a time: a reconnect remounts this screen while an earlier
+// send may still be running, and its store checkpoint is not deduplicated.
+let delivering = null; // {target, done} of the running delivery
 
 export function renderShare(root) {
     const session = app.session;
@@ -60,17 +71,45 @@ export function renderShare(root) {
         text.value = share.text;
         const status = h("p", { class: "hint", role: "status" });
         const list = h("ul", { class: "list" });
+        const fileRows = () => share.files.map(file => h("li", {}, h("span", { class: "file-icon", "aria-hidden": "true" }, "📄"), h("span", { class: "file-name" }, file.name), h("span", { class: "file-size" }, formatSize(file.size))));
+        const files = h("ul", { class: "share-files" }, fileRows());
+        // A screen remounted (e.g. on reconnect) while an earlier mount still
+        // sends: wait for that send, then show the stored remainder (empty once
+        // it went out) instead of a stale "sending".
+        const waitForEarlier = async () => {
+            status.textContent = t("rich.share.sending", { name: delivering.target.name });
+            await delivering.done.catch(() => {});
+            if (location.hash.startsWith("#/share")) renderShare(root);
+        };
+        const discard = h("button", { class: "btn", type: "button", onclick: async () => {
+            // Also from a remounted screen: a running send's checkpoint would restore it.
+            if (delivering) return waitForEarlier();
+            await clearShare().catch(() => {});
+            location.hash = "#/home";
+        } }, t("rich.share.discard"));
         const pick = async target => {
+            if (delivering) return waitForEarlier();
+            discard.disabled = true; // a discard now would be undone by the next checkpoint
             for (const button of list.querySelectorAll("button")) button.disabled = true;
+            text.disabled = true; // the caption is taken now; later edits would be lost
             status.textContent = t("rich.share.sending", { name: target.name });
+            share.text = text.value.trim();
+            const done = deliver(session, target, share);
+            delivering = { target, done };
             try {
-                await deliver(session, target, text.value.trim(), share.files);
+                await done;
                 await clearShare().catch(() => {});
                 toast(t("rich.share.sent", { name: target.name }));
                 location.hash = target.href;
             } catch (error) {
+                discard.disabled = false;
+                text.value = share.text; // empty once the caption went out
+                text.disabled = false;
+                files.replaceChildren(...fileRows());
                 status.textContent = t("chat.sendFailed", { error: error.message });
                 for (const button of list.querySelectorAll("button")) button.disabled = false;
+            } finally {
+                delivering = null;
             }
         };
         list.append(...destinations(session).map(target => h("li", {},
@@ -81,8 +120,8 @@ export function renderShare(root) {
         body.replaceChildren(
             h("div", { class: "card share-preview" },
                 text,
-                share.files.length ? h("ul", { class: "share-files" }, share.files.map(file => h("li", {}, h("span", { class: "file-icon", "aria-hidden": "true" }, "📄"), h("span", { class: "file-name" }, file.name), h("span", { class: "file-size" }, formatSize(file.size))))) : null,
-                h("button", { class: "btn", type: "button", onclick: async () => { await clearShare().catch(() => {}); location.hash = "#/home"; } }, t("rich.share.discard"))),
+                share.files.length ? files : null,
+                discard),
             status,
             h("p", { class: "section-label" }, t("rich.share.to")),
             list.childElementCount ? list : h("p", { class: "hint" }, t("home.empty")));

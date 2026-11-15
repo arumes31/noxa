@@ -6,6 +6,7 @@ import (
 	"github.com/lib/pq"
 	"noxa/internal/e2ee/admission"
 	"noxa/internal/e2ee/olmdir"
+	"slices"
 	"sort"
 	"strconv"
 )
@@ -74,8 +75,8 @@ type OlmRosterSnapshot struct {
 	Targets  []admission.Target `json:"targets"`
 }
 
-func readOlmRoster(ctx context.Context, tx *sql.Tx, ps []string, source string) (OlmRosterSnapshot, error) {
-	return readOlmRosterDevices(ctx, tx, ps, source, nil)
+func readOlmRoster(ctx context.Context, tx *sql.Tx, ps []string, a OlmSource) (OlmRosterSnapshot, error) {
+	return readOlmRosterDevices(ctx, tx, ps, a, nil)
 }
 
 // Controls need only the source and the named recipient device to be ready.
@@ -89,7 +90,7 @@ func readOlmControlRoster(ctx context.Context, tx *sql.Tx, a OlmSource, peer, ta
 	if peer != a.Principal {
 		ps = append(ps, peer)
 	}
-	out, err := readOlmRosterDevices(ctx, tx, ps, a.Device, []string{a.Device, target})
+	out, err := readOlmRosterDevices(ctx, tx, ps, a, []string{a.Device, target})
 	if err != nil {
 		return out, err
 	}
@@ -108,7 +109,7 @@ func readOlmControlRoster(ctx context.Context, tx *sql.Tx, a OlmSource, peer, ta
 // stay unseen before rosters stop requiring it (see readOlmRosterDevices).
 const olmUnpublishedIdle = "7 days"
 
-func readOlmRosterDevices(ctx context.Context, tx *sql.Tx, ps []string, source string, devices []string) (OlmRosterSnapshot, error) {
+func readOlmRosterDevices(ctx context.Context, tx *sql.Tx, ps []string, a OlmSource, devices []string) (OlmRosterSnapshot, error) {
 	var out OlmRosterSnapshot
 	versions, e := lockOlmRosters(ctx, tx, ps)
 	if e != nil {
@@ -118,23 +119,65 @@ func readOlmRosterDevices(ctx context.Context, tx *sql.Tx, ps []string, source s
 	for _, p := range ps {
 		out.Rosters = append(out.Rosters, admission.Roster{Principal: p, Version: versions[p]})
 	}
-	// An approved device that never published an Olm bundle still counts while
-	// it was seen recently: the roster then fails as exhausted, so a new or
-	// outdated device is waited for and its owner told to set it up, never
-	// silently omitted. One idle for olmUnpublishedIdle cannot decrypt Olm and
-	// will not publish soon; listing it would block every conversation with
-	// its owner forever (e.g. web sessions from before secure messaging), so it
-	// is left out until it signs in again and publishes.
-	rows, e := tx.QueryContext(ctx, `SELECT d.principal,d.device_id,COALESCE(a.account_epoch,0),COALESCE(a.identity,'') FROM user_devices d LEFT JOIN olm_directory_state a USING(device_id) WHERE d.principal=ANY($1) AND ($2 OR d.device_id=ANY($3)) AND d.revoked_at IS NULL AND (d.first_device OR octet_length(d.approval_signature)>0) AND (a.device_id IS NOT NULL OR d.last_seen_at > now() - $4::interval) ORDER BY d.device_id COLLATE "C" FOR UPDATE OF d`, pq.Array(ps), len(devices) == 0, pq.Array(devices), olmUnpublishedIdle)
+	// A device counts as published only while it has an unexpired publication
+	// for this server: ClaimOlmKey claims from nothing else. An approved
+	// device that is not published still counts while it was seen recently:
+	// the roster then fails as exhausted (no state) or its claim does (expired
+	// bundle), so a new or outdated device is waited for and its owner told to
+	// set it up, never silently omitted. One idle for olmUnpublishedIdle will
+	// not publish soon; listing it would block every conversation with its
+	// owner forever (e.g. web sessions from before secure messaging, or an
+	// idle web session whose bundle expired), so it is left out until it signs
+	// in again and publishes. Trust is decided in Go (DMTrusted, the clients'
+	// approval-chain rule), so every active device is read and locked.
+	type row struct {
+		d                 Device
+		t                 admission.Target
+		published, recent bool
+	}
+	byPrincipal := map[string][]row{}
+	rows, e := tx.QueryContext(ctx, `SELECT d.principal,d.device_id,d.kind,d.ed25519_public,d.x25519_public,d.first_device,d.approved_by,d.approval_signature,COALESCE(a.account_epoch,0),COALESCE(a.identity,''),
+ a.device_id IS NOT NULL AND EXISTS(SELECT 1 FROM olm_directory_publications p WHERE p.device_id=d.device_id AND p.server=$2 AND p.expires_at>now()),d.last_seen_at > now() - $3::interval
+ FROM user_devices d LEFT JOIN olm_directory_state a USING(device_id) WHERE d.principal=ANY($1) AND d.revoked_at IS NULL ORDER BY d.device_id COLLATE "C" FOR UPDATE OF d`, pq.Array(ps), a.Server, olmUnpublishedIdle)
 	if e != nil {
 		return out, e
 	}
 	defer func() { _ = rows.Close() }()
-	counts := map[string]int{}
+	var order []string
 	for rows.Next() {
-		var t admission.Target
-		if e = rows.Scan(&t.Principal, &t.Device, &t.AccountEpoch, &t.Identity); e != nil {
+		var r row
+		if e = rows.Scan(&r.d.Principal, &r.d.DeviceID, &r.d.Kind, &r.d.Ed25519Public, &r.d.X25519Public, &r.d.FirstDevice, &r.d.ApprovedBy, &r.d.ApprovalSignature,
+			&r.t.AccountEpoch, &r.t.Identity, &r.published, &r.recent); e != nil {
 			return out, e
+		}
+		r.t.Principal, r.t.Device = r.d.Principal, r.d.DeviceID
+		byPrincipal[r.d.Principal] = append(byPrincipal[r.d.Principal], r)
+		order = append(order, r.d.DeviceID)
+	}
+	if e = rows.Err(); e != nil {
+		return out, e
+	}
+	selected := map[string]admission.Target{}
+	for p, rs := range byPrincipal {
+		list := make([]Device, len(rs))
+		for i, r := range rs {
+			list[i] = r.d
+		}
+		trusted := map[string]bool{}
+		for _, d := range DMTrusted(p, list) {
+			trusted[d.DeviceID] = true
+		}
+		for _, r := range rs {
+			if trusted[r.d.DeviceID] && (r.published || r.recent) && (len(devices) == 0 || slices.Contains(devices, r.d.DeviceID)) {
+				selected[r.d.DeviceID] = r.t
+			}
+		}
+	}
+	counts := map[string]int{}
+	for _, id := range order {
+		t, ok := selected[id]
+		if !ok {
+			continue
 		}
 		if t.AccountEpoch == 0 {
 			return out, ErrOlmExhausted
@@ -143,11 +186,8 @@ func readOlmRosterDevices(ctx context.Context, tx *sql.Tx, ps []string, source s
 		if counts[t.Principal] > 64 || len(out.Targets) >= admission.MaxTargets {
 			return out, ErrOlmLimit
 		}
-		t.Local = t.Device == source
+		t.Local = t.Device == a.Device
 		out.Targets = append(out.Targets, t)
-	}
-	if e = rows.Err(); e != nil {
-		return out, e
 	}
 	for _, p := range ps {
 		if counts[p] == 0 {

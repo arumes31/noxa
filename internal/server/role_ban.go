@@ -52,7 +52,7 @@ func (s *TCPServer) banRoleMember(ctx context.Context, e *authorization.RoleEval
 	if actorID > 0 {
 		bannedBy = actorID
 	}
-	insertErr := s.insertBan(ctx, result.UniqueID, reason, bannedBy, persistentBanExpiration(result.ExpiresAt))
+	insertErr := s.insertBan(ctx, result.UniqueID, s.guestBanIP(target), reason, bannedBy, persistentBanExpiration(result.ExpiresAt))
 	result.Saved = insertErr == nil
 	// First close admission for every matching session and recording. Do this
 	// before any collaborator or notification can consume the cleanup deadline.

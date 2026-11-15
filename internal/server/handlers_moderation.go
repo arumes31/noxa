@@ -3,6 +3,7 @@ package server
 
 import (
 	"context"
+	"net/netip"
 	"time"
 
 	"noxa/internal/authorization"
@@ -110,14 +111,46 @@ func banExpirationMillis(expiresAt time.Time) int64 {
 
 // insertBan inserts a unique-ID ban into the bans table. expiresAt nil (or
 // the nil interface) means a permanent ban. It is a no-op when ban
-// persistence is not wired; kicks still proceed.
-func (s *TCPServer) insertBan(ctx context.Context, uniqueID, reason string, bannedBy, expiresAt any) error {
+// persistence is not wired; kicks still proceed. A non-empty guestIP adds an
+// IP ban (ban_type 0) in the same statement, so both rows share banned_at:
+// store.DeleteBan uses that to lift the IP ban together with the ID ban.
+func (s *TCPServer) insertBan(ctx context.Context, uniqueID, guestIP, reason string, bannedBy, expiresAt any) error {
 	if s.deps.Bans == nil {
 		return nil // ban persistence not wired; kick still proceeds
 	}
-	const q = `INSERT INTO bans (ban_type, value, reason, banned_by, expires_at) VALUES (1, $1, $2, $3, $4)`
-	if _, err := s.deps.Bans.DB().ExecContext(ctx, q, uniqueID, reason, bannedBy, expiresAt); err != nil {
-		return err
+	q, args := `INSERT INTO bans (ban_type, value, reason, banned_by, expires_at) VALUES (1, $1, $2, $3, $4)`, []any{uniqueID, reason, bannedBy, expiresAt}
+	if guestIP != "" {
+		q, args = q+`, (0, $5, $2, $3, $4)`, append(args, guestIP)
 	}
-	return nil
+	_, err := s.deps.Bans.DB().ExecContext(ctx, q, args...)
+	return err
+}
+
+// guestBanIP is the canonical address to IP-ban with a guest's ID ban (a new
+// guest ID costs nothing), or "" for members and for addresses that may be
+// a reverse proxy rather than the guest: a web session reports the proxy
+// itself when it is loopback/untrusted or sent no X-Forwarded-For.
+func (s *TCPServer) guestBanIP(target *Client) string {
+	if target.userID() != 0 {
+		return ""
+	}
+	addr, err := netip.ParseAddr(remoteIP(target.Conn))
+	if err != nil {
+		return ""
+	}
+	addr = addr.Unmap()
+	if target.isWebTransport() {
+		if addr.IsLoopback() || addr.IsUnspecified() {
+			return ""
+		}
+		s.configMu.RLock()
+		proxies := s.cfg.Web.TrustedProxies
+		s.configMu.RUnlock()
+		for _, cidr := range proxies {
+			if p, err := netip.ParsePrefix(cidr); err == nil && p.Contains(addr) {
+				return ""
+			}
+		}
+	}
+	return addr.String()
 }
