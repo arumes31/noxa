@@ -824,7 +824,9 @@ access. Meanwhile others see a quiet "reconnecting…" (or "updating…") badge,
 members whose voice is still connecting (also after a normal join) show a wave
 across their name (static with reduced motion). A deliberate leave, kick, ban or
 expiry ends the session as before; a server restart forgets all tokens. A page
-reload of the web app starts a new session.
+reload of the web app starts a new session. A guest without a linked device gets
+no kept place after a dropped connection or an update restart and signs in
+again as a new session; the update handover below still moves its session.
 
 **Update handover.** On an updated server, a connected desktop client moves its
 session to the new version before the old one exits. The new process starts
@@ -1023,7 +1025,7 @@ certificate, and passkeys bind to the domain.
 | `web.trusted_proxies` | `[]` | Exact proxy CIDRs allowed to send `X-Forwarded-For`/`-Proto` |
 | `web.allowed_origins` | `[]` | Extra HTTPS origins accepted on `/ws` |
 | `web.max_devices_per_account` | `10` | Linked devices per account, including the first desktop |
-| `web.ws_connections_per_ip` / `web.ws_attempts_per_minute` | `8` / `30` | WebSocket admission per client IP |
+| `web.ws_connections_per_ip` / `web.ws_attempts_per_minute` | `8` / `30` | WebSocket admission per client IP; the first value also caps signed-in guest sessions per address (IPv4 or IPv6 /64) on every transport |
 | `web.push_enabled` | `true` | Send Web Push notifications to linked phones |
 | `web.push_vapid_key_file` | `./data/keys/vapid.pem` | Push signing key, created on first start; keep it to keep subscriptions |
 | `web.push_subject` | `web.public_url` | `mailto:` or `https:` contact push services see |
@@ -1100,7 +1102,10 @@ features:
   permissions get **You → Administration**: roles and their members, bans,
   channels and their access, server settings, chat filters, webhooks, custom
   emoji, the audit log and complaints. Moderators can also move, mute, kick
-  and ban members from their profile card or the Servers tab.
+  and ban members from their profile card or the Servers tab. Banning a guest
+  also bans its IP address (shown as a separate IP ban, which also blocks members
+  on that address); lifting the guest ban lifts both. Web guests seen only as a
+  loopback or trusted-proxy address get no IP ban.
 - **Tablets and desktops:** from 900 px wide the app switches to a
   three-column layout with a sidebar, chat tabs, a details panel, a voice card
   and a quick switcher (Ctrl/Cmd+K) that also opens Search, Inbox, Saved
