@@ -50,8 +50,8 @@ test("clear revokes every cached thumbnail", () => {
     clearInlineThumbnails(); // the module cache resets without throwing
 });
 
-const webp = (chunk, extra = "") => {
-    const body = "WEBP" + chunk + "\x0a\x00\x00\x00" + "\x00".repeat(10) + extra;
+const webp = (chunk, extra = "", flags = 0) => {
+    const body = "WEBP" + chunk + "\x0a\x00\x00\x00" + String.fromCharCode(flags) + "\x00".repeat(9) + extra;
     return new Uint8Array([..."RIFF\x00\x00\x00\x00" + body].map(c => c.charCodeAt(0)));
 };
 // Node has no createImageBitmap; each test installs its own.
@@ -59,10 +59,11 @@ const stubBitmap = (t, impl) => { globalThis.createImageBitmap = impl; t.after((
 const dataURL = bytes => `data:image/webp;base64,${Buffer.from(bytes).toString("base64")}`;
 
 test("animated WebP bypasses the thumbnail; static WebP is thumbnailed", async (t) => {
-    const animated = webp("VP8X", "ANIM\x06\x00\x00\x00"), still = webp("VP8 ");
+    const animated = webp("VP8X", "ANIM\x06\x00\x00\x00", 0x02), still = webp("VP8 ");
     assert.equal(animatedWebP(animated), true);
     assert.equal(animatedWebP(still), false);
-    assert.equal(animatedWebP(webp("VP8X", "ICCP")), false, "extended but not animated");
+    assert.equal(animatedWebP(webp("VP8X", "ICCP", 0x20)), false, "extended but not animated");
+    assert.equal(animatedWebP(webp("VP8X", "ICCP" + "x".repeat(200) + "ANIM", 0x22)), true, "ICC profile before ANIM: the flag still detects animation");
     let decodes = 0;
     stubBitmap(t, async () => { decodes++; return { width: 10, height: 10, close() {} }; });
     assert.equal(await inlineThumbnail("anim", dataURL(animated), "image/webp"), null);

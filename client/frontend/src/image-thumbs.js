@@ -43,9 +43,13 @@ export function createThumbCache(max = THUMB_CACHE_MAX, revoke = url => URL.revo
 }
 
 // An extended WebP with an ANIM chunk is animated; a thumbnail would freeze it.
+// An animated WebP is an extended (VP8X) file with the animation flag (bit 1)
+// set in the VP8X flags byte at offset 20; an ICC profile can push the ANIM
+// chunk itself far past any fixed prefix, so the flag is the reliable signal.
 export function animatedWebP(bytes) {
-    const text = String.fromCharCode(...bytes.subarray(0, 80));
-    return text.startsWith("RIFF") && text.slice(8, 12) === "WEBP" && text.slice(12, 16) === "VP8X" && text.includes("ANIM", 16);
+    if (bytes.length < 21) return false;
+    const text = String.fromCharCode(...bytes.subarray(0, 16));
+    return text.startsWith("RIFF") && text.slice(8, 12) === "WEBP" && text.slice(12, 16) === "VP8X" && (bytes[20] & 0x02) !== 0;
 }
 
 const cache = createThumbCache();
@@ -105,7 +109,7 @@ export function inlineThumbnail(key, dataURL, mime) {
 
 async function renderThumbnail(dataURL, mime) {
     const source = await (await fetch(dataURL)).blob();
-    if (mime === "image/webp" && animatedWebP(new Uint8Array(await source.slice(0, 80).arrayBuffer()))) return null;
+    if (mime === "image/webp" && animatedWebP(new Uint8Array(await source.slice(0, 21).arrayBuffer()))) return null;
     const bitmap = await createImageBitmap(source);
     let canvas;
     try {
