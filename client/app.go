@@ -232,6 +232,8 @@ func (a *App) startup(ctx context.Context) {
 	go guardCrash("native notifications", a.initNativeToasts)
 	// (88, 90) startup entry path refresh and noxa:// registration.
 	go guardCrash("desktop integration", registerDesktopIntegration)
+	// (F8) an update-started process becomes the single instance once the old one is gone.
+	go guardCrash("single instance", a.adoptSingleInstance)
 	// (291) restore always-on-top.
 	a.settingsMu.Lock()
 	alwaysOnTop := a.settings.AlwaysOnTop

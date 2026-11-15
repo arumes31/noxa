@@ -1,9 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"runtime"
 	"strings"
 	"sync"
+	"time"
+	"unicode/utf16"
 
 	"github.com/wailsapp/wails/v2/pkg/options"
 )
@@ -32,6 +35,9 @@ var (
 	launchHidden          bool
 	launchDeepLink        string
 	singleInstanceEnabled bool
+	// singleInstanceAdopt: this unlocked (update-started) process takes the
+	// lock later, once the previous process is gone (F8).
+	singleInstanceAdopt bool
 )
 
 func captureLaunch(args []string, getenv func(string) string) {
@@ -40,6 +46,7 @@ func captureLaunch(args []string, getenv func(string) string) {
 	launchHidden = minimized && link == ""
 	launchDeepLink = link
 	singleInstanceEnabled = singleInstanceAllowed(startedAfterUpdate, incomingHandover != nil, getenv)
+	singleInstanceAdopt = !singleInstanceEnabled
 }
 
 // readLaunchArgs reports --minimized and the first acceptable noxa:// URL.
@@ -67,9 +74,10 @@ func deepLinkArg(arg string) string {
 	return arg
 }
 
-// singleInstanceAllowed exempts every process the updater started: the
-// handover child must run beside the old process, and a forwarded launch would
-// exit and silently fail the update.
+// singleInstanceAllowed exempts every process the updater started from the
+// Wails lock at launch: the handover child must run beside the old process, and
+// a forwarded launch would exit and silently fail the update. Such a process
+// takes the lock later through adoptSingleInstance.
 func singleInstanceAllowed(afterUpdate, handover bool, getenv func(string) string) bool {
 	if afterUpdate || handover {
 		return false
@@ -131,12 +139,55 @@ func (a *App) secondInstanceLaunch(data options.SecondInstanceData) {
 }
 
 // desktopSingleInstanceLock is nil for update-launched processes (see
-// singleInstanceAllowed) and outside Windows, where noxa:// is not registered.
+// singleInstanceAllowed; they adopt the lock later) and outside Windows, where
+// noxa:// is not registered.
 func desktopSingleInstanceLock(app *App) *options.SingleInstanceLock {
 	if !singleInstanceEnabled || runtime.GOOS != "windows" {
 		return nil
 	}
 	return &options.SingleInstanceLock{UniqueId: singleInstanceID, OnSecondInstanceLaunch: app.secondInstanceLaunch}
+}
+
+const (
+	singleInstanceAdoptRetry = 500 * time.Millisecond
+	// singleInstanceCopyKind is Wails' WMCOPYDATA_SINGLE_INSTANCE_DATA.
+	singleInstanceCopyKind = 1542
+	// singleInstanceCopyMax bounds a forwarded launch (UTF-16 units).
+	singleInstanceCopyMax = 32 * 1024
+)
+
+// adoptSingleInstance makes an update-started process the single instance
+// (F8): without it every launch after an update ran a second full client on the
+// same history, outbox and settings files. It retries until the previous
+// process has released the lock; a handover child waits until the handover is
+// settled, so a forwarded launch never raises it while still hidden.
+func (a *App) adoptSingleInstance() {
+	if !singleInstanceAdopt || runtime.GOOS != "windows" {
+		return
+	}
+	for !singleInstanceAdoptReady(incomingHandover) || !tryAdoptSingleInstance(singleInstanceID, a.secondInstanceLaunch) {
+		time.Sleep(singleInstanceAdoptRetry)
+	}
+}
+
+// singleInstanceAdoptReady: the old process acknowledged the commit or exited.
+// It may still hold the lock; tryAdoptSingleInstance then keeps retrying.
+func singleInstanceAdoptReady(h *incomingUpdateHandover) bool { return h == nil || h.settled() }
+
+// parseSecondInstanceCopy decodes Wails' WM_COPYDATA payload (JSON as UTF-16,
+// NUL-terminated within the sent bytes). Any local process can send one.
+func parseSecondInstanceCopy(kind uintptr, payload []uint16) (options.SecondInstanceData, bool) {
+	var data options.SecondInstanceData
+	if kind != singleInstanceCopyKind || len(payload) > singleInstanceCopyMax {
+		return data, false
+	}
+	for i, c := range payload {
+		if c == 0 {
+			payload = payload[:i]
+			break
+		}
+	}
+	return data, json.Unmarshal([]byte(string(utf16.Decode(payload))), &data) == nil
 }
 
 // GetStartWithWindows reports whether noXa starts (minimized) at Windows sign-in.
