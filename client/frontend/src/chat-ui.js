@@ -1547,7 +1547,7 @@ function attachFileRef(container, m, cap, source = null) {
                 el.decoding = "async";
                 const mime = `image/${ext === "jpg" ? "jpeg" : ext}`, full = `data:${mime};base64,${b64}`;
                 // Any thumbnail failure keeps the full-size image.
-                const thumb = await inlineThumbnail(source.previewKey?.(ref), full, mime).catch(() => null);
+                const thumb = await inlineThumbnail(source.previewKey?.(ref), full, mime, previewIsCurrent).catch(() => null);
                 el.src = thumb || full;
                 if (thumb) {
                     setFullImageSource(el, full);

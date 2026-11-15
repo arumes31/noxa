@@ -42,7 +42,6 @@ export function createThumbCache(max = THUMB_CACHE_MAX, revoke = url => URL.revo
     };
 }
 
-// An extended WebP with an ANIM chunk is animated; a thumbnail would freeze it.
 // An animated WebP is an extended (VP8X) file with the animation flag (bit 1)
 // set in the VP8X flags byte at offset 20; an ICC profile can push the ANIM
 // chunk itself far past any fixed prefix, so the flag is the reliable signal.
@@ -52,7 +51,21 @@ export function animatedWebP(bytes) {
     return text.startsWith("RIFF") && text.slice(8, 12) === "WEBP" && text.slice(12, 16) === "VP8X" && (bytes[20] & 0x02) !== 0;
 }
 
+// An animated PNG has an acTL chunk before its first IDAT. Only chunk headers
+// in the given prefix are scanned; an APNG whose acTL lies past it is missed.
+export function animatedPNG(bytes) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    for (let at = 8; at + 8 <= bytes.length;) {
+        const type = String.fromCharCode(...bytes.subarray(at + 4, at + 8));
+        if (type === "acTL") return true;
+        if (type === "IDAT") return false;
+        at += 12 + view.getUint32(at);
+    }
+    return false;
+}
+
 const cache = createThumbCache();
+const SKIPPED = Symbol("skipped");
 const inflight = new Map();
 let generation = 0;
 
@@ -84,32 +97,40 @@ export function clearInlineThumbnails() {
 }
 
 // inlineThumbnail resolves to a cached thumbnail object URL, or null when the
-// original should be shown (GIF or animated WebP, already under the cap, no
+// original should be shown (GIF, animated WebP or PNG, already under the cap, no
 // stable key). It rejects on decode failure; callers keep the full-size path.
-export function inlineThumbnail(key, dataURL, mime) {
+// A queued render whose every caller is no longer current (isCurrent) is
+// skipped without decoding and resolves to null.
+export function inlineThumbnail(key, dataURL, mime, isCurrent = () => true) {
     if (!key || mime === "image/gif") return Promise.resolve(null);
     const hit = cache.get(key);
     if (hit !== undefined) return Promise.resolve(hit);
-    let request = inflight.get(key);
-    if (!request) {
-        const started = generation;
-        const stale = () => started !== generation;
-        request = limitRender(() => stale() ? null : renderThumbnail(dataURL, mime)).then(url => {
-            if (stale()) {
-                if (url) URL.revokeObjectURL(url);
-                return null;
-            }
-            cache.set(key, url);
-            return url;
-        }).finally(() => { if (inflight.get(key) === request) inflight.delete(key); });
-        inflight.set(key, request);
+    const pending = inflight.get(key);
+    if (pending) {
+        pending.waiters.add(isCurrent);
+        return pending.request;
     }
-    return request;
+    const started = generation, waiters = new Set([isCurrent]);
+    const stale = () => started !== generation;
+    const wanted = () => !stale() && [...waiters].some(current => current());
+    const entry = { waiters, request: null };
+    entry.request = limitRender(() => wanted() ? renderThumbnail(dataURL, mime) : SKIPPED).then(url => {
+        if (url === SKIPPED) return null; // not cached: a later view renders it
+        if (stale()) {
+            if (url) URL.revokeObjectURL(url);
+            return null;
+        }
+        cache.set(key, url);
+        return url;
+    }).finally(() => { if (inflight.get(key) === entry) inflight.delete(key); });
+    inflight.set(key, entry);
+    return entry.request;
 }
 
 async function renderThumbnail(dataURL, mime) {
     const source = await (await fetch(dataURL)).blob();
     if (mime === "image/webp" && animatedWebP(new Uint8Array(await source.slice(0, 21).arrayBuffer()))) return null;
+    if (mime === "image/png" && animatedPNG(new Uint8Array(await source.slice(0, 4096).arrayBuffer()))) return null;
     const bitmap = await createImageBitmap(source);
     let canvas;
     try {

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { animatedWebP, clearInlineThumbnails, createThumbCache, inlineThumbnail, thumbSize, THUMB_MAX_SIDE } from "../src/image-thumbs.js";
+import { animatedPNG, animatedWebP, clearInlineThumbnails, createThumbCache, inlineThumbnail, thumbSize, THUMB_MAX_SIDE } from "../src/image-thumbs.js";
 
 test("thumbnail size respects the cap and keeps the aspect ratio", () => {
     assert.deepEqual(thumbSize(4000, 3000), { width: THUMB_MAX_SIDE, height: 480 });
@@ -87,4 +87,55 @@ test("at most two thumbnail renders run at once", async (t) => {
     while (pending.length) { pending.shift()(); await settle(); }
     assert.deepEqual(await Promise.all(requests), [null, null, null, null, null]);
     assert.equal(peak, 2);
+});
+
+const chunk = (type, length = 0) => {
+    const bytes = new Uint8Array(12 + length);
+    new DataView(bytes.buffer).setUint32(0, length);
+    bytes.set([...type].map(c => c.charCodeAt(0)), 4);
+    return bytes;
+};
+const png = (...chunks) => {
+    const parts = [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), ...chunks];
+    const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+    let at = 0;
+    for (const part of parts) { out.set(part, at); at += part.length; }
+    return out;
+};
+const pngURL = bytes => `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`;
+
+test("animated PNG bypasses the thumbnail; plain PNG is thumbnailed", async (t) => {
+    const apng = png(chunk("IHDR", 13), chunk("acTL", 8), chunk("IDAT", 4), chunk("IEND"));
+    const plain = png(chunk("IHDR", 13), chunk("IDAT", 4), chunk("acTL", 8), chunk("IEND"));
+    assert.equal(animatedPNG(apng), true);
+    assert.equal(animatedPNG(plain), false, "acTL after IDAT is not an animation control");
+    let decodes = 0;
+    stubBitmap(t, async () => { decodes++; return { width: 10, height: 10, close() {} }; });
+    assert.equal(await inlineThumbnail("apng", pngURL(apng), "image/png"), null);
+    assert.equal(decodes, 0, "an APNG is never decoded for a thumbnail");
+    assert.equal(await inlineThumbnail("plain-png", pngURL(plain), "image/png"), null, "under the cap");
+    assert.equal(decodes, 1, "a plain PNG goes through the thumbnail path");
+});
+
+test("a queued render whose caller left the view is skipped without decoding", async (t) => {
+    const pending = [];
+    let decodes = 0;
+    stubBitmap(t, () => new Promise(resolve => { decodes++; pending.push(() => resolve({ width: 10, height: 10, close() {} })); }));
+    const settle = () => new Promise(resolve => setTimeout(resolve, 20));
+    const url = pngURL(png(chunk("IHDR", 13), chunk("IDAT", 4)));
+    let left = false;
+    const busy = [1, 2].map(i => inlineThumbnail(`busy-${i}`, url, "image/png"));
+    const stale = inlineThumbnail("left-channel", url, "image/png", () => !left);
+    await settle();
+    assert.equal(decodes, 2, "the third render waits in the queue");
+    left = true;
+    while (pending.length) { pending.shift()(); await settle(); }
+    assert.equal(await stale, null);
+    assert.equal(decodes, 2, "the stale queued render never decoded");
+    await Promise.all(busy);
+    const again = inlineThumbnail("left-channel", url, "image/png");
+    await settle();
+    assert.equal(decodes, 3, "a skipped render is not cached, so a current view renders it");
+    pending.shift()();
+    assert.equal(await again, null);
 });
