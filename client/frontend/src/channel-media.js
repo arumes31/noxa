@@ -110,26 +110,3 @@ export function mediaErrorText(error) {
     const reason = mediaErrorReason(error);
     return reason ? t(`e2ee.reason.${reason}`) : String(error?.message || error || "");
 }
-
-/** The voice panel's encryption status line ("" when voice is off). */
-export function mediaStatusText(status = lastStatus) {
-    switch (status?.state) {
-        case "keying": return t("e2ee.media.keying");
-        case "encrypted": return withWarning(status, !status.recipients ? t("e2ee.media.alone") : status.keyHolders?.length ? t("e2ee.media.encrypted", { count: status.keyHolders.length, names: holderNames(status) }) : t("e2ee.media.keying"));
-        case "partial": return withWarning(status, t("e2ee.media.partial", { failed: status.failed?.length || 0 }));
-        case "paused": return t("e2ee.media.paused");
-        default: return "";
-    }
-}
-
-// Who holds my current keys: every device, by nickname with the verified
-// account (never truncated: the list is the defence against hidden members).
-function holderNames(status) {
-    return (status.keyHolders || []).map(h => (h.nickname && h.nickname !== h.principal ? `${h.nickname} (${h.principal})` : h.principal)).join(", ");
-}
-
-function withWarning(status, text) {
-    if (status.waiting) text = `${text} · ${t("e2ee.media.waiting", { count: status.waiting })}`;
-    const mismatch = status.membershipMismatch || [];
-    return mismatch.length ? `${text} · ${t("e2ee.media.mismatch", { names: mismatch.map(m => m.principal).join(", ") })}` : text;
-}

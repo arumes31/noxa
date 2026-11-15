@@ -164,6 +164,20 @@ test("an inline reply is queued in the outbox and the open app is asked to send 
     for (const entry of await pending()) await remove(entry.id);
 });
 
+test("a private inline reply with the app closed opens the conversation so the app sends it", async () => {
+    for (const entry of await pending()) await remove(entry.id);
+    opened.length = 0;
+    for (const tag of ["dm:uid-1", "conversation:g-1"]) {
+        await dispatch("notificationclick", { notification: { close() {}, data: { tag, generation: 1 } }, action: "reply", reply: "later" });
+    }
+    assert.deepEqual(opened, ["/app/#/dm/uid-1", "/app/#/group/g-1"]);
+    assert.equal((await pending()).length, 2, "the replies stay queued for the app");
+    // The worker sends channel replies itself, without opening the app.
+    await dispatch("notificationclick", { notification: { close() {}, data: { tag: "channel:4", generation: 1 } }, action: "reply", reply: "here" });
+    assert.equal(opened.length, 2);
+    for (const entry of await pending()) await remove(entry.id);
+});
+
 
 test("Apple push deliveries stay visible when foreground or mute state changed in flight", async () => {
     const previousUA = fakeNavigator.userAgent;

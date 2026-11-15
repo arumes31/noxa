@@ -70,13 +70,10 @@ export function voiceSettings() {
         toggleRow(t("vc.lowBandwidth"), settings.get("lowBandwidth"), on => settings.set({ lowBandwidth: on }), t("vc.lowBandwidthHint")),
         h("button", { class: "btn btn-block", type: "button", onclick: () => micTestSheet(app.voice) }, t("vc.micTest")));
     const section = h("section", { class: "vc-section", "aria-label": t("vc.settingsTitle") }, h("p", { class: "section-label" }, t("vc.settingsTitle")), card);
-    // The live meter follows the call's microphone; it stops once the section is gone.
+    // The live meter follows the call's microphone; it stops once the section is
+    // gone. Both callers attach it synchronously, so detached on a tick means replaced.
     const timer = setInterval(() => {
-        if (!section.isConnected) {
-            if (section.dataset.mounted) clearInterval(timer);
-            return;
-        }
-        section.dataset.mounted = "1";
+        if (!section.isConnected) return clearInterval(timer);
         meter.set(app.voice?.level || 0, settings.get("voiceThreshold"));
     }, 100);
     return section;
