@@ -44,9 +44,16 @@ func (s *Store) ListBans(ctx context.Context) ([]BanRecord, error) {
 	return out, rows.Err()
 }
 
-// DeleteBan lifts one ban by ID.
+// DeleteBan lifts one ban by ID. Lifting a unique-ID ban also lifts the IP
+// bans inserted with it (a banned guest's address): same statement, so same
+// banned_at and issuer. Lifting only the IP ban keeps the ID ban.
+// shortcut: rows are linked by banned_at, not a column; add a link column
+// with the next bans migration.
 func (s *Store) DeleteBan(ctx context.Context, id int64) error {
-	const q = `DELETE FROM bans WHERE id = $1`
+	const q = `WITH lifted AS (DELETE FROM bans WHERE id = $1 RETURNING ban_type, banned_at, banned_by, channel_id)
+		DELETE FROM bans b USING lifted l
+		WHERE l.ban_type = 1 AND b.ban_type = 0 AND b.banned_at = l.banned_at
+		AND b.banned_by IS NOT DISTINCT FROM l.banned_by AND b.channel_id IS NOT DISTINCT FROM l.channel_id`
 	if _, err := s.db.ExecContext(ctx, q, id); err != nil {
 		return fmt.Errorf("deleting ban: %w", err)
 	}

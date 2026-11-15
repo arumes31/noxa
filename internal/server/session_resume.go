@@ -393,7 +393,9 @@ func (s *TCPServer) parkSession(client *Client, removed *state.Client, reason st
 		kept = netproto.DepartureReconnecting
 	case reason == netproto.DepartureUpdating:
 		kept = reason
-	case reason == netproto.DepartureConnectionLost && client.resumable():
+	// A device-less guest costs nothing to recreate: keeping its place would
+	// let a login/drop loop fill everyone's member list outside max_clients.
+	case reason == netproto.DepartureConnectionLost && client.resumable() && (client.userID() != 0 || client.currentDeviceID() != ""):
 		kept = netproto.DepartureReconnecting
 	}
 	if kept == "" {
