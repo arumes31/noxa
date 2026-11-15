@@ -55,6 +55,19 @@ test("b8 P3-1: a lost connection still stops the flush", async () => {
     assert.deepEqual(Object.keys(left).sort(), ["op-ch", "op-dm"]);
 });
 
+test("audit: a reconnect nulling conn mid rate-limit backoff keeps the entry queued, not failed", async () => {
+    await raw(Stores.outbox, s => s.clear());
+    let calls = 0;
+    // conn is live for the first attempt's guard, then a reconnect nulls it.
+    const sess = { get conn() { return calls >= 2 ? null : { open: true }; }, showQueued() {},
+        async send() { calls++; throw Object.assign(new Error("rate limited"), { retryAfterMS: 1, retryable: true }); } };
+    await enqueue({ kind: "channel", scope: 1 }, "channel only", { id: "op-ch" });
+    await flush(sess, { ratchet: {}, showQueued() {} }, null);
+    const [entry] = await pending();
+    assert.equal(entry.id, "op-ch", "the entry is kept queued");
+    assert.equal(entry.failed, undefined, "a nulled conn during backoff never marks it permanently failed");
+});
+
 test("b9 CodeRabbit: later entries to a peer wait behind its queued entry, others are sent", async () => {
     await raw(Stores.outbox, s => s.clear());
     const sess = { conn: { open: true }, showQueued() {}, async send() {} };

@@ -173,7 +173,7 @@ export function flush(session, dm, groups = null) {
                             break;
                         } catch (error) {
                             // The server meters sends per user; a short pause clears the limit.
-                            if (!error.retryAfterMS || attempt >= 2 || !session.conn.open) throw error;
+                            if (!error.retryAfterMS || attempt >= 2 || !session.conn?.open) throw error;
                             await new Promise(resolve => setTimeout(resolve, Math.min(error.retryAfterMS, 10000)));
                         }
                     }

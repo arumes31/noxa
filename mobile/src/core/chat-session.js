@@ -18,6 +18,7 @@ export const MsgChatAccepted = Msg.ChatAccepted;
 export const MsgChannelJoined = Msg.ChannelJoined;
 
 const HISTORY_PAGE = 50;
+const MAX_MESSAGES = 5000;
 const MAX_STAGED_BYTES = 8 * 1024 * 1024;
 const stagingEncoder = new TextEncoder();
 /** Polls travel inside the sealed body with this prefix (internal/netproto/poll.go). */
@@ -206,6 +207,9 @@ export class ChatSession extends EventTarget {
         if (existing >= 0) list[existing] = { ...list[existing], ...message, pending: false };
         else list.push(message);
         list.sort((a, b) => (a.sentAt - b.sentAt) || ((a.id || Infinity) - (b.id || Infinity)));
+        // Cap only when caught up: trim the oldest when this append landed at the
+        // end, never when an older history page was just merged into the middle.
+        if (existing < 0 && list.length > MAX_MESSAGES && list[list.length - 1] === message) list.splice(0, list.length - MAX_MESSAGES);
         this.messages.set(scope, list);
         this.#emit("messages", { scope });
     }

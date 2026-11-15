@@ -3892,7 +3892,11 @@ function pushMsg(key, m) {
     // Scrollback the user is reading stays loaded; the cap applies again once
     // they are back at the newest message.
     const reading = key === activeKey() && !atBottom;
-    while (!reading && st.msgs.length > Math.max(max, PAGE)) st.msgs.shift();
+    while (!reading && st.msgs.length > Math.max(max, PAGE)) {
+        const evicted = st.msgs.shift();
+        // Drop the evicted message's receipt too, else the map grows unbounded.
+        if (evicted.clientMsgID) receipts.delete(evicted.clientMsgID);
+    }
     return index >= 0 ? "insert" : "append";
 }
 
