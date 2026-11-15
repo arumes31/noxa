@@ -3,7 +3,7 @@
 import { app } from "../app.js";
 import { uploadAttachment } from "../core/files.js";
 import { formatSize } from "../core/message-format.js";
-import { clearShare, getShare } from "../core/share-store.js";
+import { clearShare, getShare, putShare } from "../core/share-store.js";
 import { t } from "../i18n.js";
 import { avatar, h, toast } from "./dom.js";
 import { dmHref, header, lastMessage, scopeName } from "./common.js";
@@ -47,6 +47,8 @@ export async function deliver(session, target, share) {
         await send(share.text ? `${share.text} ${token}` : token);
         share.text = "";
         share.files.shift();
+        // Stored too: a reconnect remounts the screen from the store.
+        if (share.files.length) await putShare(share).catch(() => {});
     }
 }
 
@@ -65,8 +67,11 @@ export function renderShare(root) {
         text.value = share.text;
         const status = h("p", { class: "hint", role: "status" });
         const list = h("ul", { class: "list" });
+        const fileRows = () => share.files.map(file => h("li", {}, h("span", { class: "file-icon", "aria-hidden": "true" }, "📄"), h("span", { class: "file-name" }, file.name), h("span", { class: "file-size" }, formatSize(file.size))));
+        const files = h("ul", { class: "share-files" }, fileRows());
         const pick = async target => {
             for (const button of list.querySelectorAll("button")) button.disabled = true;
+            text.disabled = true; // the caption is taken now; later edits would be lost
             status.textContent = t("rich.share.sending", { name: target.name });
             share.text = text.value.trim();
             try {
@@ -76,6 +81,8 @@ export function renderShare(root) {
                 location.hash = target.href;
             } catch (error) {
                 text.value = share.text; // empty once the caption went out
+                text.disabled = false;
+                files.replaceChildren(...fileRows());
                 status.textContent = t("chat.sendFailed", { error: error.message });
                 for (const button of list.querySelectorAll("button")) button.disabled = false;
             }
@@ -88,7 +95,7 @@ export function renderShare(root) {
         body.replaceChildren(
             h("div", { class: "card share-preview" },
                 text,
-                share.files.length ? h("ul", { class: "share-files" }, share.files.map(file => h("li", {}, h("span", { class: "file-icon", "aria-hidden": "true" }, "📄"), h("span", { class: "file-name" }, file.name), h("span", { class: "file-size" }, formatSize(file.size))))) : null,
+                share.files.length ? files : null,
                 h("button", { class: "btn", type: "button", onclick: async () => { await clearShare().catch(() => {}); location.hash = "#/home"; } }, t("rich.share.discard"))),
             status,
             h("p", { class: "section-label" }, t("rich.share.to")),

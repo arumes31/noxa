@@ -17,7 +17,11 @@ test("a retried multi-file share sends only what is left, the caption once", asy
         if (failOn && body.includes(`[${failOn}]`)) { failOn = ""; throw new Error("offline"); }
         sent.push(body);
     } };
-    const overrides = { "../core/files.js": { uploadAttachment: async (conn, location, file) => `[${file.name}]` } };
+    const stored = [];
+    const overrides = {
+        "../core/files.js": { uploadAttachment: async (conn, location, file) => `[${file.name}]` },
+        "../core/share-store.js": { putShare: async s => { stored.push(s.files.map(f => f.name).join()); } },
+    };
     const context = vm.createContext({});
     const module = new vm.SourceTextModule(source, { context });
     await module.link(specifier => {
@@ -37,6 +41,7 @@ test("a retried multi-file share sends only what is left, the caption once", asy
     assert.deepEqual(sent, ["look [a]"]);
     assert.equal(share.text, "");
     assert.deepEqual(share.files.map(f => f.name), ["b", "c"]);
+    assert.deepEqual(stored, ["b,c"], "progress is stored for a remount after reconnect");
     await deliver(session, target, share);
     assert.deepEqual(sent, ["look [a]", "[b]", "[c]"]);
     assert.equal(share.files.length, 0);
