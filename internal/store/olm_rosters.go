@@ -104,6 +104,10 @@ func readOlmControlRoster(ctx context.Context, tx *sql.Tx, a OlmSource, peer, ta
 	return out, nil
 }
 
+// olmUnpublishedIdle is how long an approved device without an Olm bundle may
+// stay unseen before rosters stop requiring it (see readOlmRosterDevices).
+const olmUnpublishedIdle = "7 days"
+
 func readOlmRosterDevices(ctx context.Context, tx *sql.Tx, ps []string, source string, devices []string) (OlmRosterSnapshot, error) {
 	var out OlmRosterSnapshot
 	versions, e := lockOlmRosters(ctx, tx, ps)
@@ -114,7 +118,14 @@ func readOlmRosterDevices(ctx context.Context, tx *sql.Tx, ps []string, source s
 	for _, p := range ps {
 		out.Rosters = append(out.Rosters, admission.Roster{Principal: p, Version: versions[p]})
 	}
-	rows, e := tx.QueryContext(ctx, `SELECT d.principal,d.device_id,COALESCE(a.account_epoch,0),COALESCE(a.identity,'') FROM user_devices d LEFT JOIN olm_directory_state a USING(device_id) WHERE d.principal=ANY($1) AND ($2 OR d.device_id=ANY($3)) AND d.revoked_at IS NULL AND (d.first_device OR octet_length(d.approval_signature)>0) ORDER BY d.device_id COLLATE "C" FOR UPDATE OF d`, pq.Array(ps), len(devices) == 0, pq.Array(devices))
+	// An approved device that never published an Olm bundle still counts while
+	// it was seen recently: the roster then fails as exhausted, so a new or
+	// outdated device is waited for and its owner told to set it up, never
+	// silently omitted. One idle for olmUnpublishedIdle cannot decrypt Olm and
+	// will not publish soon; listing it would block every conversation with
+	// its owner forever (e.g. web sessions from before secure messaging), so it
+	// is left out until it signs in again and publishes.
+	rows, e := tx.QueryContext(ctx, `SELECT d.principal,d.device_id,COALESCE(a.account_epoch,0),COALESCE(a.identity,'') FROM user_devices d LEFT JOIN olm_directory_state a USING(device_id) WHERE d.principal=ANY($1) AND ($2 OR d.device_id=ANY($3)) AND d.revoked_at IS NULL AND (d.first_device OR octet_length(d.approval_signature)>0) AND (a.device_id IS NOT NULL OR d.last_seen_at > now() - $4::interval) ORDER BY d.device_id COLLATE "C" FOR UPDATE OF d`, pq.Array(ps), len(devices) == 0, pq.Array(devices), olmUnpublishedIdle)
 	if e != nil {
 		return out, e
 	}
