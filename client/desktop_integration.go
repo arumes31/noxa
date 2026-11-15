@@ -27,6 +27,8 @@ const (
 // Launch state, captured once at the top of runApp before any update code
 // clears its environment variables.
 var (
+	// startDesktopTray is set on Windows, where the tray starts from OnStartup.
+	startDesktopTray      func()
 	launchHidden          bool
 	launchDeepLink        string
 	singleInstanceEnabled bool

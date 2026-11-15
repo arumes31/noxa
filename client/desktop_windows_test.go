@@ -21,7 +21,12 @@ func TestRunWindowsDesktopLifecycle(t *testing.T) {
 	trayQuit := make(chan struct{})
 
 	runWindowsDesktop(windowsDesktopLifecycle{
-		runWails: func() { record("wails") },
+		runWails: func(startTray func()) {
+			record("wails-start")
+			startTray()
+			startTray() // idempotent
+			record("wails")
+		},
 		runTray: func(ready chan<- struct{}) {
 			record("tray-ready")
 			close(ready)
@@ -34,7 +39,7 @@ func TestRunWindowsDesktopLifecycle(t *testing.T) {
 		},
 	})
 
-	want := []string{"tray-ready", "wails", "tray-quit", "tray-exit"}
+	want := []string{"wails-start", "tray-ready", "wails", "tray-quit", "tray-exit"}
 	if !slices.Equal(events, want) {
 		t.Fatalf("lifecycle events = %v, want %v", events, want)
 	}
@@ -43,7 +48,7 @@ func TestRunWindowsDesktopLifecycle(t *testing.T) {
 func TestRunWindowsDesktopTrayFailure(t *testing.T) {
 	wailsRan := false
 	runWindowsDesktop(windowsDesktopLifecycle{
-		runWails: func() { wailsRan = true },
+		runWails: func(startTray func()) { startTray(); wailsRan = true },
 		runTray: func(ready chan<- struct{}) {
 			// Simulates tray failing / exiting before initializing
 		},
@@ -51,5 +56,18 @@ func TestRunWindowsDesktopTrayFailure(t *testing.T) {
 	})
 	if !wailsRan {
 		t.Fatalf("wails did not run when tray setup failed to initialize")
+	}
+}
+
+// A launch forwarded to the running instance never reaches OnStartup.
+func TestRunWindowsDesktopForwardedLaunchStartsNoTray(t *testing.T) {
+	trayRan, quitRan := false, false
+	runWindowsDesktop(windowsDesktopLifecycle{
+		runWails: func(func()) {},
+		runTray:  func(chan<- struct{}) { trayRan = true },
+		quitTray: func() { quitRan = true },
+	})
+	if trayRan || quitRan {
+		t.Fatalf("tray ran=%v quit=%v for a launch that never started", trayRan, quitRan)
 	}
 }

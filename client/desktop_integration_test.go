@@ -83,3 +83,11 @@ func TestDeepLinkQueuedUntilFrontendReady(t *testing.T) {
 		t.Fatalf("emitted %v", emitted)
 	}
 }
+
+func TestSecondInstanceLinkReplacesColdStartLink(t *testing.T) {
+	a := &App{deepLink: deepLinkInbox{pending: "noxa://cold"}}
+	a.secondInstanceLaunch(options.SecondInstanceData{Args: []string{"noxa://newer"}})
+	if got := a.TakeDeepLink(); got != "noxa://newer" {
+		t.Fatalf("TakeDeepLink = %q, want the newer link", got)
+	}
+}

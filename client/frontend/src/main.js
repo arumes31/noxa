@@ -3919,7 +3919,8 @@ async function openDeepLink(url) {
                 // select() clears typed and saved passwords, so no secret for
                 // another server reaches the invite's server; the nickname stays.
                 await loginMemory.select({ addr: link, nickname: $("login-nick").value.trim(), display_name: $("login-display-name").value.trim() });
-                void connectFromLogin();
+                // The user retargeted the form during the lookup: leave it to them.
+                if ($("login-addr").value.trim() === link) void connectFromLogin();
             },
         });
     } finally { deepLinkPrompt = false; }

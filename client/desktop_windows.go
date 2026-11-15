@@ -11,12 +11,11 @@ import (
 	"sync"
 
 	"github.com/getlantern/systray"
-	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
 type windowsDesktopLifecycle struct {
-	runWails func()
+	runWails func(startTray func())
 	runTray  func(chan<- struct{})
 	quitTray func()
 }
@@ -26,62 +25,55 @@ type windowsDesktopLifecycle struct {
 // apartment is thread-bound; moving wails.Run to a goroutine leaves its
 // asynchronous environment callback without COM initialisation.
 func runDesktop(app *App) {
-	// A launch that Wails will forward to the running instance and exit
-	// must not create a tray icon first: os.Exit would leave a ghost icon.
-	if singleInstanceEnabled && singleInstanceRunning() {
-		runWails(app)
-		return
-	}
 	runWindowsDesktop(windowsDesktopLifecycle{
-		runWails: func() { runWails(app) },
+		runWails: func(startTray func()) {
+			startDesktopTray = startTray
+			runWails(app)
+		},
 		runTray:  func(ready chan<- struct{}) { initTray(app, ready) },
 		quitTray: systray.Quit,
 	})
 }
 
+// runWindowsDesktop starts the tray only when Wails calls startTray from
+// OnStartup, i.e. once this process is the primary instance: a launch Wails
+// forwards to a running instance exits before OnStartup and never leaves a
+// ghost tray icon behind.
 func runWindowsDesktop(lifecycle windowsDesktopLifecycle) {
-	trayReady := make(chan struct{})
+	var (
+		once    sync.Once
+		started bool
+	)
 	trayDone := make(chan struct{})
+	startTray := func() {
+		once.Do(func() {
+			started = true
+			trayReady := make(chan struct{})
+			go func() {
+				defer close(trayDone)
+				var readyOnce sync.Once
+				defer readyOnce.Do(func() { close(trayReady) })
 
-	go func() {
-		defer close(trayDone)
-		var readyOnce sync.Once
-		defer readyOnce.Do(func() { close(trayReady) })
+				readyProxy := make(chan struct{})
+				go func() {
+					<-readyProxy
+					readyOnce.Do(func() { close(trayReady) })
+				}()
 
-		readyProxy := make(chan struct{})
-		go func() {
-			<-readyProxy
-			readyOnce.Do(func() { close(trayReady) })
-		}()
+				runtime.LockOSThread()
+				defer runtime.UnlockOSThread()
+				guardCrash("tray", func() { lifecycle.runTray(readyProxy) })
+			}()
+			<-trayReady
+		})
+	}
 
-		runtime.LockOSThread()
-		defer runtime.UnlockOSThread()
-		guardCrash("tray", func() { lifecycle.runTray(readyProxy) })
-	}()
-
-	<-trayReady
-	defer func() {
+	lifecycle.runWails(startTray)
+	once.Do(func() {}) // no tray start after Wails returned
+	if started {
 		lifecycle.quitTray()
 		<-trayDone
-	}()
-
-	lifecycle.runWails()
-}
-
-// singleInstanceRunning probes the mutex Wails' SetupSingleInstance creates.
-// shortcut: depends on Wails v2's "wails-app-<id>sim" name; a mismatch after a
-// Wails upgrade only brings back a ghost tray icon on forwarded launches.
-func singleInstanceRunning() bool {
-	name, err := windows.UTF16PtrFromString("wails-app-" + singleInstanceID + "sim")
-	if err != nil {
-		return false
 	}
-	handle, err := windows.OpenMutex(windows.SYNCHRONIZE, false, name)
-	if err != nil {
-		return false
-	}
-	_ = windows.CloseHandle(handle)
-	return true
 }
 
 // startupEntryMu serializes the toggle with the startup path refresh, so a
