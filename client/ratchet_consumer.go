@@ -1388,13 +1388,13 @@ func ratchetBodySentAt(body json.RawMessage, fallback float64) float64 {
 }
 
 // ratchetClaimBucket is the window (seconds) of one deterministic claim ID;
-// a claim is reserved for an hour, so the previous window's may still cover.
+// a claim is reserved for an hour, so one from two windows back may still cover.
 const ratchetClaimBucket = 1800
 
 // ratchetClaimID names the first claim reservation for a target device in one
 // window, so a later consumer finds it again (ratchetSavedClaim).
-func ratchetClaimID(claimKey string, bucket int64) string {
-	sum := sha256.Sum256([]byte(claimKey))
+func ratchetClaimID(scope string, bucket int64) string {
+	sum := sha256.Sum256([]byte(scope))
 	return "claim:" + hex.EncodeToString(sum[:16]) + ":" + strconv.FormatInt(bucket, 10)
 }
 
@@ -1575,8 +1575,9 @@ func (c *ratchetConsumer) seal(a durable.AccountAuthority, in ratchetIntent, reu
 			// server answers a replayed request ID with the same key, so retry
 			// waves do not drain the device's one-time keys.
 			bucket := c.now() / ratchetClaimBucket
-			ids := []string{ratchetClaimID(p.claimKey, bucket), ratchetClaimID(p.claimKey, bucket-1)}
-			saved, err := c.read(durable.Ref{Kind: durable.Claim, ID: ids[0]}, durable.Ref{Kind: durable.Claim, ID: ids[1]})
+			scope := c.d.Namespace.Device + "\x00" + p.claimKey // claimed_by is the principal, shared by its devices
+			ids := []string{ratchetClaimID(scope, bucket), ratchetClaimID(scope, bucket-1), ratchetClaimID(scope, bucket-2)}
+			saved, err := c.read(durable.Ref{Kind: durable.Claim, ID: ids[0]}, durable.Ref{Kind: durable.Claim, ID: ids[1]}, durable.Ref{Kind: durable.Claim, ID: ids[2]})
 			if err != nil {
 				return RatchetOutcome{}, err
 			}
@@ -1592,11 +1593,12 @@ func (c *ratchetConsumer) seal(a durable.AccountAuthority, in ratchetIntent, reu
 				trusted, p.claim = replayed, claim
 				break
 			}
-			if p.claim == nil {
-				claimID, until := ids[0], c.now()+3600
-				if saved.Records[durable.Ref{Kind: durable.Claim, ID: claimID}].Revision > 0 {
-					claimID = newClientMsgID()
-				}
+			claimID := ids[0]
+			if saved.Records[durable.Ref{Kind: durable.Claim, ID: claimID}].Revision > 0 {
+				claimID = newClientMsgID()
+			}
+			for p.claim == nil {
+				until := c.now() + 3600
 				request := netproto.OlmDirectoryRequest{RequestID: claimID, Action: "claim", Principal: t.Principal, DeviceID: t.Device, AccountEpoch: a.Epoch, ClaimUntil: until}
 				cs, err := c.read(durable.Ref{Kind: durable.Trust, ID: trusted.id}, durable.Ref{Kind: durable.Claim, ID: claimID})
 				if err != nil {
@@ -1609,7 +1611,11 @@ func (c *ratchetConsumer) seal(a durable.AccountAuthority, in ratchetIntent, reu
 				if err = c.d.Store.CheckAccountAuthority(a); err != nil {
 					return RatchetOutcome{}, err
 				}
-				if trusted, p.claim, err = c.claimFrom(m, t, trusted, request); err != nil {
+				if trusted, p.claim, err = c.claimFrom(m, t, trusted, request); ratchetCode(err) == "conflict" && claimID == ids[0] {
+					claimID = newClientMsgID() // the server knows this ID from a wiped store
+					continue
+				}
+				if err != nil {
 					return RatchetOutcome{}, err
 				}
 			}

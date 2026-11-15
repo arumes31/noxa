@@ -79,8 +79,8 @@ func (s *TCPServer) handleOlmDirectory(ctx context.Context, client *Client, f *n
 			if counter, ok := db.(interface {
 				AvailableOlmKeys(context.Context, string, string) (int, error)
 			}); ok && e == nil {
-				var n int
-				if n, e = counter.AvailableOlmKeys(opCtx, id, binding); e == nil {
+				// Without a count the client keeps its time-based refill.
+				if n, err := counter.AvailableOlmKeys(opCtx, id, binding); err == nil {
 					response.Available = &n
 				}
 			}

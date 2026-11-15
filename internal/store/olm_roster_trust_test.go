@@ -185,3 +185,33 @@ func TestExpireOlmDirectoryTrimsKeyRows(t *testing.T) {
 		t.Fatalf("cleared %d, untouched available %d, revoked device rows %d", cleared, full, goneRows)
 	}
 }
+
+// F4/F5 server side: the claimable count drops with a claim, and a replayed
+// claim request returns the same key only while that key is still reserved.
+func TestOlmClaimReplayOnlyWhileReserved(t *testing.T) {
+	s, a, b, m, parts := admissionFixture(t)
+	if n, err := s.AvailableOlmKeys(t.Context(), b.Device, b.Server); err != nil || n != 9 {
+		t.Fatalf("available after one claim of ten: %d %v", n, err)
+	}
+	first, err := s.ClaimOlmKey(t.Context(), a.Principal, a.Device, b.Principal, b.Device, "claim", m.Deadline, a.Server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, err := s.ClaimOlmKey(t.Context(), a.Principal, a.Device, b.Principal, b.Device, "claim", m.Deadline, a.Server); err != nil || again.KeyID != first.KeyID {
+		t.Fatalf("replay of a reserved claim: %v %v", again.KeyID, err)
+	}
+	if _, err = s.BeginOlmAttempt(t.Context(), a, m); err != nil {
+		t.Fatal(err)
+	}
+	for i, p := range parts {
+		if err = s.PutOlmPart(t.Context(), a, m.AttemptID, i, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r, err := s.FinalizeOlmAttempt(t.Context(), a, m.AttemptID); err != nil || r.State != "accepted" {
+		t.Fatalf("admission: %+v %v", r, err)
+	}
+	if _, err = s.ClaimOlmKey(t.Context(), a.Principal, a.Device, b.Principal, b.Device, "claim", m.Deadline, a.Server); !errors.Is(err, ErrOlmExhausted) {
+		t.Fatalf("replay of an admitted claim: %v", err)
+	}
+}
