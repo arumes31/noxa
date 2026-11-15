@@ -27,7 +27,8 @@ import { blockedPreviewPlaceholder, resolvePreviewImage } from "./preview-source
 import { resolveParent, directPeer } from "./chat-relations.js";
 import { fileCardText, previewLine } from "./dm-model.js";
 import { manageChatGIFPlayback } from "./chat-gif-playback.js";
-import { openChatMediaLightbox } from "./chat-media-lightbox.js";
+import { openChatMediaLightbox, setFullImageSource } from "./chat-media-lightbox.js";
+import { inlineThumbnail } from "./image-thumbs.js";
 import { createChatUploadQueue } from "./chat-upload-queue.js";
 import { createUnreadTabEffects } from "./chat-unread.js";
 import { createChatTabs } from "./chat-tabs.js";
@@ -1514,7 +1515,7 @@ function attachFileRef(container, m, cap, source = null) {
     const inlineVideo = VIDEO_EXTS.includes(ext);
     if (inlineImage || inlineVideo) {
         wrap.textContent = t(inlineVideo ? "chat.loadingVideo" : "chat.loadingImage", { name });
-        sharedPreviewDownload(source, ref, previewIsCurrent).then((b64) => {
+        sharedPreviewDownload(source, ref, previewIsCurrent).then(async (b64) => {
             // Check before touching the wrapper or constructing a renderer data
             // URL: a completed request belongs to the scope that launched it.
             if (!previewIsCurrent()) return;
@@ -1543,7 +1544,14 @@ function attachFileRef(container, m, cap, source = null) {
                 el.alt = name;
                 el.loading = "lazy";
                 el.decoding = "async";
-                el.src = `data:image/${ext === "jpg" ? "jpeg" : ext};base64,${b64}`;
+                const mime = `image/${ext === "jpg" ? "jpeg" : ext}`, full = `data:${mime};base64,${b64}`;
+                // Any thumbnail failure keeps the full-size image.
+                const thumb = await inlineThumbnail(source.previewKey?.(ref), full, mime).catch(() => null);
+                el.src = thumb || full;
+                if (thumb) {
+                    setFullImageSource(el, full);
+                    el.addEventListener("error", () => { el.src = full; }, { once: true }); // an evicted, revoked thumbnail
+                }
             }
             if (!previewIsCurrent()) return;
             el.title = inlineVideo ? name : name + t("desktop.click.to.zoom");

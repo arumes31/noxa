@@ -292,6 +292,8 @@ type updateProgress struct {
 	TotalBytes      int64   `json:"total_bytes"`
 	Percent         int     `json:"percent"`
 	BytesPerSecond  float64 `json:"bytes_per_second"`
+	// Patch marks the delta-patch download; the full-client fallback clears it.
+	Patch bool `json:"patch"`
 }
 
 type updateProgressSampler struct {
@@ -443,7 +445,13 @@ func manifestChecksum(checksumsText, assetName string) string {
 // full executable on any patch failure, so every version can still update.
 func downloadClientAsset(ctx context.Context, root *os.Root, info UpdateInfo, sums string, onProgress func(updateProgress)) error {
 	if info.patchURL != "" && manifestChecksum(sums, clientPatchName()) != "" {
-		err := downloadPatchedClient(ctx, root, info, sums, onProgress)
+		patchProgress := func(p updateProgress) {
+			if onProgress != nil {
+				p.Patch = true
+				onProgress(p)
+			}
+		}
+		err := downloadPatchedClient(ctx, root, info, sums, patchProgress)
 		if err == nil || ctx.Err() != nil {
 			return err
 		}

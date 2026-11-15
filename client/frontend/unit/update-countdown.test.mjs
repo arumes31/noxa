@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createUpdateCountdown } from "../src/update-countdown.js";
-import { measuredUpdateProgress } from "../src/update-core.js";
+import { measuredUpdateProgress, updateDownloadLabel } from "../src/update-core.js";
 
 function clock() {
     let time = 0, id = 0;
@@ -51,4 +51,11 @@ test("automatic install countdown waits five seconds and rechecks permission", a
     const d = createUpdateCountdown({ ...c, delayMs: 5000, current: () => true, tick: n => ticks.push(n), restart: () => { calls++; return true; } });
     c.advance(4999); await flush(); assert.equal(calls, 0); assert.deepEqual(ticks, [5,4,3,2,1]);
     c.advance(1); assert.equal(await d.done, true); assert.equal(calls, 1);
+});
+test("download label distinguishes the small patch from the full client", () => {
+    assert.deepEqual(updateDownloadLabel({ patch: true, total_bytes: 2_100_000 }), { key: "updater.downloadingPatchSize", size: 2_100_000 });
+    assert.deepEqual(updateDownloadLabel({ patch: true, total_bytes: -1 }), { key: "updater.downloadingPatch", size: null });
+    assert.deepEqual(updateDownloadLabel({ patch: false, total_bytes: 31_000_000 }), { key: "updater.downloadingSize", size: 31_000_000 });
+    assert.deepEqual(updateDownloadLabel({ total_bytes: 0 }), { key: "updater.downloading", size: null });
+    assert.deepEqual(updateDownloadLabel(null), { key: "updater.downloading", size: null });
 });

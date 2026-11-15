@@ -580,8 +580,14 @@ test("violet core uses real byte counts and waits for verified completion plus t
     await page.clock.pauseAt(new Date("2026-10-15T00:00:01Z"));
     await page.locator(".upd-update").click();
     await page.evaluate(() => {
+        for (const cb of window.__events.update_progress || []) cb(10, { downloaded_bytes: 209715, total_bytes: 2097152, bytes_per_second: 262144, patch: true });
+    });
+    await expect(page.locator(".upd-status")).toHaveText("Downloading update (small patch, 2.00 MiB)");
+    // A failed patch falls back to the full client, which arrives without the flag.
+    await page.evaluate(() => {
         for (const cb of window.__events.update_progress || []) cb(25, { downloaded_bytes: 524288, total_bytes: 1048576, bytes_per_second: 262144 });
     });
+    await expect(page.locator(".upd-status")).toHaveText("Downloading update (1.00 MiB)");
     await expect(page.locator(".upd-pct")).toHaveText("50%");
     await expect(page.locator(".upd-bytes")).toHaveText("512.00 KiB / 1.00 MiB");
     await expect(page.locator(".upd-blocks")).toHaveText("40 / 80 blocks");

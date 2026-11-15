@@ -1,4 +1,5 @@
 import { vendorLabel } from "./encoder-vendor.js";
+import { softwareShareNotice } from "./hardware-video.js";
 import { saveStreamDiagnostics } from "./stream-diagnostic-export.js";
 import { redactPairingSecrets } from "./secret-redaction.js";
 import { diagnosticSample, mountStreamDiagnosticRecording } from "./stream-diagnostic-recording.js";
@@ -175,6 +176,10 @@ async function poll(s) {
         s.layers = report ? collectVideoSenders(report, s.previous, [source], s.previousSource ? [s.previousSource] : []) : [];
         s.sample = primaryVideoSender(s.layers);
         s.previous = report; s.previousSource = source; s.sampledAt = Date.now(); s.measuredAt = performance.now(); s.statsFailed = false;
+        if (softwareShareNotice(s.softwareWarned, s.sample)) {
+            s.softwareWarned = true;
+            window.__noxa?.toast?.(t("share.softwareEncoder"), "warn");
+        }
         if (s.recording.status()?.state === "recording") s.recording.add(diagnosticSample("sent", s.layers.map(row => ({ ...row, implementation: row.encoder_implementation }))),
             videoSenderRecordingIdentity(s.layers));
         if (current(s)) render(s);
