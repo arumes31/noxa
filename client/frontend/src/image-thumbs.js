@@ -42,9 +42,34 @@ export function createThumbCache(max = THUMB_CACHE_MAX, revoke = url => URL.revo
     };
 }
 
+// An extended WebP with an ANIM chunk is animated; a thumbnail would freeze it.
+export function animatedWebP(bytes) {
+    const text = String.fromCharCode(...bytes.subarray(0, 80));
+    return text.startsWith("RIFF") && text.slice(8, 12) === "WEBP" && text.slice(12, 16) === "VP8X" && text.includes("ANIM", 16);
+}
+
 const cache = createThumbCache();
 const inflight = new Map();
 let generation = 0;
+
+// Full-resolution decodes are the expensive part: at most two run at once.
+const RENDER_CONCURRENCY = 2;
+const renderQueue = [];
+let rendering = 0;
+
+function limitRender(task) {
+    return new Promise((resolve, reject) => {
+        const run = () => {
+            rendering++;
+            Promise.resolve().then(task).then(resolve, reject).finally(() => {
+                rendering--;
+                renderQueue.shift()?.();
+            });
+        };
+        if (rendering < RENDER_CONCURRENCY) run();
+        else renderQueue.push(run);
+    });
+}
 
 // Thumbnails hold decrypted image data: drop them all on a server, tab or
 // identity reset. Renders still in flight from before are discarded.
@@ -55,8 +80,8 @@ export function clearInlineThumbnails() {
 }
 
 // inlineThumbnail resolves to a cached thumbnail object URL, or null when the
-// original should be shown (GIF animation, already under the cap, no stable key).
-// It rejects on decode failure; callers then keep the full-size path.
+// original should be shown (GIF or animated WebP, already under the cap, no
+// stable key). It rejects on decode failure; callers keep the full-size path.
 export function inlineThumbnail(key, dataURL, mime) {
     if (!key || mime === "image/gif") return Promise.resolve(null);
     const hit = cache.get(key);
@@ -64,8 +89,9 @@ export function inlineThumbnail(key, dataURL, mime) {
     let request = inflight.get(key);
     if (!request) {
         const started = generation;
-        request = renderThumbnail(dataURL).then(url => {
-            if (started !== generation) {
+        const stale = () => started !== generation;
+        request = limitRender(() => stale() ? null : renderThumbnail(dataURL, mime)).then(url => {
+            if (stale()) {
                 if (url) URL.revokeObjectURL(url);
                 return null;
             }
@@ -77,20 +103,24 @@ export function inlineThumbnail(key, dataURL, mime) {
     return request;
 }
 
-async function renderThumbnail(dataURL) {
-    const bitmap = await createImageBitmap(await (await fetch(dataURL)).blob());
+async function renderThumbnail(dataURL, mime) {
+    const source = await (await fetch(dataURL)).blob();
+    if (mime === "image/webp" && animatedWebP(new Uint8Array(await source.slice(0, 80).arrayBuffer()))) return null;
+    const bitmap = await createImageBitmap(source);
+    let canvas;
     try {
         const size = thumbSize(bitmap.width, bitmap.height);
         if (!size) return null;
-        const canvas = typeof OffscreenCanvas === "function" ? new OffscreenCanvas(size.width, size.height)
+        canvas = typeof OffscreenCanvas === "function" ? new OffscreenCanvas(size.width, size.height)
             : Object.assign(document.createElement("canvas"), size);
         canvas.getContext("2d").drawImage(bitmap, 0, 0, size.width, size.height);
-        // WebP keeps transparency; engines without a WebP encoder return PNG.
-        const blob = canvas.convertToBlob ? await canvas.convertToBlob({ type: "image/webp", quality: 0.85 })
-            : await new Promise(resolve => canvas.toBlob(resolve, "image/webp", 0.85));
-        if (!blob) throw new Error("thumbnail encode failed");
-        return URL.createObjectURL(blob);
     } finally {
-        bitmap.close();
+        bitmap.close(); // free the full-resolution decode before encoding
     }
+    if (!canvas) return null;
+    // WebP keeps transparency; engines without a WebP encoder return PNG.
+    const blob = canvas.convertToBlob ? await canvas.convertToBlob({ type: "image/webp", quality: 0.85 })
+        : await new Promise(resolve => canvas.toBlob(resolve, "image/webp", 0.85));
+    if (!blob) throw new Error("thumbnail encode failed");
+    return URL.createObjectURL(blob);
 }

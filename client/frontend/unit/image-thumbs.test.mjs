@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { clearInlineThumbnails, createThumbCache, inlineThumbnail, thumbSize, THUMB_MAX_SIDE } from "../src/image-thumbs.js";
+import { animatedWebP, clearInlineThumbnails, createThumbCache, inlineThumbnail, thumbSize, THUMB_MAX_SIDE } from "../src/image-thumbs.js";
 
 test("thumbnail size respects the cap and keeps the aspect ratio", () => {
     assert.deepEqual(thumbSize(4000, 3000), { width: THUMB_MAX_SIDE, height: 480 });
@@ -48,4 +48,42 @@ test("clear revokes every cached thumbnail", () => {
     assert.equal(cache.size, 0);
     assert.equal(cache.get("a"), undefined);
     clearInlineThumbnails(); // the module cache resets without throwing
+});
+
+const webp = (chunk, extra = "") => {
+    const body = "WEBP" + chunk + "\x0a\x00\x00\x00" + "\x00".repeat(10) + extra;
+    return new Uint8Array([..."RIFF\x00\x00\x00\x00" + body].map(c => c.charCodeAt(0)));
+};
+// Node has no createImageBitmap; each test installs its own.
+const stubBitmap = (t, impl) => { globalThis.createImageBitmap = impl; t.after(() => { delete globalThis.createImageBitmap; }); };
+const dataURL = bytes => `data:image/webp;base64,${Buffer.from(bytes).toString("base64")}`;
+
+test("animated WebP bypasses the thumbnail; static WebP is thumbnailed", async (t) => {
+    const animated = webp("VP8X", "ANIM\x06\x00\x00\x00"), still = webp("VP8 ");
+    assert.equal(animatedWebP(animated), true);
+    assert.equal(animatedWebP(still), false);
+    assert.equal(animatedWebP(webp("VP8X", "ICCP")), false, "extended but not animated");
+    let decodes = 0;
+    stubBitmap(t, async () => { decodes++; return { width: 10, height: 10, close() {} }; });
+    assert.equal(await inlineThumbnail("anim", dataURL(animated), "image/webp"), null);
+    assert.equal(decodes, 0, "an animated WebP is never decoded for a thumbnail");
+    assert.equal(await inlineThumbnail("still", dataURL(still), "image/webp"), null, "under the cap");
+    assert.equal(decodes, 1, "a static WebP goes through the thumbnail path");
+});
+
+test("at most two thumbnail renders run at once", async (t) => {
+    const pending = [];
+    let outstanding = 0, peak = 0;
+    stubBitmap(t, () => new Promise(resolve => {
+        outstanding++; peak = Math.max(peak, outstanding);
+        pending.push(() => { outstanding--; resolve({ width: 10, height: 10, close() {} }); });
+    }));
+    const settle = () => new Promise(resolve => setTimeout(resolve, 20));
+    const png = "data:image/png;base64,iVBORw0KGgo=";
+    const requests = [1, 2, 3, 4, 5].map(i => inlineThumbnail(`limit-${i}`, png, "image/png"));
+    await settle();
+    assert.equal(pending.length, 2);
+    while (pending.length) { pending.shift()(); await settle(); }
+    assert.deepEqual(await Promise.all(requests), [null, null, null, null, null]);
+    assert.equal(peak, 2);
 });
