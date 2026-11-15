@@ -155,6 +155,8 @@ type App struct {
 	identityGeneration uint64
 	// toasts holds Windows notification registration and issued tokens (501).
 	toasts nativeToastState
+	// deepLink holds a noxa:// link until the frontend is ready (90).
+	deepLink deepLinkInbox
 }
 
 // NewApp creates a new App.
@@ -163,6 +165,8 @@ func NewApp() *App {
 		settings: loadSettings(),
 		hotkeys:  make(map[string]*hotkeyReg),
 		tabs:     make(map[string]*tabState),
+		// Queued before Wails runs, so a second-instance link always arrives later and wins.
+		deepLink: deepLinkInbox{pending: launchDeepLink},
 	}
 }
 
@@ -210,6 +214,9 @@ func (a *App) domReady(ctx context.Context) {
 // startup is called when the app starts.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	if startDesktopTray != nil {
+		startDesktopTray()
+	}
 	// Finish identity deletions interrupted by a crash (restore or erase).
 	go guardCrash("ratchet store sweep", a.sweepRatchetStores)
 	if path, err := knownServersPath(); err == nil {
@@ -223,6 +230,8 @@ func (a *App) startup(ctx context.Context) {
 	}
 	// (501) Windows Action Center notifications: per-user registration only.
 	go guardCrash("native notifications", a.initNativeToasts)
+	// (88, 90) startup entry path refresh and noxa:// registration.
+	go guardCrash("desktop integration", registerDesktopIntegration)
 	// (291) restore always-on-top.
 	a.settingsMu.Lock()
 	alwaysOnTop := a.settings.AlwaysOnTop

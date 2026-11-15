@@ -14,7 +14,7 @@ import { createShutdownNotice } from "./shutdown-notice.js";
 import { initializeUpdateTransition, updateStartupBlocked, refreshUpdateTransition } from "./update-transition.js";
 import "./update-transition.css";
 import { stopDisplayCapture } from "./display-capture-lease.js";
-import { parseChannelInvite } from "./channel-invite-links.js";
+import { handleDeepLink, parseChannelInvite } from "./channel-invite-links.js";
 import { createConnectionQuality } from './connection-quality.js';
 import { createLoginMemory } from './login-memory.js';
 import { createLoginFeedback, connectFailureCategory, connectFailureIsDefinitive, loginFailure } from './login-errors.js';
@@ -100,7 +100,7 @@ import { describeCallConnection, initialCallConnection, reduceCallConnection, tr
 import { openContactKeyChangeDialog } from "./contact-key-change-ui.js";
 import { isActivationKey } from "./a11y.js";
 import { createLiveAnnouncementQueue } from "./live-announcer.js";
-import { dialogFocusableSelector, initModalSystem, mountServerDialog, closeServerDialogs } from "./modal.js";
+import { confirmDialog, dialogFocusableSelector, initModalSystem, mountServerDialog, closeServerDialogs } from "./modal.js";
 import { parseRuntimeObject } from "./runtime-json.js";
 
 import { initWorkspace, renderMember, renderVoiceHints, cancelMemberVolumePreview } from "./workspace-ui.js";
@@ -3900,6 +3900,36 @@ const updateStartupConfirmed = startupInitialized.then(async ready => {
     await window.go.main.App.ConfirmUpdateStartup();
     return true;
 }).catch(error => { console.warn("Update startup confirmation failed", error); return false; });
+
+// (90) noxa:// invites from the OS: confirmed here, then joined through the
+// login form exactly like a pasted invite. One prompt at a time.
+let deepLinkPrompt = false;
+async function openDeepLink(url) {
+    if (deepLinkPrompt) return;
+    deepLinkPrompt = true;
+    try {
+        await handleDeepLink(url, {
+            confirm: invite => confirmDialog({ title: t("midnight.deepLinkTitle"),
+                message: t("midnight.deepLinkConfirm", { channel: invite.channelID, address: invite.address }),
+                confirmLabel: t("midnight.deepLinkOpen"), cancelLabel: t("common.cancel") }),
+            join: async link => {
+                // A login already in flight would swallow this one: refuse it visibly.
+                if ($("login-connect").disabled) { toast(t("midnight.deepLinkBusy"), "warn"); return; }
+                showLogin();
+                // select() clears typed and saved passwords, so no secret for
+                // another server reaches the invite's server; the nickname stays.
+                await loginMemory.select({ addr: link, nickname: $("login-nick").value.trim(), display_name: $("login-display-name").value.trim() });
+                // The user retargeted the form during the lookup: leave it to them.
+                if ($("login-addr").value.trim() === link) void connectFromLogin();
+            },
+        });
+    } finally { deepLinkPrompt = false; }
+}
+window.runtime?.EventsOn?.("deep_link", url => { void openDeepLink(url); });
+// Drained even when the settings read failed, so later links are not held.
+void startupInitialized.catch(() => false).then(async () => {
+    await openDeepLink(await window.go.main.App.TakeDeepLink());
+}).catch(error => console.warn("Deep link failed", error));
 
 // C20: the first start after an update restart greets with the wordmark.
 void Promise.resolve(window.go?.main?.App?.StartedAfterUpdate?.())

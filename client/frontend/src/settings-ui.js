@@ -341,6 +341,24 @@ function selectOf(options, value, onchange) {
     return sel;
 }
 
+// (88) The Windows Run entry is the source of truth and, like window opacity,
+// changes immediately rather than with the dialog's Apply. Windows only.
+function startWithWindowsRow() {
+    // One write at a time; the switch then shows what the registry holds.
+    const toggle = checkbox(false, async (on) => {
+        toggle.disabled = true;
+        try { await window.go.main.App.SetStartWithWindows(on); } catch { /* the read below shows the real state */ }
+        try { toggle.checked = await window.go.main.App.GetStartWithWindows() === true; } catch { toggle.checked = !on; }
+        toggle.disabled = false;
+    });
+    const el = row(t("settings.start.with.windows"), toggle, "", { help: t("settings.start.with.windows.help") });
+    el.hidden = true;
+    void Promise.all([window.runtime?.Environment?.(), window.go?.main?.App?.GetStartWithWindows?.()])
+        .then(([environment, on]) => { el.hidden = environment?.platform !== "windows"; toggle.checked = on === true; })
+        .catch(() => {});
+    return el;
+}
+
 function pageGeneral() {
     const s = settings();
     const langSel = selectOf([["system", t("settings.system.default")], ["en", "English"], ["de", "Deutsch"]],
@@ -382,7 +400,8 @@ function pageGeneral() {
         group(t("settings.group.window"), "window",
             row(t("settings.always.on.top"), checkbox(s.always_on_top, (v) => { s.always_on_top = v; }), "", { key: "always_on_top" }),
             row(t("settings.close.to.tray"), checkbox(s.close_to_tray, (v) => { s.close_to_tray = v; }), "", { key: "close_to_tray" }),
-            row(t("settings.minimize.to.tray"), checkbox(s.minimize_to_tray, (v) => { s.minimize_to_tray = v; }), "", { key: "minimize_to_tray" })),
+            row(t("settings.minimize.to.tray"), checkbox(s.minimize_to_tray, (v) => { s.minimize_to_tray = v; }), "", { key: "minimize_to_tray" }),
+            startWithWindowsRow()),
         group(t("settings.group.updates"), "updates",
             row(t("settings.install.updates.at.startup"), checkbox(s.updates_auto_install !== false, (v) => { s.updates_auto_install = v; }), "saved", { key: "updates_auto_install", help: t("settings.install.updates.at.startup.help") }),
             row(t("settings.check.for.updates.at.startup"), checkbox(s.updates_auto_check !== false, (v) => { s.updates_auto_check = v; }), "startup", { key: "updates_auto_check" }),

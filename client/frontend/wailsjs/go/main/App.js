@@ -586,6 +586,10 @@ export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
 }
 
+export function GetStartWithWindows() {
+  return window['go']['main']['App']['GetStartWithWindows']();
+}
+
 export function GetUpdatePhase() {
   return window['go']['main']['App']['GetUpdatePhase']();
 }
@@ -1066,6 +1070,10 @@ export function SetServerConfigForTab(arg1, arg2) {
   return window['go']['main']['App']['SetServerConfigForTab'](arg1, arg2);
 }
 
+export function SetStartWithWindows(arg1) {
+  return window['go']['main']['App']['SetStartWithWindows'](arg1);
+}
+
 export function SetStatus(arg1, arg2) {
   return window['go']['main']['App']['SetStatus'](arg1, arg2);
 }
@@ -1164,6 +1172,10 @@ export function SwitchIdentity(arg1) {
 
 export function SystemCPUPercent() {
   return window['go']['main']['App']['SystemCPUPercent']();
+}
+
+export function TakeDeepLink() {
+  return window['go']['main']['App']['TakeDeepLink']();
 }
 
 export function TrayClearMentions() {

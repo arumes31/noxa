@@ -297,6 +297,8 @@ export function GetServerConfigForTab(arg1:string):Promise<netproto.ServerConfig
 
 export function GetSettings():Promise<main.Settings>;
 
+export function GetStartWithWindows():Promise<boolean>;
+
 export function GetUpdatePhase():Promise<string>;
 
 export function Greet(arg1:string):Promise<string>;
@@ -537,6 +539,8 @@ export function SetServerConfig(arg1:netproto.ServerConfig):Promise<netproto.Ser
 
 export function SetServerConfigForTab(arg1:string,arg2:netproto.ServerConfig):Promise<netproto.ServerConfig>;
 
+export function SetStartWithWindows(arg1:boolean):Promise<void>;
+
 export function SetStatus(arg1:string,arg2:string):Promise<string>;
 
 export function SetStatusForTab(arg1:string,arg2:string,arg3:string):Promise<string>;
@@ -586,6 +590,8 @@ export function SupportsStreamVideoQualityForTab(arg1:string):Promise<boolean>;
 export function SwitchIdentity(arg1:string):Promise<string>;
 
 export function SystemCPUPercent():Promise<number>;
+
+export function TakeDeepLink():Promise<string>;
 
 export function TrayClearMentions():Promise<void>;
 
