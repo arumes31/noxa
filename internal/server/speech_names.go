@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"time"
 
 	"noxa/internal/authorization"
 	"noxa/internal/netproto"
@@ -40,11 +41,14 @@ func (s *TCPServer) handleSpokenNameGet(ctx context.Context, client *Client, f *
 	}
 	origin := requestOrigin(ctx)
 	go func() {
-		key, wav, err := s.deps.SpeechNames.Clip(context.Background(), msg.Language, nickname)
+		key, wav, err := s.deps.SpeechNames.Clip(context.Background(), msg.Language, nickname,
+			func() bool { return client.requestBudget.allowSpeechSynthesis(time.Now()) })
 		if !client.isAuthed() {
 			return
 		}
 		switch {
+		case errors.Is(err, speechnames.ErrRateLimited):
+			_ = s.sendErrorFor(client, origin, errCodeUnavailable, "spoken names busy")
 		case errors.Is(err, speechnames.ErrUnspeakable):
 			_ = s.sendErrorFor(client, origin, errCodeNotFound, "nothing speakable in this name")
 		case err != nil:

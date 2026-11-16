@@ -1548,8 +1548,8 @@ and control characters, keeps at most 32 characters, synthesizes the name once
 per language (one synthesis at a time, 15 s limit, about 250 MB RAM while it
 runs) and masters it like the bundled clips. Clips are stored under
 `<file_root>/speech-names/<language>/`; a clip unused for 30 days is deleted
-and made again when needed. Requests share the per-session budget (40 burst,
-1 per second). Until a name is cached the client plays the generic
+and made again when needed. Each session may send 40 requests at once, then
+1 per second, and cause at most 10 new syntheses, then 1 per minute. Until a name is cached the client plays the generic
 announcement, so nothing waits for the server. Builds without the engine
 (`go build`, non-Docker installs) log once that spoken names are unavailable,
 do not advertise the feature, and clients keep the generic announcements.

@@ -35,6 +35,7 @@ var Languages = []string{"en", "de"}
 var (
 	ErrUnavailable = errors.New("speechnames: unavailable")
 	ErrUnspeakable = errors.New("speechnames: nothing speakable in this name")
+	ErrRateLimited = errors.New("speechnames: synthesis budget exhausted")
 	dedupeSuffix   = regexp.MustCompile(`#M?[0-9]+$`)
 )
 
@@ -114,8 +115,9 @@ func (s *Service) path(language, name string) string {
 }
 
 // Clip returns the WAV for nickname, synthesizing it on first use. Concurrent
-// requests for one clip share a single synthesis.
-func (s *Service) Clip(ctx context.Context, language, nickname string) (key string, wav []byte, err error) {
+// requests for one clip share a single synthesis; allowSynthesis (nil: always)
+// is asked only when a new synthesis would start.
+func (s *Service) Clip(ctx context.Context, language, nickname string, allowSynthesis func() bool) (key string, wav []byte, err error) {
 	if !s.Enabled() {
 		return "", nil, ErrUnavailable
 	}
@@ -131,6 +133,10 @@ func (s *Service) Clip(ctx context.Context, language, nickname string) (key stri
 	}
 	s.mu.Lock()
 	c, ok := s.inflight[key]
+	if !ok && allowSynthesis != nil && !allowSynthesis() {
+		s.mu.Unlock()
+		return "", nil, ErrRateLimited
+	}
 	if !ok {
 		c = &call{done: make(chan struct{})}
 		s.inflight[key] = c

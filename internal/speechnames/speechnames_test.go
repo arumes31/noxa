@@ -26,7 +26,7 @@ func TestNormalize(t *testing.T) {
 		"Joshi":                  "Joshi",
 		"  Joshi#2 ":             "Joshi",
 		"Joshi#M1":               "Joshi",
-		"Jo‍shi\u0007":           "Joshi",
+		"Jo\u200dshi\u0007":      "Joshi",
 		"🎮 Gamer 👍🏽":             "Gamer",
 		"Anna\tMaria":            "Anna Maria",
 		"Ölmützer":               "Ölmützer",
@@ -86,7 +86,7 @@ func TestClipSynthesizesOncePerName(t *testing.T) {
 	results := make(chan []byte, 4)
 	for _, nick := range []string{"Joshi", "Joshi#2", "Joshi#M1", "Joshi"} {
 		wg.Go(func() {
-			_, data, err := svc.Clip(t.Context(), "de", nick)
+			_, data, err := svc.Clip(t.Context(), "de", nick, nil)
 			if err != nil {
 				t.Error(err)
 			}
@@ -102,21 +102,21 @@ func TestClipSynthesizesOncePerName(t *testing.T) {
 			t.Fatalf("clip %d bytes", len(data))
 		}
 	}
-	if _, _, err := svc.Clip(t.Context(), "de", "Joshi"); err != nil || synth.calls.Load() != 1 {
+	if _, _, err := svc.Clip(t.Context(), "de", "Joshi", nil); err != nil || synth.calls.Load() != 1 {
 		t.Fatalf("calls = %d, err %v", synth.calls.Load(), err)
 	}
 	// Another language is another clip.
-	if _, _, err := svc.Clip(t.Context(), "en", "Joshi"); err != nil || synth.calls.Load() != 2 {
+	if _, _, err := svc.Clip(t.Context(), "en", "Joshi", nil); err != nil || synth.calls.Load() != 2 {
 		t.Fatalf("calls = %d, err %v", synth.calls.Load(), err)
 	}
-	if _, _, err := svc.Clip(t.Context(), "de", "🔥"); !errors.Is(err, ErrUnspeakable) || synth.calls.Load() != 2 {
+	if _, _, err := svc.Clip(t.Context(), "de", "🔥", nil); !errors.Is(err, ErrUnspeakable) || synth.calls.Load() != 2 {
 		t.Fatalf("unspeakable: %v", err)
 	}
 }
 
 func TestEngineFailureDisablesService(t *testing.T) {
 	svc := New(t.TempDir(), &fakeSynth{err: fmt.Errorf("%w: exec: not found", ErrEngine)}, zap.NewNop())
-	if _, _, err := svc.Clip(t.Context(), "de", "Joshi"); !errors.Is(err, ErrUnavailable) || svc.Enabled() {
+	if _, _, err := svc.Clip(t.Context(), "de", "Joshi", nil); !errors.Is(err, ErrUnavailable) || svc.Enabled() {
 		t.Fatalf("err %v enabled %v", err, svc.Enabled())
 	}
 	var disabled *Service
@@ -125,7 +125,7 @@ func TestEngineFailureDisablesService(t *testing.T) {
 	}
 	// A single bad clip does not turn the feature off.
 	svc = New(t.TempDir(), &fakeSynth{err: errors.New("odd name")}, zap.NewNop())
-	if _, _, err := svc.Clip(t.Context(), "de", "Joshi"); err == nil || !svc.Enabled() {
+	if _, _, err := svc.Clip(t.Context(), "de", "Joshi", nil); err == nil || !svc.Enabled() {
 		t.Fatalf("err %v enabled %v", err, svc.Enabled())
 	}
 }
@@ -134,7 +134,7 @@ func TestPruneDeletesClipsUnusedFor30Days(t *testing.T) {
 	dir := t.TempDir()
 	svc := New(dir, &fakeSynth{}, zap.NewNop())
 	for _, nick := range []string{"Old", "Fresh", "Touched"} {
-		if _, _, err := svc.Clip(t.Context(), "de", nick); err != nil {
+		if _, _, err := svc.Clip(t.Context(), "de", nick, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -244,9 +244,25 @@ func TestImageEngineSynthesizes(t *testing.T) {
 		t.Fatal("engine unavailable in the image")
 	}
 	start := time.Now()
-	_, data, err := svc.Clip(t.Context(), "de", "Joshi#2")
+	_, data, err := svc.Clip(t.Context(), "de", "Joshi#2", nil)
 	if err != nil || !bytes.HasPrefix(data, []byte("RIFF")) {
 		t.Fatalf("clip %d bytes, %v", len(data), err)
 	}
 	t.Logf("synthesized %d bytes (%.2f s audio) in %s", len(data), float64(len(data)-44)/2/SampleRate, time.Since(start))
+}
+
+func TestSynthesisAllowanceOnlyGuardsNewClips(t *testing.T) {
+	synth := &fakeSynth{}
+	svc := New(t.TempDir(), synth, zap.NewNop())
+	deny := func() bool { return false }
+	if _, _, err := svc.Clip(t.Context(), "de", "Joshi", deny); !errors.Is(err, ErrRateLimited) || synth.calls.Load() != 0 {
+		t.Fatalf("denied synthesis: %v, calls %d", err, synth.calls.Load())
+	}
+	if _, _, err := svc.Clip(t.Context(), "de", "Joshi", nil); err != nil {
+		t.Fatal(err)
+	}
+	// A stored clip needs no allowance.
+	if _, _, err := svc.Clip(t.Context(), "de", "Joshi", deny); err != nil || synth.calls.Load() != 1 {
+		t.Fatalf("cached clip: %v, calls %d", err, synth.calls.Load())
+	}
 }
