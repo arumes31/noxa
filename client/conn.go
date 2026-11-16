@@ -21,6 +21,7 @@ import (
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"noxa/internal/auth"
+	"noxa/internal/framecrypt"
 	"noxa/internal/netproto"
 	"noxa/internal/tlscert"
 	"noxa/internal/version"
@@ -118,6 +119,11 @@ type connManager struct {
 	// supportsMediaE2EE: the server requires end-to-end encrypted channel
 	// media and supports its key transport (Task 2).
 	supportsMediaE2EE bool
+	// Native screen share (native_share.go): server capability, the running
+	// share and the mirrored "self|screen" media keys of this session.
+	supportsNativeMediaPeer bool
+	nativeShare             *nativeShare
+	nativeKeyring           *framecrypt.Encryptor
 	// ratchetWake: the server's olm_pending doorbell wakes the drain loop.
 	ratchetWake        chan struct{}
 	authorizationModel string
@@ -826,6 +832,8 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.supportsConversationActivity = slices.Contains(resp.Capabilities, netproto.CapabilityConversationActivity)
 	m.supportsHandover = slices.Contains(resp.Capabilities, netproto.CapabilityHandover)
 	m.iceServers = resp.ICEServers
+	m.supportsNativeMediaPeer = slices.Contains(resp.Capabilities, netproto.CapabilityNativeMediaPeer)
+	m.nativeKeyring = nil
 	m.managedRelay = slices.Contains(resp.Capabilities, netproto.CapabilityManagedRelay)
 	m.recommendedVersion = resp.ClientRecommendedVersion
 	m.relayLease = netproto.RelayResponse{}
@@ -1506,6 +1514,10 @@ func (m *connManager) dispatchAccepted(conn net.Conn, epoch uint64, checkSource 
 			}
 		}
 	case netproto.MsgICECandidate:
+		var candidate netproto.ICECandidate
+		if netproto.Decode(f, &candidate) == nil && m.routeNativeCandidate(candidate) {
+			return
+		}
 		m.emit("ice", string(f.Payload))
 	case netproto.MsgWebRTCOffer:
 		m.emit("offer", string(f.Payload))

@@ -33,10 +33,10 @@ const (
 )
 
 // Signaling carries the native peer's SDP and ICE over the control
-// connection; implementations set Peer = netproto.PeerNative.
+// connection. The server never offers to the native peer: the client offers,
+// the server answers; candidates flow both ways tagged Peer = "native".
 type Signaling interface {
 	Offer(netproto.WebRTCOffer) (netproto.WebRTCAnswer, error)
-	Answer(netproto.WebRTCAnswer) error
 	Candidate(netproto.ICECandidate) error
 }
 
@@ -199,21 +199,6 @@ func (s *Sender) negotiate() error {
 		return err
 	}
 	return s.pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: answer.SDP})
-}
-
-// HandleOffer answers a server renegotiation offer for the native peer.
-func (s *Sender) HandleOffer(sdp string) error {
-	if err := s.pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: sdp}); err != nil {
-		return err
-	}
-	answer, err := s.pc.CreateAnswer(nil)
-	if err != nil {
-		return err
-	}
-	if err := s.pc.SetLocalDescription(answer); err != nil {
-		return err
-	}
-	return s.cfg.Signaling.Answer(netproto.WebRTCAnswer{SDP: answer.SDP, Peer: netproto.PeerNative})
 }
 
 // AddCandidate adds a remote (server) ICE candidate.

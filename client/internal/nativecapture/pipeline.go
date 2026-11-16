@@ -77,3 +77,17 @@ func outputSize(w, h, maxW, maxH int) (int, int) {
 	ow, oh := int(float64(w)*scale)&^1, int(float64(h)*scale)&^1
 	return max(ow, 2), max(oh, 2)
 }
+
+// Window is one capturable top-level window.
+type Window struct {
+	Handle uint64 `json:"handle,string"`
+	Title  string `json:"title"`
+}
+
+// Monitor is one display, in EnumDisplayMonitors order.
+type Monitor struct {
+	Index   int  `json:"index"`
+	Width   int  `json:"width"`
+	Height  int  `json:"height"`
+	Primary bool `json:"primary"`
+}

@@ -38,20 +38,6 @@ type monitorInfo struct {
 	primary bool
 }
 
-// Window is one capturable top-level window.
-type Window struct {
-	Handle uint64 `json:"handle,string"`
-	Title  string `json:"title"`
-}
-
-// Monitor is one display, in EnumDisplayMonitors order.
-type Monitor struct {
-	Index   int  `json:"index"`
-	Width   int  `json:"width"`
-	Height  int  `json:"height"`
-	Primary bool `json:"primary"`
-}
-
 func onMonitor(handle, _, _, _ uintptr) uintptr {
 	info := struct {
 		Size          uint32

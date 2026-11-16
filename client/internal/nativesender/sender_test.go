@@ -72,8 +72,6 @@ func (f *fakeServer) Offer(offer netproto.WebRTCOffer) (netproto.WebRTCAnswer, e
 	return netproto.WebRTCAnswer{SDP: answer.SDP, Peer: netproto.PeerNative}, nil
 }
 
-func (f *fakeServer) Answer(netproto.WebRTCAnswer) error { return nil }
-
 func (f *fakeServer) Candidate(c netproto.ICECandidate) error {
 	if c.Peer != netproto.PeerNative {
 		return errors.New("candidate without native peer tag")
