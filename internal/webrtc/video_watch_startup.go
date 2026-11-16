@@ -189,8 +189,6 @@ func (r *Router) flushWatchStartup(subscriber string, peer *PeerConnectionWrappe
 				continue
 			}
 		}
-		writer := r.rtcpWriters[key.publisher]
-
 		rid := ""
 		ssrc := r.videoSources[key.publisher][key.slot][rid]
 		if ssrc == 0 {
@@ -207,6 +205,7 @@ func (r *Router) flushWatchStartup(subscriber string, peer *PeerConnectionWrappe
 		}
 		// No known source can be requested. Initial publisher activation and the
 		// existing first-delta recovery remain responsible for this case.
+		writer := r.rtcpWriterLocked(key.publisher, key.slot, rid)
 		if writer == nil || ssrc == 0 {
 			watch.startupPending = false
 			r.watches[key] = watch

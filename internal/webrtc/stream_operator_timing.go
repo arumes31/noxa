@@ -68,7 +68,7 @@ func (r *Router) streamTiming(request StreamTimingRequest, action string, read f
 		r.mu.RUnlock()
 		return nil, ErrStreamRouteUnavailable
 	}
-	peer := r.pubPeers[request.PublisherID]
+	peer := r.publisherPeerLocked(request.PublisherID, request.Slot)
 	input := r.videoIngress[videoIngressKey{request.PublisherID, request.Slot, route.RID}]
 	valid := peer != nil && peer == routePeer && input != nil && peer.upstreamFeedback != nil && r.publications[publicationKey{request.PublisherID, request.Slot}] == request.Generation
 	var inputStarted time.Time
@@ -97,7 +97,7 @@ func (r *Router) streamTiming(request StreamTimingRequest, action string, read f
 			return false, false
 		}
 		defer r.watchMu.RUnlock()
-		if r.pubPeers[request.PublisherID] != peer || r.clientChan[request.PublisherID] != route.ChannelID || r.publications[publicationKey{request.PublisherID, request.Slot}] != request.Generation || r.videoIngress[videoIngressKey{request.PublisherID, request.Slot, route.RID}] != input || r.videoSources[request.PublisherID][request.Slot][route.RID] != request.SSRC {
+		if r.publisherPeerLocked(request.PublisherID, request.Slot) != peer || r.clientChan[request.PublisherID] != route.ChannelID || r.publications[publicationKey{request.PublisherID, request.Slot}] != request.Generation || r.videoIngress[videoIngressKey{request.PublisherID, request.Slot, route.RID}] != input || r.videoSources[request.PublisherID][request.Slot][route.RID] != request.SSRC {
 			return false, true
 		}
 		if !input.mu.TryLock() {

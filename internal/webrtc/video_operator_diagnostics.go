@@ -37,7 +37,7 @@ func (r *Router) VideoOperatorDiagnostics() *netproto.VideoOperatorDiagnostics {
 			PublisherID: key.publisher, Slot: key.slot, Generation: r.publications[key], ChannelID: r.clientChan[key.publisher],
 			Layers: []netproto.VideoStreamLayerDiagnostics{}, Viewers: []netproto.VideoOperatorViewer{},
 		}
-		if peer := r.pubPeers[key.publisher]; peer != nil {
+		if peer := r.publisherPeerLocked(key.publisher, key.slot); peer != nil {
 			publication.UpstreamFeedback = peer.upstreamFeedback.snapshot(now)
 			publication.UpstreamReadTiming = peer.upstreamFeedback.readTimingSnapshot(now)
 		}
