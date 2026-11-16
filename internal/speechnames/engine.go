@@ -37,6 +37,7 @@ type Engine struct {
 	ModelDir string
 	Style    string // blended ST13 style file, written by NewEngine
 	FFmpeg   string
+	style    []byte
 }
 
 // NewEngine checks the engine files and writes the ST13 style into workDir.
@@ -66,7 +67,7 @@ func NewEngine(tts, modelDir, workDir string) (*Engine, error) {
 	if err := os.WriteFile(path, style, 0o600); err != nil {
 		return nil, err
 	}
-	return &Engine{TTS: tts, ModelDir: modelDir, Style: path, FFmpeg: ffmpeg}, nil
+	return &Engine{TTS: tts, ModelDir: modelDir, Style: path, FFmpeg: ffmpeg, style: style}, nil
 }
 
 // blendStyle is blended_style of tools/generate-supertonic-speech.py: the
@@ -129,6 +130,9 @@ func (e *Engine) ttsArgs(language, text, output string) []string {
 
 // Synthesize renders text and returns 24 kHz mono samples.
 func (e *Engine) Synthesize(ctx context.Context, language, text string) ([]float64, error) {
+	if _, err := os.Stat(e.Style); err != nil && e.style != nil {
+		_ = os.WriteFile(e.Style, e.style, 0o600) // the data volume was cleaned under us
+	}
 	raw, err := os.CreateTemp(filepath.Dir(e.Style), "raw-*.wav")
 	if err != nil {
 		return nil, err

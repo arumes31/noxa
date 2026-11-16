@@ -169,8 +169,12 @@ func (s *Service) generate(language, name, path string) ([]byte, error) {
 	}
 	samples, err := s.synth.Synthesize(ctx, language, name)
 	if errors.Is(err, ErrEngine) {
-		if !s.disabled.Swap(true) {
-			s.logger.Warn("spoken names disabled: speech engine failed", zap.Error(err))
+		// One odd name must not switch the feature off for everyone: only an
+		// engine that also fails a known word is broken.
+		probe, cancelProbe := context.WithTimeout(context.Background(), synthesisTimeout)
+		defer cancelProbe()
+		if _, probeErr := s.synth.Synthesize(probe, "en", "Test"); errors.Is(probeErr, ErrEngine) && !s.disabled.Swap(true) {
+			s.logger.Warn("spoken names disabled: speech engine failed", zap.Error(probeErr))
 		}
 		return nil, ErrUnavailable
 	}

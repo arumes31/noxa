@@ -61,8 +61,6 @@ export function spokenNameClip({ language, speaker, phrase }, app = window.go?.m
     }).catch(() => { if (spokenNames.get(key) === entry) spokenNames.delete(key); });
     return "";
 }
-// Members already in a channel I enter are fetched now, so their later leave
-// can already say the name (a departed session cannot be fetched).
 export function prefetchSpokenNames(clients, settings = V()?.state.settings) {
     if (!settings || settings.speech_names === false || settings.spoken_messages === false) return;
     const language = speechLanguage(settings, navigator.language);

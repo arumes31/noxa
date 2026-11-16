@@ -1502,6 +1502,15 @@ function syncOwnChannel({ audible = true, ownMove } = {}) {
     window.__noxaFiles?.onChannelChanged?.();
     renderTree();
     ensureVoiceForChannel();
+    prefetchChannelNames(channelID);
+}
+
+// Members already in a channel I enter are fetched now, so their later leave
+// can say the name (a departed session can no longer be fetched).
+function prefetchChannelNames(channelID) {
+    if (channelID > 0 && !actionSoundsSuppressed()) {
+        prefetchSpokenNames(state.clients.filter(client => client.channel_id === channelID && client.client_id !== state.myClientID));
+    }
 }
 
 // applyBlockAndContacts mutes blocked users locally and records contact
@@ -1684,7 +1693,7 @@ window.runtime.EventsOn("event", (json) => {
                 window.__noxaFiles?.onChannelChanged?.(); // (256) file browser follows the channel
                 recordRecentChannel(nextChannelID); // (320) recent channels
                 ensureVoiceForChannel();
-                if (nextChannelID > 0 && !actionSoundsSuppressed()) prefetchSpokenNames(state.clients.filter(client => client.channel_id === nextChannelID && client.client_id !== state.myClientID));
+                prefetchChannelNames(nextChannelID);
             } else if (c && nextChannelID === state.myChannelID && state.myChannelID !== 0
                 && previousRemoteChannelID !== nextChannelID) {
                 // A member back from an update or a drop rejoins its channel without a join cue.

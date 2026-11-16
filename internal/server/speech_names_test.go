@@ -31,11 +31,15 @@ func startSpeechEnv(t *testing.T, svc *speechnames.Service) *testEnv {
 	t.Helper()
 	backend := serverRoleFixture()
 	backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel, authorization.Connect}
+	// Channel 1 is hidden from @everyone (only the owner, user-uid, sees it).
+	backend.policy.Channels[0].Overrides = []authorization.RoleOverride{{RoleID: 10, Capability: authorization.ViewChannel, Effect: authorization.Deny}}
 	authority, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
-	return startTestEnvDeps(t, nil, nil, func(d *Deps) { d.Authority = authority; d.SpeechNames = svc })
+	env := startTestEnvDeps(t, nil, nil, func(d *Deps) { d.Authority = authority; d.SpeechNames = svc })
+	env.state.AddChannel(testChannel(1))
+	return env
 }
 
 func TestSpokenNamesOnlyForPresentSessions(t *testing.T) {
@@ -43,12 +47,12 @@ func TestSpokenNamesOnlyForPresentSessions(t *testing.T) {
 	env := startSpeechEnv(t, speechnames.New(t.TempDir(), synth, zap.NewNop()))
 	defer env.stop()
 	var pub [32]byte
-	asker, resp := dialAuthedX25519(t, env.addr, "user-uid", pub)
+	asker, resp := dialAuthedX25519(t, env.addr, "admin-uid", pub)
 	defer func() { _ = asker.Close() }()
 	if !slices.Contains(resp.Capabilities, netproto.CapabilitySpokenNames) {
 		t.Fatal("capability not advertised")
 	}
-	other, otherID := dialAuthed(t, env.addr, "admin-uid")
+	other, otherID := dialAuthed(t, env.addr, "user-uid")
 	defer func() { _ = other.Close() }()
 
 	for range 2 {
@@ -72,6 +76,23 @@ func TestSpokenNamesOnlyForPresentSessions(t *testing.T) {
 			t.Fatalf("%+v: %+v", request, got)
 		}
 	}
+	// A member the asker cannot see (hidden channel, invisible) is not voiced.
+	if err := env.state.MoveClient(otherID, 1); err != nil {
+		t.Fatal(err)
+	}
+	send(t, asker, netproto.MsgSpokenNameGet, netproto.SpokenNameGet{ClientID: otherID, Language: "de"})
+	if got := readError(t, asker); got.Code != errCodeNotFound {
+		t.Fatalf("hidden channel: %+v", got)
+	}
+	if err := env.state.LeaveChannel(otherID); err != nil {
+		t.Fatal(err)
+	}
+	env.state.SetStatus(otherID, "invisible", "")
+	send(t, asker, netproto.MsgSpokenNameGet, netproto.SpokenNameGet{ClientID: otherID, Language: "de"})
+	if got := readError(t, asker); got.Code != errCodeNotFound {
+		t.Fatalf("invisible: %+v", got)
+	}
+	env.state.SetStatus(otherID, "", "")
 	// Each session has its own request budget.
 	limited := false
 	for range 45 {

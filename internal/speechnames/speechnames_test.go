@@ -65,10 +65,14 @@ type fakeSynth struct {
 	calls   atomic.Int32
 	release chan struct{}
 	err     error
+	failFor string // only this text fails with err
 }
 
-func (f *fakeSynth) Synthesize(ctx context.Context, _, _ string) ([]float64, error) {
+func (f *fakeSynth) Synthesize(ctx context.Context, _, text string) ([]float64, error) {
 	f.calls.Add(1)
+	if f.failFor != "" && text != f.failFor {
+		return speech(), nil
+	}
 	if f.release != nil {
 		select {
 		case <-f.release:
@@ -123,10 +127,16 @@ func TestEngineFailureDisablesService(t *testing.T) {
 	if disabled.Enabled() {
 		t.Fatal("nil service enabled")
 	}
-	// A single bad clip does not turn the feature off.
-	svc = New(t.TempDir(), &fakeSynth{err: errors.New("odd name")}, zap.NewNop())
-	if _, _, err := svc.Clip(t.Context(), "de", "Joshi", nil); err == nil || !svc.Enabled() {
-		t.Fatalf("err %v enabled %v", err, svc.Enabled())
+	// A single bad clip does not turn the feature off, even when the CLI
+	// fails on it: the engine still voices a known word.
+	for _, synth := range []*fakeSynth{{err: errors.New("odd name"), failFor: "Joshi"}, {err: fmt.Errorf("%w: exit status 134", ErrEngine), failFor: "Joshi"}} {
+		svc = New(t.TempDir(), synth, zap.NewNop())
+		if _, _, err := svc.Clip(t.Context(), "de", "Joshi", nil); err == nil || !svc.Enabled() {
+			t.Fatalf("err %v enabled %v", err, svc.Enabled())
+		}
+		if _, _, err := svc.Clip(t.Context(), "de", "Mia", nil); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -243,12 +253,14 @@ func TestImageEngineSynthesizes(t *testing.T) {
 	if svc == nil {
 		t.Fatal("engine unavailable in the image")
 	}
-	start := time.Now()
-	_, data, err := svc.Clip(t.Context(), "de", "Joshi#2", nil)
-	if err != nil || !bytes.HasPrefix(data, []byte("RIFF")) {
-		t.Fatalf("clip %d bytes, %v", len(data), err)
+	for _, language := range Languages {
+		start := time.Now()
+		_, data, err := svc.Clip(t.Context(), language, "Joshi#2", nil)
+		if err != nil || !bytes.HasPrefix(data, []byte("RIFF")) {
+			t.Fatalf("%s clip %d bytes, %v", language, len(data), err)
+		}
+		t.Logf("%s: %d bytes (%.2f s audio) in %s", language, len(data), float64(len(data)-44)/2/SampleRate, time.Since(start))
 	}
-	t.Logf("synthesized %d bytes (%.2f s audio) in %s", len(data), float64(len(data)-44)/2/SampleRate, time.Since(start))
 }
 
 func TestSynthesisAllowanceOnlyGuardsNewClips(t *testing.T) {
