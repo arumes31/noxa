@@ -423,7 +423,13 @@ func (v *Voice) VideoWatchSession(subscriber string) uint64 {
 func (v *Voice) VideoPublications(subscriber string) []VideoPublication {
 	return v.router.VideoPublications(subscriber)
 }
-func (v *Voice) RevokeVideo(publisher, slot string) { v.router.RevokeVideo(publisher, slot) }
+func (v *Voice) RevokeVideo(publisher, slot string) {
+	v.router.RevokeVideo(publisher, slot)
+	if slot == SlotScreen {
+		// The native peer exists only to share the screen.
+		_ = v.CloseNativePeer(publisher)
+	}
+}
 
 // VideoWatchPairs lists clientID's active watches as {publisher, slot} and
 // the active watches of its publications as {subscriber, slot}, so a resumed
