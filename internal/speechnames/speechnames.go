@@ -27,6 +27,9 @@ const (
 	synthesisTimeout = 15 * time.Second
 	// Unused clips are deleted after this; a later fetch regenerates them.
 	Retention = 30 * 24 * time.Hour
+	// A name that failed to synthesize is not tried again for this long.
+	failureRetry = time.Hour
+	maxFailures  = 1024
 )
 
 // Languages lists the recorded announcement languages.
@@ -82,13 +85,14 @@ type Service struct {
 	slots    chan struct{} // concurrent syntheses
 	mu       sync.Mutex
 	inflight map[string]struct{}
+	failed   map[string]time.Time // key -> failure time, bounded by maxFailures
 	disabled atomic.Bool
 }
 
 // New stores clips under dir. It never fails: a broken engine turns the
 // feature off later.
 func New(dir string, synth Synthesizer, logger *zap.Logger) *Service {
-	return &Service{dir: dir, synth: synth, logger: logger, slots: make(chan struct{}, 1), inflight: map[string]struct{}{}}
+	return &Service{dir: dir, synth: synth, logger: logger, slots: make(chan struct{}, 1), inflight: map[string]struct{}{}, failed: map[string]time.Time{}}
 }
 
 // Open returns the service backed by the image's engine, or nil (disabled,
@@ -134,17 +138,26 @@ func (s *Service) Clip(language, nickname string, allowSynthesis func() bool) (k
 	if _, running := s.inflight[key]; running {
 		return key, nil, ErrPending
 	}
+	if at, failed := s.failed[key]; failed && time.Since(at) < failureRetry {
+		return key, nil, ErrUnavailable
+	}
 	if allowSynthesis != nil && !allowSynthesis() {
 		return "", nil, ErrRateLimited
 	}
 	s.inflight[key] = struct{}{}
 	go func() {
-		if err := s.generate(language, name, path); err != nil && !errors.Is(err, ErrUnavailable) {
+		err := s.generate(language, name, path)
+		if err != nil && !errors.Is(err, ErrUnavailable) {
 			s.logger.Debug("spoken name not synthesized", zap.Error(err))
 		}
 		s.mu.Lock()
+		defer s.mu.Unlock()
 		delete(s.inflight, key)
-		s.mu.Unlock()
+		// A name the engine or mastering rejects would fail the same way on
+		// every request; a timeout may only mean load, so it is retried.
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			s.rememberFailure(key, time.Now())
+		}
 	}()
 	return key, nil, ErrPending
 }
@@ -195,6 +208,24 @@ func (s *Service) generate(language, name, path string) error {
 		return err
 	}
 	return nil
+}
+
+// rememberFailure records a failed clip; the caller holds s.mu.
+func (s *Service) rememberFailure(key string, now time.Time) {
+	if len(s.failed) >= maxFailures {
+		for k, at := range s.failed {
+			if now.Sub(at) >= failureRetry {
+				delete(s.failed, k)
+			}
+		}
+	}
+	for k := range s.failed { // still full: drop an arbitrary entry
+		if len(s.failed) < maxFailures {
+			break
+		}
+		delete(s.failed, k)
+	}
+	s.failed[key] = now
 }
 
 // Touch marks the clips of nickname as used (a session with that name

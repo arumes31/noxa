@@ -292,3 +292,38 @@ func TestSynthesisAllowanceOnlyGuardsNewClips(t *testing.T) {
 		t.Fatalf("cached clip: %v, calls %d", err, synth.calls.Load())
 	}
 }
+
+func TestFailedNameIsNotRetriedForAnHour(t *testing.T) {
+	synth := &fakeSynth{err: errors.New("unusable audio"), failFor: "Joshi"}
+	svc := New(t.TempDir(), synth, zap.NewNop())
+	if _, err := clip(t, svc, "de", "Joshi"); err == nil {
+		t.Fatal("failed synthesis produced a clip")
+	}
+	// Later requests get a terminal answer without a new synthesis.
+	for range 3 {
+		if _, _, err := svc.Clip("de", "Joshi#2", nil); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("cached failure: %v", err)
+		}
+	}
+	if synth.calls.Load() != 1 || !svc.Enabled() {
+		t.Fatalf("calls %d, enabled %v", synth.calls.Load(), svc.Enabled())
+	}
+	// After an hour the name is tried again.
+	key := Key("de", "Joshi")
+	svc.mu.Lock()
+	svc.failed[key] = time.Now().Add(-failureRetry)
+	svc.mu.Unlock()
+	if _, _, err := svc.Clip("de", "Joshi", nil); !errors.Is(err, ErrPending) {
+		t.Fatalf("retry after an hour: %v", err)
+	}
+	// The cache stays bounded.
+	svc.mu.Lock()
+	for i := range maxFailures + 10 {
+		svc.rememberFailure(fmt.Sprint(i), time.Now())
+	}
+	size := len(svc.failed)
+	svc.mu.Unlock()
+	if size > maxFailures {
+		t.Fatalf("failure cache grew to %d", size)
+	}
+}

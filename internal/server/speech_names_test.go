@@ -73,7 +73,8 @@ func TestSpokenNamesOnlyForPresentSessions(t *testing.T) {
 		t.Fatalf("first reply %+v", first)
 	}
 	var data netproto.SpokenNameData
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+	// 200 ms keeps the polling well inside the request budget (40, then 1/s).
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(200 * time.Millisecond) {
 		if data = fetch(); !data.Pending || time.Now().After(deadline) {
 			break
 		}
