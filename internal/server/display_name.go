@@ -43,6 +43,7 @@ func (s *TCPServer) handleDisplayNameSet(ctx context.Context, client *Client, f 
 		}
 		client.mu.Lock()
 		client.Username = name
+		s.deps.SpeechNames.Touch(name)
 		client.mu.Unlock()
 		e := ctx.Value(roleLeaseKey{}).(roleLease).evaluator
 		s.refreshRolePublishers(e)

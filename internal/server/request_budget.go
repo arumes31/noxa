@@ -14,7 +14,7 @@ type requestBucket struct {
 }
 type sessionRequestBudget struct {
 	mu      sync.Mutex
-	buckets [7]requestBucket
+	buckets [9]requestBucket
 }
 
 func (b *sessionRequestBudget) allow(mt netproto.MessageType, now time.Time) bool {
@@ -38,10 +38,23 @@ func (b *sessionRequestBudget) allow(mt netproto.MessageType, now time.Time) boo
 		// time (each waits for its answer) on source changes, ICE restarts and
 		// up to two glare retries; member joins arrive as server offers.
 		class, burst, rate = 6, 64, 8
+	case netproto.MsgSpokenNameGet:
+		// One per member entering the channel; cached clips are cheap.
+		class, burst, rate = 7, 40, 1
 	case netproto.MsgSetStatus, netproto.MsgDisplayNameSet:
 		// Each change rebuilds a snapshot for every recipient.
 		class, burst, rate = 5, 5, 0.5
 	}
+	return b.take(class, burst, rate, now)
+}
+
+// allowSpeechSynthesis bounds the new name clips one session can cause (a
+// rename plus a request each), so it cannot use the server as a TTS service.
+func (b *sessionRequestBudget) allowSpeechSynthesis(now time.Time) bool {
+	return b.take(8, 10, 1.0/60, now)
+}
+
+func (b *sessionRequestBudget) take(class int, burst, rate float64, now time.Time) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	v := &b.buckets[class]

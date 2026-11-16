@@ -20,6 +20,7 @@ import (
 	"noxa/internal/metrics"
 	"noxa/internal/netproto"
 	"noxa/internal/recorder"
+	"noxa/internal/speechnames"
 	"noxa/internal/state"
 	"noxa/internal/store"
 	"noxa/internal/turn"
@@ -296,6 +297,9 @@ type Deps struct {
 	// entry with time-limited REST API credentials minted for the client's
 	// unique ID. Delivered in the auth response (446).
 	ICEServers func(clientUniqueID string) []netproto.ICEServer
+
+	// SpeechNames voices session names; nil or a failed engine disables it.
+	SpeechNames *speechnames.Service
 }
 
 // ResumableUploadBackend is implemented by file-transfer backends that can

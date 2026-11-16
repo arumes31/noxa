@@ -42,7 +42,7 @@ export const SETTINGS_CATEGORIES = Object.freeze([
     { id: "notifications", icon: "bell", rail: "more", keys: [
         "play_sounds", "sound_volume", "effects_enabled", "duck_effects_while_speaking", "spoken_messages",
         "speech_volume", "speech_language", "speech_connection", "speech_admin", "speech_removal",
-        "speech_permissions", "speech_channel", "speech_events", "event_sounds", "chat_notification_level",
+        "speech_permissions", "speech_names", "speech_channel", "speech_events", "event_sounds", "chat_notification_level",
         "notify_matrix", "windows_notifications", "native_notification_previews", "dnd_enabled", "dnd_from", "dnd_to", "notify_join_leave", "notify_connection",
         "warn_muted_talking", "warn_empty_channel",
     ] },

@@ -384,7 +384,7 @@ graph TD
 * **Windows overlay**: Individual active speakers with avatars and animation over the desktop or windowed/borderless games. Configure it in **Settings → Overlay**; local mute/deafen hides it. Exclusive-fullscreen games may cover the overlay.
 * **Windows notifications**: On Windows 10/11 the desktop app's native notifications (the matrix column "native") appear in the Action Center with an inline **Reply** box and **Mark as read**. A reply opens the conversation and is sent through its normal composer, so it gets exactly the same protection as typed text (end-to-end encryption in direct messages and private groups, the channel's own encryption in channels); an unsent draft is never replaced (the reply is appended to it). Mark as read clears the local unread count and, for private groups, the read marker, without sending a direct-message read receipt. Each conversation shows at most one toast, which disappears when you read the conversation. Settings → Notifications can switch to the classic tray balloon or hide sender and text ("New message"). Registration is per user (HKCU, AppUserModelID `noXa.Desktop`); no installer step or administrator rights are needed.
 * **Start with Windows and `noxa://` links**: Settings → General → Window → **Start noXa when Windows starts** adds a per-user startup entry (HKCU `Run`) that launches noXa minimized to the tray. On Windows the app registers the `noxa://` protocol for the current user, so clicking a channel invite (`noxa://<host>/invite/<channel>#<token>`) opens it in noXa — only after a confirmation naming the server and channel, then through the normal sign-in form. A second launch focuses the running window and hands over the link; the first start after an update runs without that single-instance lock until the next normal start.
-* **Notifications**: Per-event controls, volume and previews, with bundled English/German spoken announcements. Notification history links to the originating conversation and message when available, with server and identity checks. Same-server navigation leaves voice membership unchanged; opening another server asks first when switching would interrupt active voice, a call or a share. Events with speech use that recording without a duplicate beep. Playback follows the selected audio output device; no network TTS service is required.
+* **Notifications**: Per-event controls, volume and previews, with bundled English/German spoken announcements. Notification history links to the originating conversation and message when available, with server and identity checks. Same-server navigation leaves voice membership unchanged; opening another server asks first when switching would interrupt active voice, a call or a share. Events with speech use that recording without a duplicate beep. Playback follows the selected audio output device; no network TTS service is required. Announcements about other users can start with their name ("Joshi ist dem Channel beigetreten"): the server voices each name once with the same ST13 voice (see [Spoken names](#spoken-names)); **Announce names** in the speech settings turns this off.
 * **Dropped connections**: When a member's connection drops, the others hear "user lost the connection" instead of "left", and "user reconnected" when the same device comes back within two minutes, instead of "joined". Desktop and mobile apps tell the server before a deliberate disconnect, quit or sign-out, so only real drops are reported as lost; a reconnect that overlaps the old session is announced once. After your own connection is restored you hear only "Reconnected to the server": per-member cues stay quiet for eight seconds while the member list refills, and members who were already there before the drop reappear silently.
 * **Diagnostics**: A playback-health badge evaluates recent voice buffering, concealment and loss separately from ping. Client Info exposes visible members' ping and reported client version; owners and administrators can inspect recent voice history and correlated sender/SFU/receiver measurements. See [Operations](#operations).
 
@@ -884,6 +884,7 @@ and validation, [`config.yaml`](config.yaml) for a development example, and
 | `NOXA_TLS_CERT_FILE` / `NOXA_TLS_KEY_FILE` | empty | Custom certificate and key; both must be configured together |
 | `NOXA_FILE_TLS_ENABLED` | `true` | Enable TLS 1.3 on file transfers; disabling is development-only |
 | `NOXA_FILE_ROOT` | `./data/files` | Root storage path for uploaded channel files & avatars |
+| `NOXA_SPEECH_NAMES` | `true` | Voice session names for desktop announcements ([Spoken names](#spoken-names)); clips live under `<file_root>/speech-names`. Off by itself when the speech engine is missing |
 | `NOXA_FILE_MAX_CONNECTIONS` | `128` | Concurrent accepted file-transfer connections (1–10000) |
 | `NOXA_FILE_USER_QUOTA_MB` | `0` | Per-user storage quota across uploads and moves (`0` means unlimited) |
 | `NOXA_FILE_ORPHAN_CLEANUP` | `true` | Storage sweep, at most every six hours: removes upload leftovers (single-shot `.part-*` after 1 h, resumable `.part-r*` after 24 h) and blobs no files row references; never touches a referenced path, so deduplicated hard links stay intact |
@@ -1530,6 +1531,29 @@ connections (`tcp` or `ws`) by fixed reason: `eof`, `unexpected_eof`,
 connection flood; `protocol_error` and `frame_too_large` at incompatible or
 misbehaving clients.
 
+### Spoken names
+
+The Docker image contains the offline TTS engine used to record the bundled
+announcements: the sherpa-onnx v1.13.8 CLI (Apache-2.0) and the Supertonic 3
+int8 model (OpenRAIL-M weights), both verified at build time against the
+SHA-256 pins in `tools/voices/ST13.json`. The CLI is a glibc build; the image
+stays on Alpine and runs it through its own glibc loader under
+`/opt/noxa-speech`, used by nothing else. This adds about 172 MB to the image
+(rootfs 221 MB → 393 MB; compressed pull 90 MB → 225 MB).
+
+When a desktop client first needs a name, it asks the server by session ID;
+only sessions currently on the server and visible to the asker can be voiced,
+never free text. The server strips duplicate suffixes (`#2`, `#M1`), emoji
+and control characters, keeps at most 32 characters, synthesizes the name once
+per language (one synthesis at a time, 15 s limit, about 250 MB RAM while it
+runs) and masters it like the bundled clips. Clips are stored under
+`<file_root>/speech-names/<language>/`; a clip unused for 30 days is deleted
+and made again when needed. Each session may send 40 requests at once, then
+1 per second, and cause at most 10 new syntheses, then 1 per minute. Until a name is cached the client plays the generic
+announcement, so nothing waits for the server. Builds without the engine
+(`go build`, non-Docker installs) log once that spoken names are unavailable,
+do not advertise the feature, and clients keep the generic announcements.
+
 ### Voice diagnostics
 
 **Client Info** shows ping and reported client version for visible members.
@@ -1664,6 +1688,13 @@ Bundled third-party assets retain their own terms. In particular, German spoken
 announcements include CC BY 4.0 attribution; see the
 [speech asset notes](client/frontend/src/assets/speech/README.md) and bundled
 [audio notices](client/frontend/public/noxa-audio-licenses.txt).
+The server image redistributes the Supertonic 3 model under the BigScience
+OpenRAIL-M license, including its use restrictions
+([docker/speech/SUPERTONIC-3-OPENRAIL-M-LICENSE.txt](docker/speech/SUPERTONIC-3-OPENRAIL-M-LICENSE.txt),
+with the sherpa-onnx (Apache-2.0) and ONNX Runtime (MIT) licenses in
+`/opt/noxa-speech/licenses` of the image), and the Debian glibc and C++ runtime
+libraries (LGPL and GPL with runtime exception; copyright files beside them in
+`/opt/noxa-speech/lib`).
 
 ### Data retention
 
@@ -1672,6 +1703,7 @@ The server runs bounded housekeeping at startup and every five minutes:
 - Delivered offline DMs: 30 days after delivery. Undelivered messages are retained.
 - Server recordings: 30 days after the recording ends. Active recordings and processes still cleaning up are retained. Recognizable abandoned recording sets use their last manifest write time. Corrupt manifests and unrelated files are preserved for operator inspection.
 - Audit events: 180 days, including daily aggregates. Daily aggregates retain the cutoff calendar day in UTC.
+- Spoken name clips: 30 days after their last use (a fetch, or a session connecting or renaming with that name).
 
 Each pass removes at most 500 rows per database table and 128 recording files, and scans at most 128 recording directory entries. Existing backlogs therefore expire gradually. Housekeeping uses indexed queries, skips locked rows, has a bounded execution context, and runs independently of chat and audio requests. Shutdown cancels and joins the worker before closing storage. These limits apply to the live database and recording directory; independently retained backups are not rewritten.
 

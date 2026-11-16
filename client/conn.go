@@ -105,6 +105,7 @@ type connManager struct {
 	supportsDevices     bool
 	supportsWebLogin    bool
 	supportsLinkPreview bool
+	supportsSpokenNames bool
 	supportsDMDevices   bool                      // per-device direct messages (dm_devices_v1)
 	activityReportedAt  time.Time                 // last input report (devices_v1)
 	deviceLinks         map[string]deviceLinkKeys // links created by this session
@@ -803,6 +804,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.supportsDevices = slices.Contains(resp.Capabilities, netproto.CapabilityDevices)
 	m.supportsWebLogin = slices.Contains(resp.Capabilities, netproto.CapabilityWebLogin)
 	m.supportsLinkPreview = slices.Contains(resp.Capabilities, netproto.CapabilityLinkPreview)
+	m.supportsSpokenNames = slices.Contains(resp.Capabilities, netproto.CapabilitySpokenNames)
 	m.supportsDMDevices = m.supportsDevices && slices.Contains(resp.Capabilities, netproto.CapabilityDMDevices)
 	m.applySecureAuthLocked(resp, authMsg.Anonymous)
 	m.activityReportedAt = time.Time{}
@@ -1276,7 +1278,7 @@ func canDrainRequest(send netproto.MessageType) bool {
 	switch send {
 	case netproto.MsgLinkPreviewRequest, netproto.MsgRelayRequest, netproto.MsgAvatarGet, netproto.MsgClientInfoQuery, netproto.MsgServerInfoQuery,
 		netproto.MsgServerIconGet, netproto.MsgServerBannerGet, netproto.MsgChannelIconGet,
-		netproto.MsgEmojiGet:
+		netproto.MsgEmojiGet, netproto.MsgSpokenNameGet:
 		return true
 	default:
 		return false

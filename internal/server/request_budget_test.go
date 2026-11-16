@@ -45,3 +45,19 @@ func TestSessionRequestBudgets(t *testing.T) {
 		t.Fatal("budget did not refill")
 	}
 }
+
+func TestSpeechSynthesisBudgetIsSeparateAndSlow(t *testing.T) {
+	var b sessionRequestBudget
+	now := time.Now()
+	for range 10 {
+		if !b.allowSpeechSynthesis(now) {
+			t.Fatal("burst denied")
+		}
+	}
+	if b.allowSpeechSynthesis(now) || !b.allow(netproto.MsgSpokenNameGet, now) {
+		t.Fatal("synthesis budget not exhausted, or it consumed request tokens")
+	}
+	if b.allowSpeechSynthesis(now.Add(30*time.Second)) || !b.allowSpeechSynthesis(now.Add(61*time.Second)) {
+		t.Fatal("synthesis refills about once a minute")
+	}
+}

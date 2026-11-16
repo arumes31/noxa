@@ -179,6 +179,7 @@ services:
 
       # --- Writable data on the named volume (read_only root fs) ---
       NOXA_FILE_ROOT: "/data/files"
+      NOXA_SPEECH_NAMES: ${NOXA_SPEECH_NAMES:-true}
       NOXA_RECORDING_DIR: "/data/recordings"
       # TLS cert persists on the volume (stable TOFU fingerprint across restarts)
       NOXA_TLS_DIR: "/data/tls"

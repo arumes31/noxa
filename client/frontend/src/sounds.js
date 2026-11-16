@@ -33,7 +33,50 @@ export const soundEngine = new SoundEngine({
 });
 export const speechQueue = new SpeechQueue({ engine: soundEngine, assets: SPEECH_ASSETS,
     getState: () => V()?.state, isDND: settings => !!window.__noxaPolish?.dndActive?.(settings),
-    systemLanguage: () => navigator.language || "en" });
+    systemLanguage: () => navigator.language || "en", nameClip: spokenNameClip });
+
+// Spoken names fetched from the server this session: tab, language and
+// nickname -> engine sound ID, or a pending fetch.
+const spokenNames = new Map();
+export function spokenNameClip({ language, speaker, phrase }, app = window.go?.main?.App, engine = soundEngine,
+    schedule = (fn, ms) => setTimeout(fn, ms)) {
+    const tabID = V()?.state?.activeTabID || "";
+    const key = JSON.stringify([tabID, language, speaker.nickname || ""]);
+    const known = spokenNames.get(key);
+    if (known?.id) {
+        if (engine.buffers.has(known.id) && engine.buffers.has(phrase)) return known.id;
+        void engine.preload([known.id, phrase]);
+        return "";
+    }
+    if (known || !app?.GetSpokenNameForTab) return "";
+    while (spokenNames.size >= 256) spokenNames.delete(spokenNames.keys().next().value);
+    const entry = { pending: true };
+    spokenNames.set(key, entry);
+    // The server answers at once; a name it is still voicing is asked again a
+    // few times. A failed fetch (no clip, user gone, older server) is retried
+    // by a later announcement.
+    const fetchName = attempt => Promise.resolve(app.GetSpokenNameForTab(tabID, speaker.client_id, language)).then(data => {
+        // The session may have been renamed since: never file a clip under another name.
+        if (data.nickname !== speaker.nickname) throw new Error("renamed");
+        if (data.pending) {
+            if (attempt >= 6) throw new Error("still pending");
+            schedule(() => fetchName(attempt + 1), 3000);
+            return undefined;
+        }
+        const id = "speech_name_" + data.key;
+        engine.definitions[id] = { duration: 1, priority: 1, cooldown: 0, category: "Speech" };
+        engine.urls[id] = "data:audio/wav;base64," + data.data_base64;
+        entry.id = id;
+        return engine.preload([id, phrase]);
+    }).catch(() => { if (spokenNames.get(key) === entry) spokenNames.delete(key); });
+    void fetchName(1);
+    return "";
+}
+export function prefetchSpokenNames(clients, settings = V()?.state.settings) {
+    if (!settings || settings.speech_names === false || settings.spoken_messages === false) return;
+    const language = speechLanguage(settings, navigator.language);
+    for (const speaker of clients) spokenNameClip({ language, speaker, phrase: "speech_" + language + "_user_leave_named" });
+}
 export function playSpeech(event, options) { return speechQueue.enqueue(event, options); }
 export function playAlert(event, options) {
     stopPreviews();

@@ -656,3 +656,92 @@ test("rapid full mute replaces an already playing microphone confirmation and la
     assert.equal(f.queue.current.event, "sound_muted");
     f.queue.reconcile(); assert.equal(f.queue.current.event, "sound_muted");
 });
+
+test("a cached spoken name plays before the phrase without Benutzer; otherwise the generic clip plays now", () => {
+    const f = fixture(), asked = [];
+    let cached = "";
+    f.queue.nameClip = request => { asked.push(request); return cached; };
+    f.state.settings.speech_language = "de";
+    const joshi = { client_id: "c7", nickname: "Joshi" };
+    f.queue.enqueue("user_join", { delay: 0, speaker: joshi });
+    assert.equal(f.played[0].id, "speech_de_user_join");
+    assert.deepEqual(asked, [{ language: "de", speaker: joshi, phrase: "speech_de_user_join_named" }]);
+    f.played[0].options.onEnded(); f.advance(2000);
+    cached = "speech_name_abc";
+    f.queue.enqueue("user_leave", { delay: 0, speaker: joshi });
+    assert.equal(f.played[1].id, "speech_name_abc");
+    assert.equal(f.queue.current.id, "speech_name_abc");
+    f.played[1].options.onEnded();
+    assert.equal(f.played[2].id, "speech_de_user_leave_named");
+    f.played[2].options.onEnded();
+    assert.equal(f.queue.current, null);
+    // Announcements about yourself and events without a named phrase stay generic.
+    f.queue.enqueue("channel_join", { delay: 0, speaker: joshi });
+    assert.equal(f.played[3].id, "speech_de_channel_join");
+    assert.equal(asked.length, 2);
+});
+
+test("announce names off keeps the generic clip and fetches nothing", () => {
+    const f = fixture();
+    let asked = 0;
+    f.queue.nameClip = () => { asked++; return "speech_name_abc"; };
+    f.state.settings.speech_names = false;
+    f.queue.enqueue("user_kicked", { delay: 0, speaker: { client_id: "c7", nickname: "Joshi" }, eventKey: "k" });
+    assert.match(f.played[0].id, /^speech_en_user_kicked(_v\d\d)?$/);
+    assert.equal(asked, 0);
+});
+
+test("spoken names are fetched once per tab, language and nickname and used only once decoded", async () => {
+    globalThis.window ??= {};
+    const { spokenNameClip } = await import("../src/sounds.js");
+    const requests = [];
+    const app = { GetSpokenNameForTab: (...args) => { requests.push(args); return Promise.resolve({ key: "k1", nickname: args[1] === "c7" ? "Joshi" : "Mia", data_base64: "UklGRg==" }); } };
+    const engine = { definitions: {}, urls: {}, buffers: new Set(), preload: async ids => { for (const id of ids) engine.buffers.add(id); } };
+    const request = { language: "de", speaker: { client_id: "c7", nickname: "Joshi" }, phrase: "speech_de_user_join_named" };
+    assert.equal(spokenNameClip(request, app, engine), "");
+    assert.equal(spokenNameClip(request, app, engine), "");
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(requests.length, 1);
+    assert.deepEqual(requests[0].slice(1), ["c7", "de"]);
+    assert.equal(engine.urls.speech_name_k1, "data:audio/wav;base64,UklGRg==");
+    assert.equal(spokenNameClip(request, app, engine), "speech_name_k1");
+    const failing = { GetSpokenNameForTab: () => Promise.reject(new Error("gone")) };
+    const other = { ...request, speaker: { client_id: "c8", nickname: "Mia" } };
+    assert.equal(spokenNameClip(other, failing, engine), "");
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(spokenNameClip(other, app, engine), "", "a failed fetch is retried later");
+    assert.equal(requests.length, 2);
+});
+
+test("a name still being voiced is asked again; a clip for a renamed session is not cached", async () => {
+    globalThis.window ??= {};
+    const { spokenNameClip } = await import("../src/sounds.js");
+    const engine = { definitions: {}, urls: {}, buffers: new Set(), preload: async ids => { for (const id of ids) engine.buffers.add(id); } };
+    const replies = [{ nickname: "Ada", pending: true }, { nickname: "Ada", key: "k2", data_base64: "UklGRg==" }];
+    const retries = [];
+    const app = { GetSpokenNameForTab: () => Promise.resolve(replies.shift()) };
+    const request = { language: "de", speaker: { client_id: "c9", nickname: "Ada" }, phrase: "speech_de_user_join_named" };
+    assert.equal(spokenNameClip(request, app, engine, fn => retries.push(fn)), "");
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(retries.length, 1);
+    assert.equal(spokenNameClip(request, app, engine, fn => retries.push(fn)), "", "no duplicate fetch while pending");
+    retries[0]();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(spokenNameClip(request, app, engine), "speech_name_k2");
+    // Alice was renamed to Bob before the reply: the clip is not filed under Alice.
+    const renamed = { GetSpokenNameForTab: () => Promise.resolve({ nickname: "Bob", key: "k3", data_base64: "UklGRg==" }) };
+    const alice = { ...request, speaker: { client_id: "c10", nickname: "Alice" } };
+    spokenNameClip(alice, renamed, engine);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(engine.urls.speech_name_k3, undefined);
+    assert.equal(spokenNameClip(alice, renamed, engine), "");
+});
+
+test("a queued name is not played after Announce names is turned off", () => {
+    const f = fixture();
+    f.queue.nameClip = () => "speech_name_abc";
+    f.queue.enqueue("user_join", { delay: 150, speaker: { client_id: "c7", nickname: "Joshi" } });
+    f.state.settings.speech_names = false;
+    f.tick(150);
+    assert.equal(f.played[0].id, "speech_en_user_join");
+});

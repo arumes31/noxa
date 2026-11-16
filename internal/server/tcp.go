@@ -1261,6 +1261,8 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		return s.sendErrorFor(client, mt, errCodePermissionDenied, "accept the server rules before continuing")
 	}
 	switch mt {
+	case netproto.MsgSpokenNameGet:
+		return s.handleSpokenNameGet(ctx, client, f)
 	case netproto.MsgLinkPreviewRequest:
 		return s.handleLinkPreview(ctx, client, f)
 	case netproto.MsgRelayRequest:

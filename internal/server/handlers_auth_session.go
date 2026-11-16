@@ -184,6 +184,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 			}
 		}
 		client.setIdentity(id.uniqueID, id.nickname, id.userID, id.bot)
+		s.deps.SpeechNames.Touch(id.nickname) // keeps this name's clips from retention
 		s.publishAuthenticatedSession(ctx, client, id)
 		s.releaseHandoverSlot(client) // now counted as a session, atomically
 		if token := client.handoverToken(); token != "" && parked != nil {
@@ -255,6 +256,9 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		resp.ResumeToken = s.resume.issue(client, id.uniqueID, resumeBinding(id.uniqueID, client.sessionKey()))
 	}
 	resp.Resumed = parked != nil
+	if s.deps.SpeechNames.Enabled() {
+		resp.Capabilities = append(resp.Capabilities, netproto.CapabilitySpokenNames)
+	}
 	if s.deps.Relay != nil {
 		resp.Capabilities = append(resp.Capabilities, netproto.CapabilityManagedRelay)
 	}

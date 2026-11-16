@@ -78,6 +78,9 @@ type Config struct {
 	// It also applies to owners and Administrators; zero means unlimited.
 	FileUserQuotaMB int64 `mapstructure:"file_user_quota_mb"`
 	FileMaxSizeMB   int64 `mapstructure:"file_max_size_mb"`
+	// SpeechNames voices session names in desktop announcements, generated
+	// once per name under <file_root>/speech-names (needs the image's engine).
+	SpeechNames bool `mapstructure:"speech_names"`
 	// Quiet hours lift file_max_kbps between these local hours (276), so
 	// backups and big uploads run at full speed when nobody is listening.
 	// Both are 0-23; equal values disable the window. A start after the end
@@ -349,6 +352,7 @@ func newConfigViper() *viper.Viper {
 	v.SetDefault("query_ssh_host_key", "./data/keys/query_ssh_host.key")
 	v.SetDefault("file_addr", DefaultFileAddr)
 	v.SetDefault("file_root", "./data/files")
+	v.SetDefault("speech_names", true)
 	v.SetDefault("file_max_kbps", 0)
 	v.SetDefault("file_max_connections", 128)
 	v.SetDefault("file_channel_quota_mb", 0)
