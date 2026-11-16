@@ -166,7 +166,7 @@ export function collectVideoSenders(stats, previousStats, sources = [], previous
             quality_reason: ["none", "cpu", "bandwidth", "other"].includes(stat.qualityLimitationReason) ? stat.qualityLimitationReason : "unknown",
             codec: codecs.has(codec) ? codec : "unknown",
             encoder_implementation: encoderImplementation(stat.encoderImplementation),
-            encoder_vendor: encoderVendor(stat.encoderImplementation),
+            encoder_vendor: encoderVendor(stat.encoderImplementation), capture_backend: "browser",
             power_efficient: typeof stat.powerEfficientEncoder === "boolean" ? stat.powerEfficientEncoder : null,
             frames_encoded: counter(stat.framesEncoded), frames_sent: counter(stat.framesSent), packets_sent: counter(stat.packetsSent),
             bytes_sent: counter(stat.bytesSent),

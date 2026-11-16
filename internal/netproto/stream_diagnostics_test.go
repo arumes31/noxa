@@ -11,6 +11,11 @@ func TestVideoSenderTelemetryIsBoundedAndAllowlisted(t *testing.T) {
 	if !valid.Valid() {
 		t.Fatal("valid video sender rejected")
 	}
+	for _, backend := range []string{"native", "browser"} {
+		if r := valid; func() bool { r.CaptureBackend = backend; return !r.Valid() }() {
+			t.Fatalf("capture backend %q rejected", backend)
+		}
+	}
 	for _, change := range []func(*VideoSenderDiagnostics){
 		func(r *VideoSenderDiagnostics) { r.SSRC = 0 },
 		func(r *VideoSenderDiagnostics) { r.Generation = 0 },
@@ -19,6 +24,7 @@ func TestVideoSenderTelemetryIsBoundedAndAllowlisted(t *testing.T) {
 		func(r *VideoSenderDiagnostics) { r.Codec = "192.0.2.1" },
 		func(r *VideoSenderDiagnostics) { r.EncoderImplementation = "private device name" },
 		func(r *VideoSenderDiagnostics) { r.QualityReason = "arbitrary text" },
+		func(r *VideoSenderDiagnostics) { r.CaptureBackend = "gpu" },
 		func(r *VideoSenderDiagnostics) { v := math.NaN(); r.EncodedFPS = &v },
 		func(r *VideoSenderDiagnostics) { v := 241.0; r.CaptureFPS = &v },
 		func(r *VideoSenderDiagnostics) { v := -1.0; r.BytesSent = &v },
