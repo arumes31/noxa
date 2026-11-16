@@ -278,4 +278,3 @@ func TestNativeAndBrowserScreenClaims(t *testing.T) {
 		t.Fatalf("superseded native declaration kept: %v", r.nativeSlots["pub"])
 	}
 }
-

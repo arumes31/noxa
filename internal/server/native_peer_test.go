@@ -115,7 +115,9 @@ func TestNativePeerSignaling(t *testing.T) {
 
 	for _, unknown := range []func(){
 		func() { send(t, conn, netproto.MsgICECandidate, netproto.ICECandidate{Candidate: "c", Peer: "other"}) },
-		func() { send(t, conn, netproto.MsgWebRTCAnswer, netproto.WebRTCAnswer{SDP: "a", Peer: netproto.PeerNative}) },
+		func() {
+			send(t, conn, netproto.MsgWebRTCAnswer, netproto.WebRTCAnswer{SDP: "a", Peer: netproto.PeerNative})
+		},
 		func() { send(t, conn, netproto.MsgWebRTCOffer, netproto.WebRTCOffer{SDP: "o", Peer: "other"}) },
 	} {
 		unknown()
