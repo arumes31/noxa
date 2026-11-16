@@ -14,11 +14,16 @@ type SpokenNameGet struct {
 	Language string `json:"language"` // en | de
 }
 
-// SpokenNameData answers SpokenNameGet. Key identifies the clip (language and
+// SpokenNameData answers SpokenNameGet at once. Key identifies the clip (language and
 // normalized name), so clients can cache it across sessions with that name.
 type SpokenNameData struct {
-	ClientID   string `json:"client_id"`
-	Language   string `json:"language"`
+	ClientID string `json:"client_id"`
+	Language string `json:"language"`
+	// Nickname is the name the clip voices, so a client that asked before a
+	// rename does not file the clip under the old name.
+	Nickname   string `json:"nickname"`
 	Key        string `json:"key"`
-	DataBase64 string `json:"data_base64"`
+	DataBase64 string `json:"data_base64,omitempty"`
+	// Pending: the clip is being synthesized; ask again later.
+	Pending bool `json:"pending,omitempty"`
 }

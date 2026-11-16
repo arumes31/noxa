@@ -36,6 +36,7 @@ var (
 	ErrUnavailable = errors.New("speechnames: unavailable")
 	ErrUnspeakable = errors.New("speechnames: nothing speakable in this name")
 	ErrRateLimited = errors.New("speechnames: synthesis budget exhausted")
+	ErrPending     = errors.New("speechnames: clip is being synthesized")
 	dedupeSuffix   = regexp.MustCompile(`#M?[0-9]+$`)
 )
 
@@ -73,12 +74,6 @@ type Synthesizer interface {
 	Synthesize(ctx context.Context, language, text string) ([]float64, error)
 }
 
-type call struct {
-	done chan struct{}
-	data []byte
-	err  error
-}
-
 // Service generates, caches and prunes name clips. A nil *Service is disabled.
 type Service struct {
 	dir      string
@@ -86,14 +81,14 @@ type Service struct {
 	logger   *zap.Logger
 	slots    chan struct{} // concurrent syntheses
 	mu       sync.Mutex
-	inflight map[string]*call
+	inflight map[string]struct{}
 	disabled atomic.Bool
 }
 
 // New stores clips under dir. It never fails: a broken engine turns the
 // feature off later.
 func New(dir string, synth Synthesizer, logger *zap.Logger) *Service {
-	return &Service{dir: dir, synth: synth, logger: logger, slots: make(chan struct{}, 1), inflight: map[string]*call{}}
+	return &Service{dir: dir, synth: synth, logger: logger, slots: make(chan struct{}, 1), inflight: map[string]struct{}{}}
 }
 
 // Open returns the service backed by the image's engine, or nil (disabled,
@@ -114,10 +109,11 @@ func (s *Service) path(language, name string) string {
 	return filepath.Join(s.dir, language, Key(language, name)+".wav")
 }
 
-// Clip returns the WAV for nickname, synthesizing it on first use. Concurrent
-// requests for one clip share a single synthesis; allowSynthesis (nil: always)
-// is asked only when a new synthesis would start.
-func (s *Service) Clip(ctx context.Context, language, nickname string, allowSynthesis func() bool) (key string, wav []byte, err error) {
+// Clip returns the stored WAV for nickname. A clip not stored yet is
+// synthesized in the background and Clip returns ErrPending at once: a
+// request never waits for synthesis. allowSynthesis (nil: always) is asked
+// only when a new synthesis would start.
+func (s *Service) Clip(language, nickname string, allowSynthesis func() bool) (key string, wav []byte, err error) {
 	if !s.Enabled() {
 		return "", nil, ErrUnavailable
 	}
@@ -126,46 +122,41 @@ func (s *Service) Clip(ctx context.Context, language, nickname string, allowSynt
 		return "", nil, ErrUnspeakable
 	}
 	key, path := Key(language, name), s.path(language, name)
-	if data, err := os.ReadFile(path); err == nil {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Under s.mu: Prune cannot delete the clip between this read and its touch,
+	// and a synthesis that just finished is seen before a new one is charged.
+	if data, err := os.ReadFile(path); err == nil { // #nosec G304 -- path is the clip dir plus a SHA-256 name
 		now := time.Now()
 		_ = os.Chtimes(path, now, now)
 		return key, data, nil
 	}
-	s.mu.Lock()
-	c, ok := s.inflight[key]
-	if !ok && allowSynthesis != nil && !allowSynthesis() {
-		s.mu.Unlock()
+	if _, running := s.inflight[key]; running {
+		return key, nil, ErrPending
+	}
+	if allowSynthesis != nil && !allowSynthesis() {
 		return "", nil, ErrRateLimited
 	}
-	if !ok {
-		c = &call{done: make(chan struct{})}
-		s.inflight[key] = c
-		// The synthesis outlives the first requester: others may wait for it.
-		go func() {
-			c.data, c.err = s.generate(language, name, path)
-			s.mu.Lock()
-			delete(s.inflight, key)
-			s.mu.Unlock()
-			close(c.done)
-		}()
-	}
-	s.mu.Unlock()
-	select {
-	case <-c.done:
-		return key, c.data, c.err
-	case <-ctx.Done():
-		return "", nil, ctx.Err()
-	}
+	s.inflight[key] = struct{}{}
+	go func() {
+		if err := s.generate(language, name, path); err != nil && !errors.Is(err, ErrUnavailable) {
+			s.logger.Debug("spoken name not synthesized", zap.Error(err))
+		}
+		s.mu.Lock()
+		delete(s.inflight, key)
+		s.mu.Unlock()
+	}()
+	return key, nil, ErrPending
 }
 
-func (s *Service) generate(language, name, path string) ([]byte, error) {
+func (s *Service) generate(language, name, path string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), synthesisTimeout)
 	defer cancel()
 	select {
 	case s.slots <- struct{}{}:
 		defer func() { <-s.slots }()
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return ctx.Err()
 	}
 	samples, err := s.synth.Synthesize(ctx, language, name)
 	if errors.Is(err, ErrEngine) {
@@ -176,21 +167,21 @@ func (s *Service) generate(language, name, path string) ([]byte, error) {
 		if _, probeErr := s.synth.Synthesize(probe, "en", "Test"); errors.Is(probeErr, ErrEngine) && !s.disabled.Swap(true) {
 			s.logger.Warn("spoken names disabled: speech engine failed", zap.Error(probeErr))
 		}
-		return nil, ErrUnavailable
+		return ErrUnavailable
 	}
 	if err != nil {
-		return nil, err
+		return err
 	}
 	data, err := master(samples)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, err
+		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), "clip-*.tmp")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	_, err = tmp.Write(data)
 	if closeErr := tmp.Close(); err == nil {
@@ -201,9 +192,9 @@ func (s *Service) generate(language, name, path string) ([]byte, error) {
 	}
 	if err != nil {
 		_ = os.Remove(tmp.Name())
-		return nil, err
+		return err
 	}
-	return data, nil
+	return nil
 }
 
 // Touch marks the clips of nickname as used (a session with that name
@@ -214,34 +205,43 @@ func (s *Service) Touch(nickname string) {
 		return
 	}
 	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, language := range Languages {
 		_ = os.Chtimes(s.path(language, name), now, now)
 	}
 }
 
 // Prune deletes clips (and leftovers of interrupted writes) unused for Retention.
+// It works inside an os.Root, so a swapped symlink cannot lead it outside dir.
 func (s *Service) Prune(ctx context.Context, now time.Time) error {
 	if s == nil {
 		return nil
 	}
-	err := filepath.WalkDir(s.dir, func(path string, entry fs.DirEntry, err error) error {
+	root, err := os.OpenRoot(s.dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	return fs.WalkDir(root.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil || entry.IsDir() {
 			return err
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		ext := filepath.Ext(path)
-		if ext != ".wav" && ext != ".tmp" {
+		if ext := filepath.Ext(path); ext != ".wav" && ext != ".tmp" {
 			return nil
 		}
-		if info, err := entry.Info(); err == nil && now.Sub(info.ModTime()) > Retention {
-			return os.Remove(path)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		// Fresh stat under s.mu: a clip used since the walk listed it stays.
+		if info, err := root.Stat(path); err == nil && now.Sub(info.ModTime()) > Retention {
+			return root.Remove(path)
 		}
 		return nil
 	})
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	return err
 }

@@ -12,8 +12,7 @@ import (
 )
 
 // handleSpokenNameGet answers with the spoken name of a session the requester
-// can see. A first synthesis takes seconds, so the clip is produced off the
-// session's read loop and the reply follows asynchronously.
+// can see.
 func (s *TCPServer) handleSpokenNameGet(ctx context.Context, client *Client, f *netproto.Frame) error {
 	var msg netproto.SpokenNameGet
 	if netproto.Decode(f, &msg) != nil || (msg.Language != "en" && msg.Language != "de") || len(msg.ClientID) > 128 {
@@ -39,24 +38,22 @@ func (s *TCPServer) handleSpokenNameGet(ctx context.Context, client *Client, f *
 	if nickname == "" {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "no spoken name for this session")
 	}
-	origin := requestOrigin(ctx)
-	go func() {
-		key, wav, err := s.deps.SpeechNames.Clip(context.Background(), msg.Language, nickname,
-			func() bool { return client.requestBudget.allowSpeechSynthesis(time.Now()) })
-		if !client.isAuthed() {
-			return
-		}
-		switch {
-		case errors.Is(err, speechnames.ErrRateLimited):
-			_ = s.sendErrorFor(client, origin, errCodeUnavailable, "spoken names busy")
-		case errors.Is(err, speechnames.ErrUnspeakable):
-			_ = s.sendErrorFor(client, origin, errCodeNotFound, "nothing speakable in this name")
-		case err != nil:
-			_ = s.sendErrorFor(client, origin, errCodeUnavailable, "spoken name unavailable")
-		default:
-			_ = s.writeMessage(client, netproto.MsgSpokenNameData, netproto.SpokenNameData{
-				ClientID: msg.ClientID, Language: msg.Language, Key: key, DataBase64: base64.StdEncoding.EncodeToString(wav)})
-		}
-	}()
-	return nil
+	// A stored clip is a file read. A new one is synthesized in the background
+	// and answered as pending at once, so no request waits for the engine.
+	key, wav, err := s.deps.SpeechNames.Clip(msg.Language, nickname,
+		func() bool { return client.requestBudget.allowSpeechSynthesis(time.Now()) })
+	reply := netproto.SpokenNameData{ClientID: msg.ClientID, Language: msg.Language, Nickname: nickname, Key: key}
+	switch {
+	case errors.Is(err, speechnames.ErrPending):
+		reply.Pending = true
+	case errors.Is(err, speechnames.ErrRateLimited):
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "spoken names busy")
+	case errors.Is(err, speechnames.ErrUnspeakable):
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "nothing speakable in this name")
+	case err != nil:
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "spoken name unavailable")
+	default:
+		reply.DataBase64 = base64.StdEncoding.EncodeToString(wav)
+	}
+	return s.writeMessage(client, netproto.MsgSpokenNameData, reply)
 }

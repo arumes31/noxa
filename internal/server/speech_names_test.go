@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -55,16 +56,31 @@ func TestSpokenNamesOnlyForPresentSessions(t *testing.T) {
 	other, otherID := dialAuthed(t, env.addr, "user-uid")
 	defer func() { _ = other.Close() }()
 
-	for range 2 {
+	fetch := func() netproto.SpokenNameData {
+		t.Helper()
 		send(t, asker, netproto.MsgSpokenNameGet, netproto.SpokenNameGet{ClientID: otherID, Language: "de"})
 		var data netproto.SpokenNameData
 		if err := netproto.Decode(readOfType(t, asker, netproto.MsgSpokenNameData), &data); err != nil {
 			t.Fatal(err)
 		}
-		wav, _ := base64.StdEncoding.DecodeString(data.DataBase64)
-		if data.ClientID != otherID || data.Language != "de" || len(data.Key) != 64 || !strings.HasPrefix(string(wav), "RIFF") {
+		if data.ClientID != otherID || data.Language != "de" || data.Nickname == "" || len(data.Key) != 64 {
 			t.Fatalf("reply %+v", data)
 		}
+		return data
+	}
+	// The first request is answered at once as pending: it never waits for synthesis.
+	if first := fetch(); !first.Pending || first.DataBase64 != "" {
+		t.Fatalf("first reply %+v", first)
+	}
+	var data netproto.SpokenNameData
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if data = fetch(); !data.Pending || time.Now().After(deadline) {
+			break
+		}
+	}
+	wav, _ := base64.StdEncoding.DecodeString(data.DataBase64)
+	if !strings.HasPrefix(string(wav), "RIFF") || fetch().DataBase64 != data.DataBase64 {
+		t.Fatalf("clip %+v", data)
 	}
 	if synth.calls.Load() != 1 {
 		t.Fatalf("synthesized %d times", synth.calls.Load())

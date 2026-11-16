@@ -10,7 +10,7 @@ import (
 
 func TestSpokenNamesUseCapableServerAndValidateClips(t *testing.T) {
 	calls := 0
-	reply := netproto.SpokenNameData{ClientID: "c7", Language: "de", Key: strings.Repeat("a", 64),
+	reply := netproto.SpokenNameData{ClientID: "c7", Language: "de", Nickname: "Joshi", Key: strings.Repeat("a", 64),
 		DataBase64: base64.StdEncoding.EncodeToString([]byte("RIFF....WAVE"))}
 	app, cm := newPipedApp(t, func(frame *netproto.Frame) (netproto.MessageType, any, bool) {
 		calls++
@@ -37,6 +37,11 @@ func TestSpokenNamesUseCapableServerAndValidateClips(t *testing.T) {
 	reply.DataBase64 = base64.StdEncoding.EncodeToString([]byte("<html>"))
 	if _, err := app.GetSpokenNameForTab("a", "c7", "de"); err == nil {
 		t.Fatal("non-WAV payload accepted")
+	}
+	// A clip still being synthesized comes back as pending, without audio.
+	reply = netproto.SpokenNameData{ClientID: "c7", Language: "de", Nickname: "Joshi", Pending: true}
+	if got, err := app.GetSpokenNameForTab("a", "c7", "de"); err != nil || !got.Pending || got.DataBase64 != "" {
+		t.Fatalf("pending: %+v %v", got, err)
 	}
 }
 

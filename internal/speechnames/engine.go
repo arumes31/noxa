@@ -49,7 +49,7 @@ func NewEngine(tts, modelDir, workDir string) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	voice, err := os.ReadFile(filepath.Join(modelDir, "voice.bin"))
+	voice, err := os.ReadFile(filepath.Join(modelDir, "voice.bin")) // #nosec G304 -- fixed model file of the image
 	if err != nil {
 		return nil, err
 	}
@@ -76,10 +76,15 @@ func blendStyle(voice []byte, weights map[int]float32) ([]byte, error) {
 	if len(voice) < 48 {
 		return nil, errors.New("speechnames: short voice.bin")
 	}
+	// Each dimension is bounded before conversion, so the products cannot overflow.
 	dims := func(at int) (n [3]int64, size int64) {
 		size = 1
 		for i := range n {
-			n[i] = int64(binary.LittleEndian.Uint64(voice[at+8*i:]))
+			d := binary.LittleEndian.Uint64(voice[at+8*i:])
+			if d == 0 || d > 1<<12 {
+				return n, 0
+			}
+			n[i] = int64(d)
 			size *= n[i]
 		}
 		return n, size
@@ -88,6 +93,12 @@ func blendStyle(voice []byte, weights map[int]float32) ([]byte, error) {
 	dpDims, dpSize := dims(24)
 	if ttlDims[0] < 1 || dpDims[0] != ttlDims[0] || ttlSize <= 0 || dpSize <= 0 || int64(len(voice)) < 48+4*(ttlSize+dpSize) {
 		return nil, errors.New("speechnames: malformed voice.bin")
+	}
+	for preset := range weights {
+		// A smaller or corrupt voice.bin must disable the feature, not panic.
+		if preset < 0 || int64(preset) >= ttlDims[0] || ttlSize%ttlDims[0] != 0 || dpSize%ttlDims[0] != 0 {
+			return nil, errors.New("speechnames: voice.bin lacks the ST13 presets")
+		}
 	}
 	sum := func(offset, size, presets int64) []float32 {
 		per := size / presets
@@ -139,12 +150,14 @@ func (e *Engine) Synthesize(ctx context.Context, language, text string) ([]float
 	}
 	_ = raw.Close()
 	defer func() { _ = os.Remove(raw.Name()) }()
+	// #nosec G204 -- fixed engine binary; the name is a single argv entry after "--" (no shell).
 	if out, err := exec.CommandContext(ctx, e.TTS, e.ttsArgs(language, text, raw.Name())...).CombinedOutput(); err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		return nil, fmt.Errorf("%w: %v: %s", ErrEngine, err, tail(out))
 	}
+	// #nosec G204 -- ffmpeg from PATH with fixed arguments and a temp file this process created.
 	pcm, err := exec.CommandContext(ctx, e.FFmpeg, "-nostdin", "-v", "error", "-i", raw.Name(),
 		"-ac", "1", "-ar", fmt.Sprint(SampleRate), "-f", "f32le", "-").Output()
 	if err != nil {

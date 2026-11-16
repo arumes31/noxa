@@ -176,7 +176,8 @@ export class SpeechQueue {
             if (item.ready > now) { this.timer = this.schedule(() => this.pump(), item.ready - now); return; }
             this.pending.shift();
             const language = speechLanguage(settings, this.systemLanguage());
-            if (item.name && item.language === language && this.playNamed(item, settings)) return;
+            // Names may have been turned off since this item was queued.
+            if (item.name && item.language === language && settings.speech_names !== false && this.playNamed(item, settings)) return;
             const clip = this.assets[language]?.[item.clipEvent];
             if (!clip) { item.onEnded?.(); continue; } // No other-language or generated fallback.
             const id = "speech_" + language + "_" + item.clipEvent;

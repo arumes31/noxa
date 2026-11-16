@@ -73,6 +73,8 @@ func master(samples []float64) ([]byte, error) {
 		return nil, errBadClip
 	}
 	gain := min(math.Pow(10, targetRMSDBFS/20)/rms, peakCeiling/peak)
+	// Fits: the clip is at most maxDuration (4 s at 24 kHz) long.
+	dataSize := uint32(2 * len(clip)) // #nosec G115 -- bounded by the duration check above
 	var out bytes.Buffer
 	header := struct {
 		Riff     [4]byte
@@ -88,8 +90,8 @@ func master(samples []float64) ([]byte, error) {
 		Bits     uint16
 		Data     [4]byte
 		DataSize uint32
-	}{[4]byte{'R', 'I', 'F', 'F'}, uint32(36 + 2*len(clip)), [4]byte{'W', 'A', 'V', 'E'}, [4]byte{'f', 'm', 't', ' '}, 16, 1, 1,
-		SampleRate, SampleRate * 2, 2, 16, [4]byte{'d', 'a', 't', 'a'}, uint32(2 * len(clip))}
+	}{[4]byte{'R', 'I', 'F', 'F'}, 36 + dataSize, [4]byte{'W', 'A', 'V', 'E'}, [4]byte{'f', 'm', 't', ' '}, 16, 1, 1,
+		SampleRate, SampleRate * 2, 2, 16, [4]byte{'d', 'a', 't', 'a'}, dataSize}
 	_ = binary.Write(&out, binary.LittleEndian, header)
 	for _, v := range clip {
 		_ = binary.Write(&out, binary.LittleEndian, int16(math.Round(v*gain*32767)))

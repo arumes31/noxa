@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -83,44 +82,55 @@ func (f *fakeSynth) Synthesize(ctx context.Context, _, text string) ([]float64, 
 	return speech(), f.err
 }
 
-func TestClipSynthesizesOncePerName(t *testing.T) {
-	synth := &fakeSynth{release: make(chan struct{})}
-	svc := New(t.TempDir(), synth, zap.NewNop())
-	var wg sync.WaitGroup
-	results := make(chan []byte, 4)
-	for _, nick := range []string{"Joshi", "Joshi#2", "Joshi#M1", "Joshi"} {
-		wg.Go(func() {
-			_, data, err := svc.Clip(t.Context(), "de", nick, nil)
-			if err != nil {
-				t.Error(err)
-			}
-			results <- data
-		})
+// clip fetches a clip, waiting for a background synthesis it started.
+func clip(t *testing.T, svc *Service, language, nickname string) ([]byte, error) {
+	t.Helper()
+	_, data, err := svc.Clip(language, nickname, nil)
+	if !errors.Is(err, ErrPending) {
+		return data, err
 	}
-	time.Sleep(50 * time.Millisecond)
-	close(synth.release)
-	wg.Wait()
-	close(results)
-	for data := range results {
-		if !bytes.HasPrefix(data, []byte("RIFF")) || len(data) < 44 {
-			t.Fatalf("clip %d bytes", len(data))
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		svc.mu.Lock()
+		idle := len(svc.inflight) == 0
+		svc.mu.Unlock()
+		if idle {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("synthesis did not finish")
 		}
 	}
-	if _, _, err := svc.Clip(t.Context(), "de", "Joshi", nil); err != nil || synth.calls.Load() != 1 {
-		t.Fatalf("calls = %d, err %v", synth.calls.Load(), err)
+	// A refused allowance reports a clip that was not produced.
+	_, data, err = svc.Clip(language, nickname, func() bool { return false })
+	return data, err
+}
+
+func TestClipSynthesizesOncePerNameWithoutWaiting(t *testing.T) {
+	synth := &fakeSynth{release: make(chan struct{})}
+	svc := New(t.TempDir(), synth, zap.NewNop())
+	// Requests return at once while one synthesis runs for every variant.
+	for _, nick := range []string{"Joshi", "Joshi#2", "Joshi#M1", "Joshi"} {
+		if _, data, err := svc.Clip("de", nick, nil); !errors.Is(err, ErrPending) || data != nil {
+			t.Fatalf("%s: %v", nick, err)
+		}
+	}
+	close(synth.release)
+	data, err := clip(t, svc, "de", "Joshi#2")
+	if err != nil || !bytes.HasPrefix(data, []byte("RIFF")) || synth.calls.Load() != 1 {
+		t.Fatalf("clip %d bytes, %v, calls %d", len(data), err, synth.calls.Load())
 	}
 	// Another language is another clip.
-	if _, _, err := svc.Clip(t.Context(), "en", "Joshi", nil); err != nil || synth.calls.Load() != 2 {
+	if _, err := clip(t, svc, "en", "Joshi"); err != nil || synth.calls.Load() != 2 {
 		t.Fatalf("calls = %d, err %v", synth.calls.Load(), err)
 	}
-	if _, _, err := svc.Clip(t.Context(), "de", "🔥", nil); !errors.Is(err, ErrUnspeakable) || synth.calls.Load() != 2 {
+	if _, _, err := svc.Clip("de", "🔥", nil); !errors.Is(err, ErrUnspeakable) || synth.calls.Load() != 2 {
 		t.Fatalf("unspeakable: %v", err)
 	}
 }
 
 func TestEngineFailureDisablesService(t *testing.T) {
 	svc := New(t.TempDir(), &fakeSynth{err: fmt.Errorf("%w: exec: not found", ErrEngine)}, zap.NewNop())
-	if _, _, err := svc.Clip(t.Context(), "de", "Joshi", nil); !errors.Is(err, ErrUnavailable) || svc.Enabled() {
+	if _, err := clip(t, svc, "de", "Joshi"); !errors.Is(err, ErrUnavailable) || svc.Enabled() {
 		t.Fatalf("err %v enabled %v", err, svc.Enabled())
 	}
 	var disabled *Service
@@ -131,10 +141,10 @@ func TestEngineFailureDisablesService(t *testing.T) {
 	// fails on it: the engine still voices a known word.
 	for _, synth := range []*fakeSynth{{err: errors.New("odd name"), failFor: "Joshi"}, {err: fmt.Errorf("%w: exit status 134", ErrEngine), failFor: "Joshi"}} {
 		svc = New(t.TempDir(), synth, zap.NewNop())
-		if _, _, err := svc.Clip(t.Context(), "de", "Joshi", nil); err == nil || !svc.Enabled() {
+		if _, err := clip(t, svc, "de", "Joshi"); err == nil || !svc.Enabled() {
 			t.Fatalf("err %v enabled %v", err, svc.Enabled())
 		}
-		if _, _, err := svc.Clip(t.Context(), "de", "Mia", nil); err != nil {
+		if _, err := clip(t, svc, "de", "Mia"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -144,7 +154,7 @@ func TestPruneDeletesClipsUnusedFor30Days(t *testing.T) {
 	dir := t.TempDir()
 	svc := New(dir, &fakeSynth{}, zap.NewNop())
 	for _, nick := range []string{"Old", "Fresh", "Touched"} {
-		if _, _, err := svc.Clip(t.Context(), "de", nick, nil); err != nil {
+		if _, err := clip(t, svc, "de", nick); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -213,6 +223,10 @@ func TestBlendStyleWeightsPresets(t *testing.T) {
 	if _, err := blendStyle(b.Bytes()[:60], st13Blend); err == nil {
 		t.Fatal("truncated voice accepted")
 	}
+	// Two presets only: ST13 needs preset 9 (M5); this must fail, not panic.
+	if _, err := blendStyle(b.Bytes(), st13Blend); err == nil {
+		t.Fatal("voice without the ST13 presets accepted")
+	}
 }
 
 // With the real model (NOXA_SPEECH_MODEL_DIR) the Go blend must reproduce the
@@ -255,7 +269,7 @@ func TestImageEngineSynthesizes(t *testing.T) {
 	}
 	for _, language := range Languages {
 		start := time.Now()
-		_, data, err := svc.Clip(t.Context(), language, "Joshi#2", nil)
+		data, err := clip(t, svc, language, "Joshi#2")
 		if err != nil || !bytes.HasPrefix(data, []byte("RIFF")) {
 			t.Fatalf("%s clip %d bytes, %v", language, len(data), err)
 		}
@@ -267,14 +281,14 @@ func TestSynthesisAllowanceOnlyGuardsNewClips(t *testing.T) {
 	synth := &fakeSynth{}
 	svc := New(t.TempDir(), synth, zap.NewNop())
 	deny := func() bool { return false }
-	if _, _, err := svc.Clip(t.Context(), "de", "Joshi", deny); !errors.Is(err, ErrRateLimited) || synth.calls.Load() != 0 {
+	if _, _, err := svc.Clip("de", "Joshi", deny); !errors.Is(err, ErrRateLimited) || synth.calls.Load() != 0 {
 		t.Fatalf("denied synthesis: %v, calls %d", err, synth.calls.Load())
 	}
-	if _, _, err := svc.Clip(t.Context(), "de", "Joshi", nil); err != nil {
+	if _, err := clip(t, svc, "de", "Joshi"); err != nil {
 		t.Fatal(err)
 	}
 	// A stored clip needs no allowance.
-	if _, _, err := svc.Clip(t.Context(), "de", "Joshi", deny); err != nil || synth.calls.Load() != 1 {
+	if _, _, err := svc.Clip("de", "Joshi", deny); err != nil || synth.calls.Load() != 1 {
 		t.Fatalf("cached clip: %v, calls %d", err, synth.calls.Load())
 	}
 }
