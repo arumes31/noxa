@@ -118,7 +118,17 @@
     "stream_watch_started_v06": "You have a new viewer on your stream.",
     "stream_watch_started_v07": "Someone has tuned into your stream.",
     "stream_watch_started_v08": "A viewer is watching your stream.",
-    "stream_watch_started_v09": "Someone has joined the audience for your stream."
+    "stream_watch_started_v09": "Someone has joined the audience for your stream.",
+    "user_join_named": "joined your channel.",
+    "user_leave_named": "left your channel.",
+    "user_disconnected_named": "disconnected.",
+    "user_connection_lost_named": "lost the connection.",
+    "user_reconnected_named": "reconnected.",
+    "user_moved_named": "switched channels.",
+    "user_moved_out_named": "was moved from your channel.",
+    "user_kicked_named": "was kicked from the server.",
+    "user_kicked_channel_named": "was kicked from the channel.",
+    "buddy_online_named": "is online."
   },
   "de": {
     "microphone_muted": "Mikrofon stummgeschaltet.",
@@ -239,6 +249,16 @@
     "stream_watch_started_v06": "Du hast einen neuen Zuschauer bei deinem Stream.",
     "stream_watch_started_v07": "Jemand hat deinen Stream eingeschaltet.",
     "stream_watch_started_v08": "Ein Zuschauer hat den Stream geöffnet.",
-    "stream_watch_started_v09": "Jemand schaut bei deinem Stream vorbei."
+    "stream_watch_started_v09": "Jemand schaut bei deinem Stream vorbei.",
+    "user_join_named": "ist dem Channel beigetreten.",
+    "user_leave_named": "hat deinen Channel verlassen.",
+    "user_disconnected_named": "hat die Verbindung getrennt.",
+    "user_connection_lost_named": "hat die Verbindung verloren.",
+    "user_reconnected_named": "hat die Verbindung wiederhergestellt.",
+    "user_moved_named": "hat den Channel gewechselt.",
+    "user_moved_out_named": "wurde aus deinem Channel verschoben.",
+    "user_kicked_named": "wurde vom Server entfernt.",
+    "user_kicked_channel_named": "wurde aus dem Channel entfernt.",
+    "buddy_online_named": "ist online."
   }
 }

@@ -213,6 +213,7 @@ type Settings struct {
 	SpeechAdmin              bool            `json:"speech_admin"`
 	SpeechRemoval            bool            `json:"speech_removal"`
 	SpeechPermissions        bool            `json:"speech_permissions"`
+	SpeechNames              bool            `json:"speech_names"` // name clips from the server (default on)
 	SpeechEvents             map[string]bool `json:"speech_events,omitempty"`
 	EventSounds              map[string]bool `json:"event_sounds"`         // event name -> enabled
 	WhisperReplyHotkey       string          `json:"whisper_reply_hotkey"` // default "Ctrl+R"
@@ -360,6 +361,7 @@ func DefaultSettings() Settings {
 		SpeechAdmin:       true,
 		SpeechRemoval:     true,
 		SpeechPermissions: true,
+		SpeechNames:       true,
 		// (385) one entry per notification-matrix event plus the connection,
 		// channel, and voice-action cues. Legacy join/leave entries stay in the
 		// file so version-7 migration can preserve earlier choices.

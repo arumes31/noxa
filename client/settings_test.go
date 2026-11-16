@@ -436,6 +436,7 @@ func TestIndependentAudioSettingsRoundTrip(t *testing.T) {
 	s.SpokenMessages = true
 	s.SpeechRemoval = false
 	s.SpeechPermissions = false
+	s.SpeechNames = false
 	s.SpeechLanguage = "de"
 	s.DuckEffectsWhileSpeaking = true
 	if err := saveSettingsAt(path, s); err != nil {
@@ -445,7 +446,7 @@ func TestIndependentAudioSettingsRoundTrip(t *testing.T) {
 	if got.SpeechLanguage != "de" || !got.DuckEffectsWhileSpeaking {
 		t.Fatal("announcement language or conversation ducking did not survive save/load")
 	}
-	if got.EffectsEnabled || !got.SpokenMessages || got.SpeechRemoval || got.SpeechPermissions {
+	if got.EffectsEnabled || !got.SpokenMessages || got.SpeechRemoval || got.SpeechPermissions || got.SpeechNames {
 		t.Fatal("independent audio choices changed on save/load")
 	}
 	for _, raw := range []string{

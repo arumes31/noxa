@@ -1,8 +1,9 @@
 # Fixed noXa spoken announcements
 
-These 35 English and 36 German WAVs are rendered during development. The shipped
-client only plays bundled recordings. No model, TTS engine, dynamic text or
-network TTS is packaged. Canonical text: tools/speech-lines.json.
+These 129 English and 129 German WAVs are rendered during development. The shipped
+client only plays bundled recordings and name clips from its server (below). No
+model, TTS engine or network TTS is packaged in the client. Canonical text:
+tools/speech-lines.json.
 
 Status, channel activity, administrative actions and poke use localized speech.
 Mentions, keywords, direct/channel messages, announcements, whispers and PTT
@@ -83,10 +84,28 @@ respellings and masters each clip with the shared contract in
 generate-speech.py. review transcribes every clip with Whisper and accepts it
 only when the transcript matches the intended text within one letter (spacing
 and punctuation may differ; the edit count is recorded). Re-render rejected clips with `render --events ...` and review again;
-publish refuses unless all 71 clips are accepted, either by the content check or, for a misheard name only, by a recorded listening approval. Synthesis is not
+publish refuses unless all 258 clips are accepted, either by the content check or, for a misheard name only, by a recorded listening approval. Synthesis is not
 bit-reproducible, so the shipped hashes identify the accepted recordings.
 st13-content-review.json binds each accepted check to its WAV hash. ASR checks
 completeness, not listening comfort, timbre or accent.
+
+## Spoken names
+
+Announcements about another user (`NAMED_SPEECH_EVENTS` in speech-queue.js:
+join, leave, disconnect, connection lost, reconnect, moved, moved out, kicked
+from server or channel, watched contact online) can start with that user's
+name: the client plays the name clip and then `<event>_named`, a phrase without
+"Benutzer" ("Joshi" + "ist dem Channel beigetreten."). The 20 phrase clips were
+rendered and reviewed with the same ST13 tooling as every other clip; existing
+recordings were not re-rendered. `stream_watch_started` stays generic: its event
+does not identify the viewer.
+
+The server voices the name itself (internal/speechnames) with the same model,
+voice blend (it rebuilds the ST13 style and checks its hash), speed and steps,
+and the same trimming, fades and quiet level. Differences: names are not
+respelled or Whisper-reviewed, ffmpeg resamples 44.1 kHz to 24 kHz instead of
+the FFT resampler, and a name may be 0.15–4 s long. Until a name is cached the
+client plays the generic clip; **Announce names** off always does.
 
 ## Audio contract and runtime policy
 

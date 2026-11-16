@@ -12,6 +12,7 @@ import (
 	"noxa/internal/traffic"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -40,6 +41,7 @@ import (
 	"noxa/internal/rules"
 	"noxa/internal/safecast"
 	"noxa/internal/server"
+	"noxa/internal/speechnames"
 	"noxa/internal/state"
 	"noxa/internal/store"
 	"noxa/internal/tlscert"
@@ -586,7 +588,14 @@ func run() (retErr error) {
 		}
 	}()
 
+	// Spoken names need the engine shipped in the server image; without it
+	// the feature stays off and clients keep their generic announcements.
+	var speechNames *speechnames.Service
+	if cfg.SpeechNames {
+		speechNames = speechnames.Open(filepath.Join(cfg.FileRoot, "speech-names"), logger)
+	}
 	stopRetention := retention.Start(ctx, logger,
+		retention.Task{Name: "spoken names", Run: speechNames.Prune},
 		retention.Task{Name: "delivered DMs and audit", Run: dbStore.PruneExpiredData},
 		retention.Task{Name: "recordings", Run: rec.PruneExpiredRecordings},
 		retention.Task{Name: "audit partition coverage", Run: auditPartitionWarner(dbStore, logger)},
@@ -828,6 +837,7 @@ func run() (retErr error) {
 		TrafficHistory:          trafficHistory,
 		Auth:                    authSvc,
 		State:                   stateManager,
+		SpeechNames:             speechNames,
 		Channels:                channelMgr,
 		Broadcast:               broadcaster,
 		Authority:               roleAuthority,

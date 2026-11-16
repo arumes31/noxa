@@ -14,7 +14,7 @@ type requestBucket struct {
 }
 type sessionRequestBudget struct {
 	mu      sync.Mutex
-	buckets [7]requestBucket
+	buckets [8]requestBucket
 }
 
 func (b *sessionRequestBudget) allow(mt netproto.MessageType, now time.Time) bool {
@@ -38,6 +38,9 @@ func (b *sessionRequestBudget) allow(mt netproto.MessageType, now time.Time) boo
 		// time (each waits for its answer) on source changes, ICE restarts and
 		// up to two glare retries; member joins arrive as server offers.
 		class, burst, rate = 6, 64, 8
+	case netproto.MsgSpokenNameGet:
+		// One per member entering the channel; each new name costs a synthesis.
+		class, burst, rate = 7, 40, 1
 	case netproto.MsgSetStatus, netproto.MsgDisplayNameSet:
 		// Each change rebuilds a snapshot for every recipient.
 		class, burst, rate = 5, 5, 0.5

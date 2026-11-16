@@ -83,6 +83,40 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -mod=readonly -trimpath -ldflags="-s -w" -o /out/e2e ./cmd/e2e
 
 # -----------------------------------------------------------------------------
+# Speech engine stage: the sherpa-onnx TTS CLI and the Supertonic 3 int8 model
+# for spoken names (internal/speechnames), pinned in tools/voices/ST13.json.
+# -----------------------------------------------------------------------------
+FROM --platform=$BUILDPLATFORM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS speech
+ARG TARGETARCH
+RUN apk add --no-cache curl jq bzip2
+COPY tools/voices/ST13.json /tmp/ST13.json
+RUN set -eu; cd /tmp; \
+    curl -fsSL -o runtime.tar.bz2 "$(jq -er ".runtime.server_archives.$TARGETARCH.url" ST13.json)"; \
+    echo "$(jq -er ".runtime.server_archives.$TARGETARCH.sha256" ST13.json)  runtime.tar.bz2" | sha256sum -c -; \
+    curl -fsSL -o model.tar.bz2 "$(jq -er .model.archive_url ST13.json)"; \
+    echo "$(jq -er .model.archive_sha256 ST13.json)  model.tar.bz2" | sha256sum -c -; \
+    mkdir -p runtime model /out/lib /out/model; \
+    tar -xjf runtime.tar.bz2 -C runtime --strip-components=1; \
+    tar -xjf model.tar.bz2 -C model --strip-components=1; \
+    cp runtime/bin/sherpa-onnx-offline-tts /out/; \
+    cp runtime/lib/libonnxruntime.so /out/lib/; \
+    jq -er '.model.files | to_entries[] | .value + "  model/" + .key' ST13.json | sha256sum -c -; \
+    for file in $(jq -er '.model.files | keys[]' ST13.json); do cp "model/$file" /out/model/; done; \
+    cp model/LICENSE /out/model/LICENSE-MIT
+
+# The sherpa-onnx CLI is built for glibc; the runtime image is musl. Its glibc
+# and C++ runtime come from this pinned Debian image and are used only by
+# docker/speech/tts.sh through the explicit loader. The stage only copies
+# files, so the arm64 build stays cheap under emulation.
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS speech-glibc
+RUN set -eu; triplet=$(uname -m)-linux-gnu; mkdir -p /out/lib; \
+    case "$(uname -m)" in x86_64) loader=/lib64/ld-linux-x86-64.so.2 ;; aarch64) loader=/lib/ld-linux-aarch64.so.1 ;; *) exit 1 ;; esac; \
+    cp -L "$loader" /out/lib/ld.so; \
+    for lib in libc.so.6 libm.so.6 libdl.so.2 libpthread.so.0 librt.so.1 libgcc_s.so.1; do cp -L "/lib/$triplet/$lib" /out/lib/; done; \
+    cp -L "/usr/lib/$triplet/libstdc++.so.6" /out/lib/; \
+    for pkg in libc6 libgcc-s1 libstdc++6; do cp "/usr/share/doc/$pkg/copyright" "/out/lib/COPYRIGHT-$pkg"; done
+
+# -----------------------------------------------------------------------------
 # Runtime stage
 # -----------------------------------------------------------------------------
 FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS runtime
@@ -112,6 +146,11 @@ COPY --from=builder --chown=10001:10001 /out/noxa /out/noxa
 COPY --from=builder --chown=10001:10001 /out/adduser /out/role-setup /out/migrate /out/e2e /out/
 # The mobile web app; web.app_dir defaults to ./web/app relative to /.
 COPY --from=mobile --chown=10001:10001 /out/web/app /web/app
+# Spoken names engine (read-only; clips are written under /data).
+COPY --from=speech /out /opt/noxa-speech
+COPY --from=speech-glibc /out/lib /opt/noxa-speech/lib
+COPY --chmod=0555 docker/speech/tts.sh /opt/noxa-speech/tts
+COPY docker/speech/*-LICENSE.txt /opt/noxa-speech/licenses/
 COPY --chmod=0555 --chown=10001:10001 scripts/secret-env.sh /usr/local/lib/noxa/secret-env.sh
 COPY --chmod=0555 --chown=10001:10001 scripts/noxa-entrypoint.sh /usr/local/bin/noxa-entrypoint.sh
 

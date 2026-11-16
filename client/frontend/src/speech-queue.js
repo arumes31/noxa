@@ -45,7 +45,14 @@ export const SPEECH_EVENTS = {
 // settings switch and are absent from languages without a recording.
 export const CLOSING_SPEECH_CLIPS = Object.freeze(["client_closing",
     ...Array.from({ length: 19 }, (_, index) => `client_closing_v${String(index + 1).padStart(2, "0")}`)]);
+// Announcements about another user that can start with that user's spoken
+// name: "<name clip>" + "<event>_named" ("Joshi" + "ist dem Channel beigetreten.").
+export const NAMED_SPEECH_EVENTS = Object.freeze([
+    "user_join", "user_leave", "user_disconnected", "user_connection_lost", "user_reconnected",
+    "user_moved", "user_moved_out", "user_kicked", "user_kicked_channel", "buddy_online",
+]);
 export const SPEECH_VARIANTS = {
+    ...Object.fromEntries(NAMED_SPEECH_EVENTS.map(event => [event + "_named", event])),
     ...Object.fromEntries(CLOSING_SPEECH_CLIPS.slice(1).map(clip => [clip, "client_closing"])),
     ...Object.fromEntries(VARIED_SPEECH_EVENTS.flatMap(event => Array.from({ length: speechVariantCount(event) - 1 }, (_, index) =>
         [`${event}_v${String(index + 1).padStart(2, "0")}`, event]))),
@@ -65,8 +72,8 @@ export function speechEventEnabled(settings, event, effect = SPEECH_EVENTS[event
 }
 
 export class SpeechQueue {
-    constructor({ engine, assets, getState, isDND, systemLanguage = () => "en", now = () => Date.now(), schedule = (fn, ms) => setTimeout(fn, ms), cancel = id => clearTimeout(id) }) {
-        Object.assign(this, { engine, assets, getState, isDND, systemLanguage, now, schedule, cancel });
+    constructor({ engine, assets, getState, isDND, systemLanguage = () => "en", nameClip = () => "", now = () => Date.now(), schedule = (fn, ms) => setTimeout(fn, ms), cancel = id => clearTimeout(id) }) {
+        Object.assign(this, { engine, assets, getState, isDND, systemLanguage, nameClip, now, schedule, cancel });
         this.pending = []; this.current = null; this.timer = null; this.last = new Map();
         this.reconnecting = new Set();
         this.connectionState = new Map();
@@ -93,7 +100,8 @@ export class SpeechQueue {
         return (this.current && !this.current.preview) || this.pending.some(item => !item.preview);
     }
 
-    enqueue(event, { settings, preview = false, delay = 150, effect, onEnded, eventKey } = {}) {
+    // speaker {client_id, nickname}: the other user an announcement is about.
+    enqueue(event, { settings, preview = false, delay = 150, effect, onEnded, eventKey, speaker } = {}) {
         if (!Object.hasOwn(SPEECH_EVENTS, event)) return false;
         if (preview && this.hasLiveSpeech()) return false;
         if (!preview) this.stopPreview();
@@ -130,6 +138,14 @@ export class SpeechQueue {
         const language = speechLanguage(selected, this.systemLanguage());
         if (!this.allowed(event, selected, preview, item.effect) || !soundVolume(selected?.speech_volume ?? 100)
             || !this.assets[language]?.[event]) return false;
+        // A name not cached yet keeps the generic clip now, without delay;
+        // nameClip starts fetching it for the next announcement.
+        if (speaker?.client_id && !preview && selected?.speech_names !== false && NAMED_SPEECH_EVENTS.includes(event)
+            && this.assets[language]?.[event + "_named"]) {
+            const phrase = "speech_" + language + "_" + event + "_named";
+            const name = this.nameClip({ language, speaker, phrase });
+            if (name) Object.assign(item, { name, phrase, language });
+        }
         if (coolingDown || (!preview && this.current?.scope === scope && this.current?.priority > def.priority)) return false;
         if (!preview) {
             this.last.set(key, now);
@@ -160,6 +176,7 @@ export class SpeechQueue {
             if (item.ready > now) { this.timer = this.schedule(() => this.pump(), item.ready - now); return; }
             this.pending.shift();
             const language = speechLanguage(settings, this.systemLanguage());
+            if (item.name && item.language === language && this.playNamed(item, settings)) return;
             const clip = this.assets[language]?.[item.clipEvent];
             if (!clip) { item.onEnded?.(); continue; } // No other-language or generated fallback.
             const id = "speech_" + language + "_" + item.clipEvent;
@@ -171,6 +188,20 @@ export class SpeechQueue {
             this.current = null;
             item.onEnded?.();
         }
+    }
+
+    // Name and phrase play back to back as one announcement.
+    playNamed(item, settings) {
+        const options = { preview: false, settings, scope: item.scope, volume: settings.speech_volume ?? 100 };
+        const finish = part => { if (this.current === part) { this.current = null; item.onEnded?.(); this.pump(); } };
+        const name = this.current = { ...item, id: item.name };
+        const played = this.engine.play(item.name, { ...options, onEnded: () => {
+            if (this.current !== name) return;
+            const phrase = this.current = { ...item, id: item.phrase };
+            if (!this.engine.play(item.phrase, { ...options, onEnded: () => finish(phrase) })) finish(phrase);
+        } });
+        if (!played) this.current = null;
+        return played;
     }
 
     stopCurrent() {

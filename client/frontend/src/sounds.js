@@ -33,7 +33,41 @@ export const soundEngine = new SoundEngine({
 });
 export const speechQueue = new SpeechQueue({ engine: soundEngine, assets: SPEECH_ASSETS,
     getState: () => V()?.state, isDND: settings => !!window.__noxaPolish?.dndActive?.(settings),
-    systemLanguage: () => navigator.language || "en" });
+    systemLanguage: () => navigator.language || "en", nameClip: spokenNameClip });
+
+// Spoken names fetched from the server this session: tab, language and
+// nickname -> engine sound ID, or a pending fetch.
+const spokenNames = new Map();
+export function spokenNameClip({ language, speaker, phrase }, app = window.go?.main?.App, engine = soundEngine) {
+    const tabID = V()?.state?.activeTabID || "";
+    const key = JSON.stringify([tabID, language, speaker.nickname || ""]);
+    const known = spokenNames.get(key);
+    if (known?.id) {
+        if (engine.buffers.has(known.id) && engine.buffers.has(phrase)) return known.id;
+        void engine.preload([known.id, phrase]);
+        return "";
+    }
+    if (known || !app?.GetSpokenNameForTab) return "";
+    while (spokenNames.size >= 256) spokenNames.delete(spokenNames.keys().next().value);
+    const entry = { pending: true };
+    spokenNames.set(key, entry);
+    // A failed fetch (no clip, user gone, older server) is retried by a later announcement.
+    void Promise.resolve(app.GetSpokenNameForTab(tabID, speaker.client_id, language)).then(data => {
+        const id = "speech_name_" + data.key;
+        engine.definitions[id] = { duration: 1, priority: 1, cooldown: 0, category: "Speech" };
+        engine.urls[id] = "data:audio/wav;base64," + data.data_base64;
+        entry.id = id;
+        return engine.preload([id, phrase]);
+    }).catch(() => { if (spokenNames.get(key) === entry) spokenNames.delete(key); });
+    return "";
+}
+// Members already in a channel I enter are fetched now, so their later leave
+// can already say the name (a departed session cannot be fetched).
+export function prefetchSpokenNames(clients, settings = V()?.state.settings) {
+    if (!settings || settings.speech_names === false || settings.spoken_messages === false) return;
+    const language = speechLanguage(settings, navigator.language);
+    for (const speaker of clients) spokenNameClip({ language, speaker, phrase: "speech_" + language + "_user_leave_named" });
+}
 export function playSpeech(event, options) { return speechQueue.enqueue(event, options); }
 export function playAlert(event, options) {
     stopPreviews();

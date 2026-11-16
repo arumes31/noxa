@@ -45,6 +45,7 @@ query_ssh_host_key: "./data/keys/query_ssh_host.key"  # generated once; keep it,
 # File transfer (token-authorized uploads/downloads on its own port).
 file_addr: ":12336"
 file_root: "./data/files"     # on-disk layout: <channel_id>/<name>
+speech_names: true            # spoken names in desktop announcements (server image engine; off when missing)
 file_max_kbps: 0              # per-connection bandwidth cap in KiB/s; 0 = unlimited
 file_max_connections: 128     # concurrent accepted file-port connections; 1..10000
 file_channel_quota_mb: 0      # per-channel total file quota in MiB; 0 = unlimited
