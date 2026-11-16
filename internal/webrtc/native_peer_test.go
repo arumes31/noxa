@@ -136,7 +136,10 @@ func TestNativePeerPublishesScreenAsOwningClient(t *testing.T) {
 	if n, _ := f.browser.counts(); n != 0 {
 		t.Fatalf("browser peer received %d PLIs for the native track", n)
 	}
-	if f.voice.engine.PeerConnection(NativePeerID("viewer")) != nil || len(f.router.pubTracks[NativePeerID("pub")]) != 0 {
+	f.router.mu.RLock()
+	subscribed := len(f.router.pubTracks[NativePeerID("pub")]) != 0 || f.router.pubPeers[NativePeerID("pub")] != nil
+	f.router.mu.RUnlock()
+	if subscribed {
 		t.Fatal("native peer became a subscriber")
 	}
 

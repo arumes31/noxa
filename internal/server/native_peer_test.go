@@ -5,6 +5,7 @@ import (
 	"maps"
 	"net"
 	"slices"
+	"strings"
 	"testing"
 
 	"noxa/internal/authorization"
@@ -150,5 +151,24 @@ func TestNativePeerCapabilityNeedsBackend(t *testing.T) {
 	_, resp := dialResumable(t, env.addr, netproto.Authenticate{Username: "user-uid", Password: "pw"})
 	if slices.Contains(resp.Capabilities, netproto.CapabilityNativeMediaPeer) {
 		t.Fatal("capability advertised without a native peer backend")
+	}
+}
+
+func TestNativePeerOfferNeedsMediaE2EEDeclaration(t *testing.T) {
+	voice := &nativeVoice{}
+	env := startTestEnvLogger(t, nil, nil, func(d *Deps) { d.Devices = &olmFakeDevices{}; d.Voice = voice }, nil, func(s *TCPServer) { s.mediaE2EE = true })
+	t.Cleanup(env.stop)
+	conn, userID := dialAuthed(t, env.addr, "user-uid")
+	t.Cleanup(func() { _ = conn.Close() })
+	placeVoiceTestClients(t, env, 1, userID)
+	send(t, conn, netproto.MsgWebRTCOffer, netproto.WebRTCOffer{SDP: "native-offer", Peer: netproto.PeerNative,
+		Tracks: []netproto.TrackSlot{{TrackID: "s", Slot: webrtc.SlotScreen}}})
+	if e := readError(t, conn); e.Code != errCodePermissionDenied || !strings.HasPrefix(e.Message, netproto.MediaE2EEReasonClientOutdated) {
+		t.Fatalf("plaintext native offer: %+v", e)
+	}
+	voice.mu.Lock()
+	defer voice.mu.Unlock()
+	if len(voice.nativeOffers) != 0 {
+		t.Fatal("plaintext native offer reached the backend")
 	}
 }
