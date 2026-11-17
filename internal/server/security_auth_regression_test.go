@@ -187,6 +187,38 @@ func TestKeyLoginIgnoresSaturatedKDFSlots(t *testing.T) {
 	}
 }
 
+// Saturated KDF slots refuse a password login as busy, not as a lockout.
+func TestPasswordLoginWithSaturatedKDFSlotsIsBusy(t *testing.T) {
+	limiter := auth.NewLoginFailureLimiter(auth.LoginFailureLimiterConfig{MaxConcurrentKDF: 1})
+	env := startTestEnvDeps(t, nil, nil, func(d *Deps) { d.LoginLimiter = limiter })
+	defer env.stop()
+	held, ok := limiter.Reserve(auth.LoginFailureScope("tcp", "busy"))
+	if !ok {
+		t.Fatal("reservation rejected")
+	}
+	defer held.Cancel()
+	// Clients without the busy feature get the lockout text they already retry.
+	for _, tc := range []struct {
+		features []string
+		want     string
+	}{
+		{[]string{netproto.ClientFeatureBusy}, netproto.ReasonServerBusy},
+		{nil, "too many failed logins, try again later"},
+	} {
+		features, want := tc.features, tc.want
+		conn := dialRetry(t, env.addr)
+		send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw", ClientFeatures: features})
+		var resp netproto.AuthResponse
+		if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthResponse), &resp); err != nil {
+			t.Fatal(err)
+		}
+		_ = conn.Close()
+		if resp.OK || resp.Reason != want {
+			t.Fatalf("features %v: response = %+v, want %q", features, resp, want)
+		}
+	}
+}
+
 // A server password that already verified costs no further KDF.
 func TestKnownServerPasswordSkipsKDF(t *testing.T) {
 	var verifications atomic.Int32

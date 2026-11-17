@@ -447,7 +447,8 @@ func authTransportLabel(value string) string {
 
 func authFailureReasonLabel(value string) string {
 	switch value {
-	case "invalid_credentials", "server_password", "not_admin", "locked_out", "banned", "malformed_metadata":
+	case "invalid_credentials", "server_password", "not_admin", "locked_out", "busy", "banned", "malformed_metadata",
+		"full", "guest_limit", "guest_disabled", "device_revoked":
 		return value
 	default:
 		return "unknown"

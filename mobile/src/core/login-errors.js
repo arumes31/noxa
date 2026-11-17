@@ -11,6 +11,7 @@ export function classifySignIn(error) {
     if (reason === "invalid server password") return { kind: "serverPassword" };
     if (reason === "banned" || reason.startsWith("banned: ")) return { kind: "banned", detail: text.slice(8) };
     if (reason === "too many failed logins, try again later") return { kind: "rateLimit" };
+    if (reason === "server is busy, try again in a moment") return { kind: "busy" };
     if (/signed out|link it again/.test(reason)) return { kind: "revoked" };
     if (reason === "server is full") return { kind: "full" };
     // (#52) Sent during a server's shutdown grace period.

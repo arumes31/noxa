@@ -545,9 +545,10 @@ func loginReasonTerminal(reason string) bool {
 }
 
 // loginReasonRetryable reports refusals that a later attempt can overcome:
-// a server error, the login rate limit, or a server that is restarting (#52).
+// a server error, the login rate limit, busy password checks, or a server
+// that is restarting (#52).
 func loginReasonRetryable(reason string) bool {
-	if reason == "internal error" || reason == "too many failed logins, try again later" {
+	if reason == "internal error" || reason == "too many failed logins, try again later" || reason == netproto.ReasonServerBusy {
 		return true
 	}
 	_, restarting := netproto.ParseRestartingReason(reason)
@@ -583,7 +584,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.mu.Unlock()
 	authMsg.AuthorizationModels = []string{netproto.AuthorizationModelRolesV1}
 	authMsg.ClientVersion = version.Short()
-	authMsg.ClientFeatures = []string{netproto.ClientFeaturePow, netproto.ClientFeatureRetryHint, netproto.ClientFeatureGoodbye, netproto.ClientFeatureResume}
+	authMsg.ClientFeatures = []string{netproto.ClientFeaturePow, netproto.ClientFeatureRetryHint, netproto.ClientFeatureGoodbye, netproto.ClientFeatureResume, netproto.ClientFeatureBusy}
 	if handoverBegin != nil {
 		authMsg.Handover = true
 		authMsg.ClientFeatures = append(authMsg.ClientFeatures, netproto.ClientFeatureHandover)

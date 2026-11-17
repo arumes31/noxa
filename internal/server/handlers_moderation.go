@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"time"
 
+	"noxa/internal/auth"
 	"noxa/internal/authorization"
 	"noxa/internal/netproto"
 )
@@ -126,10 +127,12 @@ func (s *TCPServer) insertBan(ctx context.Context, uniqueID, guestIP, reason str
 	return err
 }
 
-// guestBanIP is the canonical address to IP-ban with a guest's ID ban (a new
-// guest ID costs nothing), or "" for members and for addresses that may be
-// a reverse proxy rather than the guest: a web session reports the proxy
-// itself when it is loopback/untrusted or sent no X-Forwarded-For.
+// guestBanIP is the canonical source to IP-ban with a guest's ID ban (a new
+// guest ID costs nothing): the address, or its /64 for IPv6 since a host
+// picks any address in its prefix (auth.SourceAddressKey). It is "" for
+// members and for addresses that may be a reverse proxy rather than the
+// guest: a web session reports the proxy itself when it is loopback/untrusted
+// or sent no X-Forwarded-For.
 func (s *TCPServer) guestBanIP(target *Client) string {
 	if target.userID() != 0 {
 		return ""
@@ -152,5 +155,5 @@ func (s *TCPServer) guestBanIP(target *Client) string {
 			}
 		}
 	}
-	return addr.String()
+	return auth.SourceAddressKey(addr.String())
 }

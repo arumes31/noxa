@@ -24,10 +24,6 @@ import (
 // fakeAuth implements server.AuthBackend for the smoke test.
 type fakeAuth struct{}
 
-func (fakeAuth) AuthenticatePassword(_ context.Context, uniqueID, password string) (bool, error) {
-	return uniqueID == "lt-uid" && password == "pw", nil
-}
-
 func (fakeAuth) AuthenticateIdentifier(_ context.Context, identifier, password string) (*auth.User, error) {
 	if identifier != "lt-uid" {
 		return nil, auth.ErrUserNotFound
@@ -40,10 +36,6 @@ func (fakeAuth) AuthenticateIdentifier(_ context.Context, identifier, password s
 
 func (fakeAuth) AuthenticateIdentityChallenge(context.Context, string, []byte, []byte) (string, bool, error) {
 	return "", false, nil
-}
-
-func (fakeAuth) AuthenticateNickname(context.Context, string, string) (*auth.User, error) {
-	return nil, auth.ErrUserNotFound
 }
 
 func (fakeAuth) LookupUser(_ context.Context, uniqueID string) (*auth.User, error) {

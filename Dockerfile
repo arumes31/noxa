@@ -157,6 +157,12 @@ COPY --chmod=0555 --chown=10001:10001 scripts/noxa-entrypoint.sh /usr/local/bin/
 # Drop privileges: run as the non-root noxa user.
 USER 10001:10001
 
+# Soft Go heap limit sized for a 1 GiB container: the GC works harder before
+# the kernel OOM-kills. It leaves room for one spoken-name synthesis (a
+# separate ~250 MB process outside Go's heap). Raise it with a larger memory
+# limit (or set GOMEMLIMIT=off to disable it).
+ENV GOMEMLIMIT=700MiB
+
 # Expose the service ports:
 #   12333/tcp  - TLS control channel
 #   12334/udp  - UDP keepalive/media support

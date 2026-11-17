@@ -26,6 +26,9 @@ const (
 	// ClientFeatureRetryHint: the client understands RetryAfterReason and
 	// keeps reconnecting after it (a shutting-down server tells it when).
 	ClientFeatureRetryHint = "retry-hint-v1"
+	// ClientFeatureBusy: the client retries ReasonServerBusy; others get the
+	// legacy lockout text, which they already retry.
+	ClientFeatureBusy = "busy-v1"
 )
 
 // PowAlgorithm identifies the hash construction below.
@@ -98,6 +101,10 @@ func SolvePow(ctx context.Context, ch PowChallenge) (uint64, bool) {
 // ReasonIngressShieldUpdate rejects a legacy client while the shield is
 // raised: it cannot solve the challenge.
 const ReasonIngressShieldUpdate = "the server is under heavy load; update noXa to connect"
+
+// ReasonServerBusy refuses a password login while every password-check slot
+// is in use. Unlike a lockout, it clears within moments.
+const ReasonServerBusy = "server is busy, try again in a moment"
 
 // ReasonIngressShieldBusy refuses device linking while the shield is raised.
 const ReasonIngressShieldBusy = "the server is under heavy load; try again in a few minutes"

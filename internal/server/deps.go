@@ -29,10 +29,8 @@ import (
 
 // AuthBackend is the subset of auth.AuthService the TCP server needs.
 type AuthBackend interface {
-	AuthenticatePassword(ctx context.Context, uniqueID, password string) (bool, error)
 	AuthenticateIdentifier(ctx context.Context, identifier, password string) (*auth.User, error)
 	AuthenticateIdentityChallenge(ctx context.Context, uniqueID string, challenge, signature []byte) (string, bool, error)
-	AuthenticateNickname(ctx context.Context, nickname, password string) (*auth.User, error)
 	LookupUser(ctx context.Context, uniqueID string) (*auth.User, error)
 	LookupUserByPublicKey(ctx context.Context, publicKey string) (*auth.User, error)
 	LookupActiveBan(ctx context.Context, uniqueID, ip string) (*auth.Ban, error)

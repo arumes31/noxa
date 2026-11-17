@@ -14,6 +14,7 @@ export function loginFailure(error, request = {}) {
     if (reason === "authentication failed") return { kind: "authentication", field: "login-accountpw" };
     if (reason === "banned") return { kind: "banned" };
     if (reason === "too many failed logins, try again later") return { kind: "rateLimit" };
+    if (reason === "server is busy, try again in a moment") return { kind: "busy" };
     if (reason === "server address is required") return { kind: "addressRequired", field: "login-addr", invalid: true };
     if (reason === "nickname is required") return { kind: "nameRequired", field: "login-nick", invalid: true };
     if (reason.startsWith("display name must ")) return { kind: "displayName", field: request.displayName ? "login-display-name" : "login-nick", invalid: true };
@@ -39,7 +40,7 @@ export function loginFailure(error, request = {}) {
 // Coarse category for the connect dialog and support logs. Every kind maps to
 // exactly one category so the UI can show a label and one next step.
 const FAILURE_CATEGORIES = {
-    dns: "dns", certificate: "tls", network: "network", restarting: "network", permission: "permission",
+    dns: "dns", certificate: "tls", network: "network", restarting: "network", busy: "network", permission: "permission",
     serverPassword: "authentication", account: "authentication", authentication: "authentication", banned: "authentication", rateLimit: "authentication", savedPassword: "authentication",
     minimumVersion: "version", version: "version", serverOutdated: "version",
     addressRequired: "input", nameRequired: "input", displayName: "input",

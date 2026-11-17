@@ -10,6 +10,7 @@ func TestLoginReasonRetryableKeepsRestartingServersInTheLoop(t *testing.T) {
 	for reason, want := range map[string]bool{
 		"internal error": true,
 		"too many failed logins, try again later": true,
+		netproto.ReasonServerBusy:                 true,
 		netproto.RestartingReason(30):             true,
 		"invalid credentials":                     false,
 		netproto.ReasonIngressShieldUpdate:        false,

@@ -149,20 +149,29 @@ func evictionRank(scope string, entry loginFailureEntry, now time.Time) int {
 // per-scope slots but takes no global KDF slot, so saturated password work
 // cannot block key logins.
 func (l *LoginFailureLimiter) ReserveSignature(scopes ...string) (*LoginAttempt, bool) {
-	return l.reserve(false, scopes)
+	attempt, ok, _ := l.reserve(false, scopes)
+	return attempt, ok
 }
 
 // Reserve atomically checks scopes, reserves their per-scope verification slots,
 // and acquires a bounded global KDF slot. A false result means no expensive
 // password work may be started for that attempt.
 func (l *LoginFailureLimiter) Reserve(scopes ...string) (*LoginAttempt, bool) {
+	attempt, ok, _ := l.reserve(true, scopes)
+	return attempt, ok
+}
+
+// ReservePassword is Reserve that also reports busy: the refusal was only
+// because every global KDF slot is in use, so the caller may say "try again
+// in a moment" instead of reporting a lockout.
+func (l *LoginFailureLimiter) ReservePassword(scopes ...string) (attempt *LoginAttempt, ok, busy bool) {
 	return l.reserve(true, scopes)
 }
 
-func (l *LoginFailureLimiter) reserve(kdf bool, scopes []string) (*LoginAttempt, bool) {
+func (l *LoginFailureLimiter) reserve(kdf bool, scopes []string) (*LoginAttempt, bool, bool) {
 	scopes = uniqueLoginScopes(scopes)
 	if l == nil || len(scopes) == 0 {
-		return &LoginAttempt{}, true
+		return &LoginAttempt{}, true, false
 	}
 
 	l.mu.Lock()
@@ -171,8 +180,11 @@ func (l *LoginFailureLimiter) reserve(kdf bool, scopes []string) (*LoginAttempt,
 	now := l.now()
 	l.pruneExpiredLocked(now)
 	protectedScopes := loginScopeSet(scopes)
-	if (kdf && l.inFlight >= l.maxConcurrentKDF) || !l.scopesAvailableLocked(scopes, protectedScopes, now) {
-		return nil, false
+	if !l.scopesAvailableLocked(scopes, protectedScopes, now) {
+		return nil, false, false
+	}
+	if kdf && l.inFlight >= l.maxConcurrentKDF {
+		return nil, false, true
 	}
 	newScopes := 0
 	for _, scope := range scopes {
@@ -181,7 +193,7 @@ func (l *LoginFailureLimiter) reserve(kdf bool, scopes []string) (*LoginAttempt,
 		}
 	}
 	if !l.makeRoomLocked(now, newScopes, protectedScopes) {
-		return nil, false
+		return nil, false, false
 	}
 	for _, scope := range scopes {
 		entry := l.entries[scope]
@@ -191,7 +203,7 @@ func (l *LoginFailureLimiter) reserve(kdf bool, scopes []string) (*LoginAttempt,
 	if kdf {
 		l.inFlight++
 	}
-	return &LoginAttempt{limiter: l, scopes: scopes, kdf: kdf}, true
+	return &LoginAttempt{limiter: l, scopes: scopes, kdf: kdf}, true, false
 }
 
 // Succeed releases every reserved scope after a successful verification and

@@ -311,6 +311,11 @@ func TestLabelsHaveBoundedCardinality(t *testing.T) {
 }
 
 func TestAuthFailureMetricsUseOnlyStableLabels(t *testing.T) {
+	for _, reason := range []string{"busy", "full", "guest_limit", "guest_disabled", "device_revoked"} {
+		if got := authFailureReasonLabel(reason); got != reason {
+			t.Errorf("authFailureReasonLabel(%q) = %q", reason, got)
+		}
+	}
 	m := New()
 	m.IncAuthFailure("tcp", "invalid_credentials")
 	m.IncAuthFailure("grpc", "locked_out")

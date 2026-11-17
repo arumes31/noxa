@@ -112,10 +112,9 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	// A password that already verified skips the KDF, so clients that know
 	// it cannot occupy the shared KDF slots by reconnecting.
 	if hash := s.deps.ServerPasswordHash; hash != "" && !s.verifiedSecrets.known(hash, msg.ServerPassword) {
-		attempt, allowed := s.loginLimiter.Reserve(serverPasswordScope)
+		attempt, allowed, busy := s.loginLimiter.ReservePassword(serverPasswordScope)
 		if !allowed {
-			s.metricsSink().IncAuthFailure("tcp", "locked_out")
-			return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "too many failed logins, try again later"})
+			return s.refuseLoginAttempt(client, busy, msg.ClientFeatures)
 		}
 		defer attempt.Cancel()
 		if err := s.verifyServerPassword(msg.ServerPassword, hash); err != nil {
@@ -156,10 +155,9 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 		return s.writeMessage(client, netproto.MsgAuthChallenge, netproto.AuthChallenge{Challenge: challenge, Scheme: netproto.AuthChallengeSchemeV1})
 	}
 
-	attempt, allowed := s.loginLimiter.Reserve(accountSourceScope, principalScope, accountScope)
+	attempt, allowed, busy := s.loginLimiter.ReservePassword(accountSourceScope, principalScope, accountScope)
 	if !allowed {
-		s.metricsSink().IncAuthFailure("tcp", "locked_out")
-		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "too many failed logins, try again later"})
+		return s.refuseLoginAttempt(client, busy, msg.ClientFeatures)
 	}
 	defer attempt.Cancel()
 
@@ -208,6 +206,20 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	}
 	attempt.Succeed(principalScope, accountScope)
 	return s.completeAuthForUser(ctx, client, user, msg.Nickname)
+}
+
+// refuseLoginAttempt answers a password login the limiter refused: busy KDF
+// slots clear in moments, a lockout only after its window.
+func (s *TCPServer) refuseLoginAttempt(client *Client, busy bool, features []string) error {
+	if busy {
+		s.metricsSink().IncAuthFailure("tcp", "busy")
+		if !slices.Contains(features, netproto.ClientFeatureBusy) {
+			return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "too many failed logins, try again later"})
+		}
+		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: netproto.ReasonServerBusy})
+	}
+	s.metricsSink().IncAuthFailure("tcp", "locked_out")
+	return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "too many failed logins, try again later"})
 }
 
 func (s *TCPServer) verifyServerPassword(password, encodedHash string) error {

@@ -227,6 +227,7 @@ describe("sign-in failures", () => {
         assert.equal(classifySignIn("banned").kind, "banned");
         assert.equal(classifySignIn("banned: spam").kind, "banned");
         assert.equal(classifySignIn("too many failed logins, try again later").kind, "rateLimit");
+        assert.equal(classifySignIn("server is busy, try again in a moment").kind, "busy");
         assert.equal(classifySignIn(new Error("could not reach the server")).kind, "network");
         assert.equal(classifySignIn("unsupported authorization model; upgrade your noXa client").kind, "version");
         assert.equal(classifySignIn("this device was signed out; link it again").kind, "revoked");

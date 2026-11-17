@@ -98,9 +98,14 @@ func (a *AuthService) ValidateIntegration(ctx context.Context, p IntegrationPrin
 
 // sameBanIP preserves historical text matching while making equivalent numeric
 // address representations identical across all authentication transports.
+// A stored prefix (a guest's IPv6 /64, see SourceAddressKey) covers the peer.
 func sameBanIP(stored, peer string) bool {
 	if stored == "" || peer == "" {
 		return false
+	}
+	if prefix, err := netip.ParsePrefix(stored); err == nil {
+		addr, err := netip.ParseAddr(peer)
+		return err == nil && prefix.Contains(addr.Unmap().WithZone(""))
 	}
 	a, aErr := netip.ParseAddr(stored)
 	b, bErr := netip.ParseAddr(peer)

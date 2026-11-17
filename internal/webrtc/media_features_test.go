@@ -1,7 +1,6 @@
 package webrtc
 
 import (
-	"math"
 	"testing"
 	"time"
 )
@@ -55,21 +54,5 @@ func TestKeyframeBurstSuppression(t *testing.T) {
 	}
 	if !r.allowKeyframeRequest(7, now.Add(time.Second)) {
 		t.Fatal("request after window rejected")
-	}
-}
-
-func TestSoftClipMix(t *testing.T) {
-	dst := make([]float32, 4)
-	SoftClipMix(dst, []float32{0.25, 0.5, 1, -1}, []float32{0.25, 0.5, 1, -1})
-	for i, v := range dst {
-		if v < -1 || v > 1 || math.IsNaN(float64(v)) {
-			t.Fatalf("sample %d = %v", i, v)
-		}
-	}
-	if dst[0] != 0.5 {
-		t.Fatalf("linear sample changed: %v", dst)
-	}
-	if !(dst[2] < 1 && dst[2] > dst[1] && dst[3] == -dst[2]) {
-		t.Fatalf("limiter did not soft-clip monotonically: %v", dst)
 	}
 }

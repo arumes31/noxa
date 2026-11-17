@@ -12,6 +12,7 @@ test("server password and blocked admission are distinct from account credential
     assert.equal(loginFailure("invalid server password").field, "login-serverpw");
     assert.equal(loginFailure("banned").field, undefined);
     assert.equal(loginFailure("too many failed logins, try again later").kind, "rateLimit");
+    assert.equal(loginFailure("server is busy, try again in a moment").kind, "busy");
 });
 
 test("network errors offer address recovery without marking valid input invalid", () => {
