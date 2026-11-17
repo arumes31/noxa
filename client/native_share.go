@@ -15,13 +15,14 @@ import (
 	"runtime"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/webrtc/v4"
 
 	"noxa/client/internal/nativecapture"
-	"noxa/internal/nativesender"
 	"noxa/internal/framecrypt"
+	"noxa/internal/nativesender"
 	"noxa/internal/netproto"
 )
 
@@ -104,6 +105,7 @@ type nativeShare struct {
 	minimized  bool
 	stop       chan struct{}
 	prev       nativeSample
+	badFrames  atomic.Int32
 	// Server candidates that arrive while an offer is still in flight.
 	pending []netproto.ICECandidate
 }
@@ -363,8 +365,16 @@ func (n *nativeShare) onFrame(f nativecapture.Frame) {
 	if sender == nil || !upload {
 		return
 	}
-	if err := sender.WriteFrame(f.Data, f.Keyframe, f.SeqHeader, f.Captured); err != nil && !errors.Is(err, nativesender.ErrDropped) {
-		log.Printf("native share frame: %v", err)
+	err := sender.WriteFrame(f.Data, f.Keyframe, f.SeqHeader, f.Captured)
+	if err == nil || errors.Is(err, nativesender.ErrDropped) {
+		n.badFrames.Store(0)
+		return
+	}
+	// The encoder ignores the one-slice/parameter-set rules: never publish
+	// such frames; a second of them falls back to Browser capture.
+	if n.badFrames.Add(1) == 30 {
+		log.Printf("native share encoder output rejected: %v", err)
+		go n.fallback("encoder")
 	}
 }
 
