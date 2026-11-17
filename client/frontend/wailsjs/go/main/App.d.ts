@@ -341,6 +341,12 @@ export function MoveClient(arg1:string,arg2:number):Promise<string>;
 
 export function MoveClientForTab(arg1:string,arg2:string,arg3:number):Promise<string>;
 
+export function NativeScreenDiagnosticsForTab(arg1:string):Promise<netproto.VideoSenderDiagnostics>;
+
+export function NativeScreenKeyForTab(arg1:string,arg2:any):Promise<void>;
+
+export function NativeScreenShareStatusForTab(arg1:string):Promise<any>;
+
 export function NativeToastsAvailable():Promise<boolean>;
 
 export function Notify(arg1:string,arg2:string):Promise<string>;
@@ -563,7 +569,11 @@ export function StartConnectionBenchmark(arg1:string):Promise<main.ConnectionBen
 
 export function StartDirectDisappearingForTab(arg1:string,arg2:string):Promise<Array<main.DMExpiry>>;
 
+export function StartNativeScreenShareForTab(arg1:string,arg2:any):Promise<void>;
+
 export function StartedAfterUpdate():Promise<boolean>;
+
+export function StopNativeScreenShareForTab(arg1:string):Promise<void>;
 
 export function StopPrivateCallForTab(arg1:string,arg2:string):Promise<void>;
 
@@ -600,6 +610,8 @@ export function TrayMention():Promise<void>;
 export function TrustServerFingerprint(arg1:string,arg2:string):Promise<string>;
 
 export function UpdateGamingOverlay(arg1:main.GamingOverlaySnapshot):Promise<string>;
+
+export function UpdateNativeScreenShareForTab(arg1:string,arg2:any):Promise<void>;
 
 export function UploadChatAttachment(arg1:number,arg2:string,arg3:string):Promise<string>;
 

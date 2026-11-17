@@ -1,3 +1,4 @@
+import { nativeSenderRow } from "./native-share.js";
 import { collectVideoSenders, videoSenderSources } from "./video-sender-stats.js";
 import { publicationSnapshot } from "./stream-publication.js";
 import { samplePeerStats } from "./peer-stats.js";
@@ -215,6 +216,12 @@ export function startVoiceDiagnostics({ state, output, bridge, recover, interval
             const sources = videoSenderSources(state, publications);
             const report = collectVoiceTelemetry(state, stats, previous, output?.() || {}, sources, previousSources);
             report.session_id = sessionID;
+            if (state.nativeShare) {
+                // Native capture publishes on its own peer: its row comes from Go.
+                const row = await nativeSenderRow(tabID);
+                if (!current()) return;
+                if (row) report.video_senders = [...(report.video_senders || []).filter(r => r.slot !== "screen"), row];
+            }
             previous = stats; previousSources = sources; previousScope = key; previousPeer = pc;
             previousPublications = publications;
             state.voiceTelemetry = { report, at: Date.now(), scope: key, peer: pc };

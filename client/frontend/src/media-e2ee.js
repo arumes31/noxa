@@ -3,6 +3,7 @@
 // receiver is protected the moment it exists (addTransceiver / addTrack /
 // track event), before any negotiation can carry its media. Unsupported
 // runtimes fail with an explicit error; there is no plaintext mode.
+import { mirrorNativeKey } from "./native-share.js";
 import { sampleSenderStats } from "./peer-stats.js";
 import { hardwareVideoEvidence, hardwareVideoRow } from "./hardware-video.js";
 import { MEDIA_E2EE_VERSION, MEDIA_E2EE_CODEC_VERSION, SLOTS, validEpoch, validKid, validPid } from "./media-e2ee-core.js";
@@ -397,12 +398,13 @@ export class MediaE2EE {
     async setKey(pid, epoch, kid, key) {
         if (!validPid(pid) || !validEpoch(epoch) || !validKid(kid) || !(key instanceof Uint8Array) || key.length !== 32) throw new Error("Invalid media key");
         const copy = new Uint8Array(key);
+        mirrorNativeKey(pid, { op: "key", epoch, kid, key: copy });
         return this.request("key", { pid, epoch, kid, key: copy });
     }
-    activate(pid, epoch) { return this.request("activate", { pid, epoch }); }
-    retire(pid, through) { return this.request("retire", { pid, through }); }
-    retireOne(pid, epoch) { return this.request("retireOne", { pid, epoch }); }
-    forget(pid) { return this.request("forget", { pid }); }
+    activate(pid, epoch) { mirrorNativeKey(pid, { op: "activate", epoch }); return this.request("activate", { pid, epoch }); }
+    retire(pid, through) { mirrorNativeKey(pid, { op: "retire", epoch: through }); return this.request("retire", { pid, through }); }
+    retireOne(pid, epoch) { mirrorNativeKey(pid, { op: "retireOne", epoch }); return this.request("retireOne", { pid, epoch }); }
+    forget(pid) { mirrorNativeKey(pid, { op: "forget" }); return this.request("forget", { pid }); }
     stats(endpoint) { return this.request("stats", { id: endpoint ? this.endpointID(endpoint) : undefined }); }
 
     close() {
