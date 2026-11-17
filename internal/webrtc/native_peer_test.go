@@ -387,6 +387,71 @@ func TestNativeTrackResumesAfterLosingItsSlot(t *testing.T) {
 	timingWait(t, "screen flowing again", 5*time.Second, func() bool { return viewer.count(id) > before+10 })
 }
 
+// A browser screen (or its audio) whose slot a native share took resumes
+// when the browser declares the SAME track again: it reuses its transceiver
+// (replaceTrack), so Pion emits no second OnTrack.
+func TestBrowserTrackResumesAfterNativeClaim(t *testing.T) {
+	for _, kind := range []timingKind{timingKinds[2], timingKinds[1]} {
+		t.Run(kind.name, func(t *testing.T) {
+			f := newTimingFixture(t, kind)
+			viewer := f.addViewer(t, "viewer")
+			id, key := outputTrackID(kind), kind.slot
+			if kind.video != "" {
+				key += slotSep
+			}
+			timingWait(t, "browser track at the viewer", 10*time.Second, func() bool { return viewer.count(id) > 0 })
+
+			// The browser stops sharing: its reader stays blocked in ReadRTP.
+			f.sources[0].pause.Store(true)
+			native := &PeerConnectionWrapper{}
+			f.router.AttachNativePeer("pub", native, nil)
+			f.router.SetNativeTrackSlots("pub", native, map[string]string{"native": kind.slot})
+			if _, ok := f.router.claimSlotFrom("pub", key, "native", native); !ok {
+				t.Fatal("native claim rejected")
+			}
+			f.router.SetTrackSlots("pub", map[string]string{kind.trackID: kind.slot})
+			f.sources[0].pause.Store(false)
+			timingWait(t, "browser track reclaimed", 5*time.Second, func() bool {
+				f.router.mu.RLock()
+				defer f.router.mu.RUnlock()
+				return f.router.slotClaims["pub"][key].trackID == kind.trackID
+			})
+			before := viewer.count(id)
+			timingWait(t, "browser track flowing again", 5*time.Second, func() bool { return viewer.count(id) > before+10 })
+
+			// A rebuilt peer keeps the declaration; the old peer's reader must
+			// not reclaim the slot for its stale track.
+			f.router.DetachPeerKeepChannel("pub")
+			time.Sleep(200 * time.Millisecond)
+			f.router.mu.RLock()
+			_, stale := f.router.slotClaims["pub"][key]
+			f.router.mu.RUnlock()
+			if stale {
+				t.Fatal("detached peer's reader reclaimed the slot")
+			}
+		})
+	}
+}
+
+// A resumed browser track needs an explicit declaration: once a native share
+// dropped its screenaudio declaration it must not fall back to the mic slot.
+func TestResumedBrowserTrackNeedsDeclaration(t *testing.T) {
+	r := NewRouter(nil)
+	r.SetTrackSlots("pub", map[string]string{"share-audio": SlotScreenAudio})
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if slot, ok := r.browserSlotLocked("pub", "share-audio", pion.RTPCodecTypeAudio, false); !ok || slot != SlotScreenAudio {
+		t.Fatalf("declared track resolved to %q, %v", slot, ok)
+	}
+	delete(r.trackSlots, "pub")
+	if slot, ok := r.browserSlotLocked("pub", "share-audio", pion.RTPCodecTypeAudio, false); ok {
+		t.Fatalf("undeclared resumed track admitted into %q", slot)
+	}
+	if slot, ok := r.browserSlotLocked("pub", "mic", pion.RTPCodecTypeAudio, true); !ok || slot != SlotMic {
+		t.Fatalf("first read of an undeclared track resolved to %q, %v", slot, ok)
+	}
+}
+
 // The reaper of an old browser peer must spare a native peer created for its
 // replacement.
 func TestNativePeerSurvivesStaleOwnerClose(t *testing.T) {
