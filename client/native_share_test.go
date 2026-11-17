@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"noxa/client/internal/nativecapture"
-	"noxa/client/internal/nativesender"
+	"noxa/internal/nativesender"
 	"noxa/internal/framecrypt"
 )
 

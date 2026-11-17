@@ -20,7 +20,7 @@ import (
 	"github.com/pion/webrtc/v4"
 
 	"noxa/client/internal/nativecapture"
-	"noxa/client/internal/nativesender"
+	"noxa/internal/nativesender"
 	"noxa/internal/framecrypt"
 	"noxa/internal/netproto"
 )

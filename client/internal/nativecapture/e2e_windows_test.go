@@ -1,6 +1,6 @@
 //go:build windows
 
-package nativesender
+package nativecapture
 
 import (
 	"bytes"
@@ -14,8 +14,9 @@ import (
 
 	"github.com/pion/webrtc/v4"
 
-	"noxa/client/internal/nativecapture"
 	"noxa/internal/framecrypt"
+	"noxa/internal/nativesender"
+	"noxa/internal/nativesender/sendertest"
 )
 
 // TestNativeCaptureStreamsToReceiver runs real capture + Media Foundation
@@ -27,7 +28,7 @@ func TestNativeCaptureStreamsToReceiver(t *testing.T) {
 	if os.Getenv("NOXA_NATIVE_CAPTURE") == "" {
 		t.Skip("set NOXA_NATIVE_CAPTURE=1 on an interactive Windows desktop")
 	}
-	server := newFakeServer(t)
+	server := sendertest.NewReceiver(t)
 	material := make([]byte, 32)
 	_, _ = rand.Read(material)
 	keys := framecrypt.NewEncryptor()
@@ -37,9 +38,9 @@ func TestNativeCaptureStreamsToReceiver(t *testing.T) {
 	if err := keys.Activate(1); err != nil {
 		t.Fatal(err)
 	}
-	var session *nativecapture.Session
+	var session *Session
 	var sessionMu sync.Mutex
-	sender, err := New(Config{Signaling: server, Keys: keys, SettingEngine: loopbackSettings(), OnKeyframeRequest: func() {
+	sender, err := nativesender.New(nativesender.Config{Signaling: server, Keys: keys, SettingEngine: sendertest.LoopbackSettings(), OnKeyframeRequest: func() {
 		sessionMu.Lock()
 		defer sessionMu.Unlock()
 		if session != nil {
@@ -50,9 +51,7 @@ func TestNativeCaptureStreamsToReceiver(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = sender.Close() }()
-	server.mu.Lock()
-	server.sender = sender
-	server.mu.Unlock()
+	server.SetSender(sender)
 	deadline := time.Now().Add(10 * time.Second)
 	for sender.ConnectionState() != webrtc.PeerConnectionStateConnected {
 		if time.Now().After(deadline) {
@@ -61,7 +60,7 @@ func TestNativeCaptureStreamsToReceiver(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	monitor := 0
-	for i, m := range nativecapture.Monitors() {
+	for i, m := range Monitors() {
 		if m.Primary {
 			monitor = i
 		}
@@ -70,8 +69,8 @@ func TestNativeCaptureStreamsToReceiver(t *testing.T) {
 	if os.Getenv("NOXA_NATIVE_TESTDATA") != "" {
 		maxW, maxH = 640, 360 // Small committed fixtures.
 	}
-	s, err := nativecapture.Start(nativecapture.Config{Source: nativecapture.Source{Monitor: monitor}, MaxWidth: maxW, MaxHeight: maxH, FPS: 30, Bitrate: 1_000_000,
-		AllowSoftware: os.Getenv("NOXA_NATIVE_SOFTWARE") != ""}, func(f nativecapture.Frame) {
+	s, err := Start(Config{Source: Source{Monitor: monitor}, MaxWidth: maxW, MaxHeight: maxH, FPS: 30, Bitrate: 1_000_000,
+		AllowSoftware: os.Getenv("NOXA_NATIVE_SOFTWARE") != ""}, func(f Frame) {
 		if err := sender.WriteFrame(f.Data, f.Keyframe, f.SeqHeader, f.Captured); err != nil {
 			t.Errorf("WriteFrame: %v", err)
 		}
@@ -88,8 +87,8 @@ func TestNativeCaptureStreamsToReceiver(t *testing.T) {
 	received, keyframes := 0, 0
 	for done := false; !done; {
 		select {
-		case frame := <-server.frames:
-			plain := decrypt(t, material, frame)
+		case frame := <-server.Frames:
+			plain := sendertest.Decrypt(t, material, frame)
 			nals := framecrypt.SplitAnnexB(plain)
 			key := nals[len(nals)-1][0]&31 == 5
 			if key && (len(nals) != 3 || nals[0][0]&31 != 7 || nals[1][0]&31 != 8) || !key && len(nals) != 1 {

@@ -330,7 +330,7 @@ func (s *Sender) Stats() Stats {
 		out.PacketsSent, out.BytesSent = st.OutboundRTPStreamStats.PacketsSent, st.OutboundRTPStreamStats.BytesSent
 		if st.RemoteInboundRTPStreamStats.PacketsReceived > 0 || st.RemoteInboundRTPStreamStats.RoundTripTime > 0 {
 			out.HasRemote = true
-			out.RTT, out.FractionLost = st.RemoteInboundRTPStreamStats.RoundTripTime, st.RemoteInboundRTPStreamStats.FractionLost
+			out.RTT, out.FractionLost = st.RemoteInboundRTPStreamStats.RoundTripTime, st.FractionLost
 		}
 	}
 	if s.rtxSSRC != 0 {
