@@ -175,25 +175,55 @@ func checkRemoteSDPBudget(sdp string) error {
 	return nil
 }
 
-// remoteICEUfrag returns the first a=ice-ufrag value of a description.
-func remoteICEUfrag(sdp string) string {
+// admitDescriptionCandidates charges a remote description's candidates to
+// the peer's budget, which restarts when the description carries new ICE
+// credentials (an ICE restart reuses this peer). Pion adds a description's
+// candidates on every SetRemoteDescription, so re-offers count too.
+func (w *PeerConnectionWrapper) admitDescriptionCandidates(sdp string) error {
+	ufrag, candidates := "", []string(nil)
 	for _, line := range strings.FieldsFunc(sdp, func(r rune) bool { return r == '\r' || r == '\n' }) {
-		if ufrag, ok := strings.CutPrefix(strings.TrimSpace(line), "a=ice-ufrag:"); ok {
-			return ufrag
+		line = strings.TrimSpace(line)
+		if value, ok := strings.CutPrefix(line, "a=ice-ufrag:"); ok && ufrag == "" {
+			ufrag = value
+		} else if strings.HasPrefix(line, "a=candidate:") {
+			candidates = append(candidates, line[len("a="):])
 		}
 	}
-	return ""
-}
-
-// resetCandidatesOnRestart starts a fresh candidate budget when a remote
-// offer carries new ICE credentials (an ICE restart reuses this peer).
-func (w *PeerConnectionWrapper) resetCandidatesOnRestart(sdp string) {
-	ufrag := remoteICEUfrag(sdp)
 	w.candidateMu.Lock()
-	defer w.candidateMu.Unlock()
 	if ufrag != w.remoteUfrag {
 		w.remoteUfrag, w.seenCandidates, w.candidateWarned = ufrag, nil, false
 	}
+	return w.admitCandidatesLocked(candidates...)
+}
+
+// admitCandidatesLocked records new candidates, refusing all of them once
+// the budget would be exceeded. Repeats are free. It unlocks candidateMu.
+func (w *PeerConnectionWrapper) admitCandidatesLocked(candidates ...string) error {
+	fresh := make(map[string]struct{})
+	for _, c := range candidates {
+		if _, seen := w.seenCandidates[c]; !seen {
+			fresh[c] = struct{}{}
+		}
+	}
+	if len(w.seenCandidates)+len(fresh) > maxRemoteICECandidates {
+		warn := !w.candidateWarned
+		w.candidateWarned = true
+		w.candidateMu.Unlock()
+		if warn {
+			w.logger.Warn("webrtc remote ice candidate budget exhausted",
+				zap.String("client_id", w.clientID),
+				zap.Int("limit", maxRemoteICECandidates))
+		}
+		return ErrTooManyICECandidates
+	}
+	if w.seenCandidates == nil {
+		w.seenCandidates = make(map[string]struct{})
+	}
+	for c := range fresh {
+		w.seenCandidates[c] = struct{}{}
+	}
+	w.candidateMu.Unlock()
+	return nil
 }
 
 // HandleOffer sets the remote description (an offer SDP), creates an answer,
@@ -220,11 +250,13 @@ func (w *PeerConnectionWrapper) handleOffer(sdp string, bounds *VideoBounds) (re
 	if err := checkRemoteSDPBudget(sdp); err != nil {
 		return "", err
 	}
+	if err := w.admitDescriptionCandidates(sdp); err != nil {
+		return "", err
+	}
 	offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: sdp}
 	if err := w.pc.SetRemoteDescription(offer); err != nil {
 		return "", fmt.Errorf("setting remote offer: %w", err)
 	}
-	w.resetCandidatesOnRestart(sdp)
 
 	if bounds != nil {
 		w.videoBounds = *bounds
@@ -255,6 +287,9 @@ func (w *PeerConnectionWrapper) HandleAnswer(sdp string) error {
 	w.beginSignaling()
 	defer w.endSignaling()
 	if err := checkRemoteSDPBudget(sdp); err != nil {
+		return err
+	}
+	if err := w.admitDescriptionCandidates(sdp); err != nil {
 		return err
 	}
 	answer := webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: sdp}
@@ -322,24 +357,9 @@ func (w *PeerConnectionWrapper) SignalingState() webrtc.SignalingState {
 func (w *PeerConnectionWrapper) AddICECandidate(candidate webrtc.ICECandidateInit) error {
 	if candidate.Candidate != "" { // "" is end-of-candidates
 		w.candidateMu.Lock()
-		if _, seen := w.seenCandidates[candidate.Candidate]; !seen {
-			if len(w.seenCandidates) >= maxRemoteICECandidates {
-				warn := !w.candidateWarned
-				w.candidateWarned = true
-				w.candidateMu.Unlock()
-				if warn {
-					w.logger.Warn("webrtc remote ice candidate budget exhausted",
-						zap.String("client_id", w.clientID),
-						zap.Int("limit", maxRemoteICECandidates))
-				}
-				return ErrTooManyICECandidates
-			}
-			if w.seenCandidates == nil {
-				w.seenCandidates = make(map[string]struct{})
-			}
-			w.seenCandidates[candidate.Candidate] = struct{}{}
+		if err := w.admitCandidatesLocked(candidate.Candidate); err != nil {
+			return err
 		}
-		w.candidateMu.Unlock()
 	}
 	select {
 	case w.remoteCandidates <- candidate:

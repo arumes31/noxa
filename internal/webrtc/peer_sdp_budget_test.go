@@ -47,7 +47,9 @@ func TestCheckRemoteSDPBudgetCapsMediaSections(t *testing.T) {
 
 func TestRemoteICECandidateBudget(t *testing.T) {
 	w := &PeerConnectionWrapper{logger: zap.NewNop(), remoteCandidates: make(chan pion.ICECandidateInit, 4*maxRemoteICECandidates), closed: make(chan struct{})}
-	w.resetCandidatesOnRestart("a=ice-ufrag:one\r\n")
+	if err := w.admitDescriptionCandidates("a=ice-ufrag:one\r\n"); err != nil {
+		t.Fatal(err)
+	}
 	add := func(i int) error {
 		return w.AddICECandidate(pion.ICECandidateInit{Candidate: fmt.Sprintf("candidate:%d 1 udp 1 192.0.2.1 %d typ host", i, 1000+i)})
 	}
@@ -65,11 +67,20 @@ func TestRemoteICECandidateBudget(t *testing.T) {
 	if err := add(maxRemoteICECandidates); !errors.Is(err, ErrTooManyICECandidates) {
 		t.Fatalf("over-budget candidate err=%v", err)
 	}
-	w.resetCandidatesOnRestart("a=ice-ufrag:one\r\n") // renegotiation without restart
+	// A re-offer repeating known candidates is free; a new one is not.
+	known := "a=ice-ufrag:one\r\na=candidate:0 1 udp 1 192.0.2.1 1000 typ host\r\n"
+	if err := w.admitDescriptionCandidates(known); err != nil {
+		t.Fatalf("re-offer with known candidates rejected: %v", err)
+	}
+	if err := w.admitDescriptionCandidates(known + "a=candidate:99 1 udp 1 192.0.2.9 9 typ host\r\n"); !errors.Is(err, ErrTooManyICECandidates) {
+		t.Fatalf("re-offer grew the candidate set: %v", err)
+	}
 	if err := add(maxRemoteICECandidates); !errors.Is(err, ErrTooManyICECandidates) {
 		t.Fatalf("renegotiation reset the budget: %v", err)
 	}
-	w.resetCandidatesOnRestart("a=ice-ufrag:two\r\n") // ICE restart
+	if err := w.admitDescriptionCandidates("a=ice-ufrag:two\r\n"); err != nil { // ICE restart
+		t.Fatal(err)
+	}
 	if err := add(maxRemoteICECandidates); err != nil {
 		t.Fatalf("ICE restart kept the old budget: %v", err)
 	}
