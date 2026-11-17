@@ -6,6 +6,7 @@ package nativecapture
 
 import (
 	"errors"
+	"slices"
 	"time"
 )
 
@@ -76,6 +77,28 @@ func outputSize(w, h, maxW, maxH int) (int, int) {
 	scale := min(1, float64(maxW)/float64(w), float64(maxH)/float64(h))
 	ow, oh := int(float64(w)*scale)&^1, int(float64(h)*scale)&^1
 	return max(ow, 2), max(oh, 2)
+}
+
+// flight is one submitted picture: its capture time and NV12 ring slot.
+type flight struct {
+	at   time.Time
+	slot int
+}
+
+// flightHold bounds how long a submitted slot counts as held: an encoder
+// that silently dropped a frame must not pin its slot forever.
+const flightHold = time.Second
+
+// freeSlot returns the first ring slot from next that no recent in-flight
+// picture holds, or -1 when the encoder holds them all.
+func freeSlot(next, size int, inFlight []flight, now time.Time) int {
+	for i := range size {
+		slot := (next + i) % size
+		if !slices.ContainsFunc(inFlight, func(f flight) bool { return f.slot == slot && now.Sub(f.at) < flightHold }) {
+			return slot
+		}
+	}
+	return -1
 }
 
 // Window is one capturable top-level window.

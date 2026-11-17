@@ -573,7 +573,7 @@ export function StartNativeScreenShareForTab(arg1:string,arg2:any):Promise<void>
 
 export function StartedAfterUpdate():Promise<boolean>;
 
-export function StopNativeScreenShareForTab(arg1:string):Promise<void>;
+export function StopNativeScreenShareForTab(arg1:string,arg2:string):Promise<void>;
 
 export function StopPrivateCallForTab(arg1:string,arg2:string):Promise<void>;
 

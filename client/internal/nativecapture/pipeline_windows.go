@@ -99,7 +99,7 @@ type pipeline struct {
 	eventErr   chan error
 	needInput  int
 	pending    []int // ring slots converted but not yet submitted
-	inFlight   []time.Time
+	inFlight   []flight
 	last       int // ring slot of the newest converted frame, -1 none
 	openedAt   time.Time
 }
@@ -255,8 +255,12 @@ func (s *Session) convert(p *pipeline, tex uintptr) {
 		box = d3dBox{Left: uint32(r.X), Top: uint32(r.Y), Right: uint32(r.X + p.srcW), Bottom: uint32(r.Y + p.srcH), Back: 1}
 	}
 	p.d.copyRegion(p.conv.input, tex, box)
-	slot := p.next
-	p.next = (p.next + 1) % nv12Ring
+	// The encoder may still read a submitted texture: never overwrite one.
+	slot := freeSlot(p.next, nv12Ring, p.inFlight, time.Now())
+	if slot < 0 {
+		return // every slot is held: drop this frame
+	}
+	p.next = (slot + 1) % nv12Ring
 	if err := p.conv.blt(p.ring[slot].view); err != nil {
 		s.fail(err)
 		return
@@ -288,7 +292,7 @@ func (s *Session) loop(p *pipeline, capt *capturer) {
 		if !queued.After(lastSubmit) {
 			queued = now // A resent picture: measure from the resend.
 		}
-		p.inFlight = append(p.inFlight, queued)
+		p.inFlight = append(p.inFlight, flight{at: queued, slot: slot})
 		lastSubmit = now
 		if !p.enc.async {
 			return s.drain(p)
@@ -392,7 +396,7 @@ func (s *Session) drain(p *pipeline) error {
 		}
 		captured := time.Now()
 		if len(p.inFlight) > 0 {
-			captured = p.inFlight[0]
+			captured = p.inFlight[0].at
 			p.inFlight = p.inFlight[1:]
 		}
 		s.mu.Lock()

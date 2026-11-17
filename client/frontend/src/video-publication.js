@@ -24,7 +24,7 @@ import { sampleSenderStats } from "./peer-stats.js";
 import { createScreenResolutionController } from "./screen-resolution.js";
 import { createScreenStartupAttempt } from "./video-startup-plan.js";
 import { createShareResume } from "./share-resume.js";
-import { screenCaptureBackend, setScreenCaptureBackend, nativeShareStatus, nativeSource, nativeSourceOptions, nativeStandInStream } from "./native-share.js";
+import { screenCaptureBackend, setScreenCaptureBackend, nativeShareStatus, nativeSource, nativeSourceOptions, nativeStandInStream, nativeEventIsCurrent } from "./native-share.js";
 import { renegotiate, negotiateOffer, queuePeerNegotiation } from "./video-negotiation.js";
 const V = () => window.__noxa;
 
@@ -1067,13 +1067,18 @@ export function createVideoPublication({ policy }) {
         const tabID = state.activeTabID, pc = state.pc, serverGeneration = state.serverGeneration;
         const p = shareQuality(preset, custom, bitrateCeiling);
         if (!p || !pc || !source) return false;
-        const current = () => state.pc === pc && state.serverGeneration === serverGeneration && state.activeTabID === tabID;
+        const scope = captureMediaScope();
+        const current = () => mediaScopeIsCurrent(scope) && state.pc === pc && state.serverGeneration === serverGeneration && state.activeTabID === tabID;
         if (replacing) { await doStopShare(); if (!current()) return false; }
         const limits = state.mediaLimits;
         const bound = (value, limit) => limit > 0 ? Math.min(value, limit) : value;
         // Native output is at most 1080p ("original" and larger presets are bounded).
         const width = Math.min(p.width || 1920, 1920), height = Math.min(p.height || 1080, 1080);
-        const bitrate = p.bitrateCeiling || Math.min(8000000, Math.round(width * height * p.fps * 0.07));
+        // Go bounds it by the server limit too, also after later limit changes.
+        const bitrate = bound(p.bitrateCeiling || Math.min(8000000, Math.round(width * height * p.fps * 0.07)), Math.floor((limits?.video_max_bitrate || 0) * 0.85));
+        // The share identity: Go ignores stops and updates of other shares and tags its events with it.
+        const id = crypto.randomUUID();
+        const stopNative = () => void Promise.resolve().then(() => window.go.main.App.StopNativeScreenShareForTab(tabID, id)).catch(() => {});
         const stream = nativeStandInStream(tLabel("share.nativeActive"));
         const track = stream.getVideoTracks()[0];
         // The capture lease keeps the display awake and raises this process's GPU/CPU priority.
@@ -1082,22 +1087,31 @@ export function createVideoPublication({ policy }) {
         onDisplayCaptureStop(track, () => {
             if (state.nativeShare?.track !== track) return;
             state.nativeShare = null;
-            void Promise.resolve().then(() => window.go.main.App.StopNativeScreenShareForTab(tabID)).catch(() => {});
+            stopNative();
         });
         try {
-            await window.go.main.App.StartNativeScreenShareForTab(tabID, { source, max_width: bound(width, limits?.video_max_width),
+            await window.go.main.App.StartNativeScreenShareForTab(tabID, { id, source, max_width: bound(width, limits?.video_max_width),
                 max_height: bound(height, limits?.video_max_height), fps: p.fps, bitrate });
         } catch (error) {
             stopDisplayCapture(stream);
             if (current()) V().sysMsg(tLabel("share.nativeFailed") + (error?.message || error));
             return false;
         }
-        const native = { tabID, track, generation: "0", surface, preset: { ...p, width, height } };
+        // The session, peer or share state changed while Go started: discard this capture untouched.
+        if (!current() || state.nativeShare || state.screenSharing || track.readyState !== "live") {
+            stopDisplayCapture(stream);
+            stopNative();
+            return false;
+        }
+        const native = { id, tabID, track, generation: "0", surface, preset: { ...p, width, height } };
+        // Bound calls run concurrently in Go: keep updates in order (a pause and
+        // its resume share a generation).
+        let updates = Promise.resolve();
         const sync = () => {
             if (state.nativeShare !== native) return;
             native.generation = publicationSnapshot().find(entry => entry.publication.slot === "screen" && entry.publication.track === track)?.generation || native.generation;
-            void Promise.resolve().then(() => window.go.main.App.UpdateNativeScreenShareForTab(tabID, { generation: native.generation,
-                upload_active: publicationUploadActive("screen", track) !== false, codec: publicationCodec("screen", track) || "" })).catch(() => {});
+            const update = { id, generation: native.generation, upload_active: publicationUploadActive("screen", track) !== false, codec: publicationCodec("screen", track) || "" };
+            updates = updates.then(() => window.go.main.App.UpdateNativeScreenShareForTab(tabID, update)).catch(() => {});
         };
         state.nativeShare = native;
         state.shareStream = stream;
@@ -1129,17 +1143,22 @@ export function createVideoPublication({ policy }) {
         let event = payload;
         if (typeof payload === "string") { try { event = JSON.parse(payload); } catch { event = null; } }
         const { state } = V();
-        if (!event || !state.nativeShare) return;
+        // A delayed event of an older share or another tab never touches this one.
+        if (!event || !nativeEventIsCurrent(event, state.nativeShare)) return;
         if (event.state === "minimized") V().toast(tLabel("share.nativeMinimized"), "warn");
         else if (event.state === "ended") void doStopShare();
         else if (event.state === "fallback") {
             const { surface, preset } = state.nativeShare;
+            // Another startup owns the share slot: only end this one.
+            if (state.shareStarting || state.shareStopping) { void doStopShare(); return; }
+            const request = {}; state.shareStarting = request; syncShareButton();
             void doStopShare().then(() => {
+                if (state.shareStarting !== request || state.screenSharing) return;
                 V().toast(tLabel("share.nativeFallback"), "warn");
                 // Some runtimes need a user gesture for the browser picker; a refusal leaves the share off.
                 return startShare({ surface, preset: "custom", custom: { width: preset.width, height: preset.height, fps: preset.fps },
                     bitrateCeiling: preset.bitrateCeiling || 0, audioMode: "none" });
-            }).catch(() => {});
+            }).catch(() => {}).finally(() => { if (state.shareStarting === request) { state.shareStarting = null; syncShareButton(); } });
         }
     });
 
@@ -1334,7 +1353,7 @@ export function createVideoPublication({ policy }) {
         // A native share ends in Go even when another path already reset the share state.
         const native = state.nativeShare;
         state.nativeShare = null;
-        if (native) void Promise.resolve().then(() => window.go.main.App.StopNativeScreenShareForTab(native.tabID)).catch(() => {});
+        if (native) void Promise.resolve().then(() => window.go.main.App.StopNativeScreenShareForTab(native.tabID, native.id)).catch(() => {});
         if (!state.screenSharing) return;
         const pc = state.pc;
         const generation = state.serverGeneration;

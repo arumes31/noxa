@@ -39,14 +39,23 @@ export function nativeSourceOptions(status, surface) {
 let keyChain = Promise.resolve();
 const base64 = bytes => btoa(String.fromCharCode(...bytes));
 
-/** Mirrors one media key engine operation for the own screen slot to Go. */
-export function mirrorNativeKey(pid, op) {
+/**
+ * Mirrors one media key engine operation for the own screen slot to Go.
+ * owner is the tab of the channel media session that issued it (never the
+ * active tab: a background engine's keys must not reach another tab).
+ */
+export function mirrorNativeKey(pid, op, owner) {
     if (pid !== "self|screen" || typeof app()?.NativeScreenKeyForTab !== "function") return;
-    const tabID = window.__noxa?.state?.activeTabID;
+    const tabID = typeof owner === "string" ? owner : "";
     if (!tabID) return;
     const body = { op: op.op, epoch: op.epoch || 0, kid: op.kid || 0, ...(op.key ? { key: base64(op.key) } : {}) };
     // Bound calls run concurrently in Go: keep key → activate → retire order.
     keyChain = keyChain.then(() => app().NativeScreenKeyForTab(tabID, body)).catch(() => {});
+}
+
+/** Whether a "native_share" event belongs to the installed native share. */
+export function nativeEventIsCurrent(event, native) {
+    return !!native && !!event && event.share === native.id && event.tab === native.tabID;
 }
 
 /** The native sender's diagnostics row, or null. */

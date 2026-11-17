@@ -8,7 +8,7 @@ const calls = [];
 globalThis.window = { __noxa: { state: { activeTabID: "t1" } }, go: { main: { App: {
     NativeScreenKeyForTab: async (tab, body) => { calls.push([tab, body]); await new Promise(r => setTimeout(r, body.op === "key" ? 5 : 0)); },
 } } } };
-const { screenCaptureBackend, setScreenCaptureBackend, nativeSource, nativeSourceOptions, mirrorNativeKey } = await import("../src/native-share.js");
+const { screenCaptureBackend, setScreenCaptureBackend, nativeSource, nativeSourceOptions, mirrorNativeKey, nativeEventIsCurrent } = await import("../src/native-share.js");
 
 test("capture backend defaults to Browser and remembers Native", () => {
     assert.equal(screenCaptureBackend(), "browser");
@@ -31,11 +31,28 @@ test("native sources validate the picker value against the surface", () => {
 });
 
 test("only the own screen slot keys are mirrored, in order", async () => {
-    mirrorNativeKey("self|cam", { op: "activate", epoch: 1 });
-    mirrorNativeKey("self|screen", { op: "key", epoch: 2, kid: 3, key: new Uint8Array(32).fill(1) });
-    mirrorNativeKey("self|screen", { op: "activate", epoch: 2 });
+    mirrorNativeKey("self|cam", { op: "activate", epoch: 1 }, "t1");
+    mirrorNativeKey("self|screen", { op: "key", epoch: 2, kid: 3, key: new Uint8Array(32).fill(1) }, "t1");
+    mirrorNativeKey("self|screen", { op: "activate", epoch: 2 }, "t1");
     await new Promise(r => setTimeout(r, 30));
     assert.deepEqual(calls.map(([tab, body]) => [tab, body.op, body.epoch]), [["t1", "key", 2], ["t1", "activate", 2]]);
     assert.equal(calls[0][1].key, Buffer.from(new Uint8Array(32).fill(1)).toString("base64"));
     assert.equal(calls[0][1].kid, 3);
+});
+
+test("key operations go to the owning session's tab, never the active one", async () => {
+    calls.length = 0;
+    window.__noxa.state.activeTabID = "t2";
+    mirrorNativeKey("self|screen", { op: "forget" }, "t1");
+    mirrorNativeKey("self|screen", { op: "activate", epoch: 4 }); // no owner (a call session): not mirrored
+    await new Promise(r => setTimeout(r, 10));
+    assert.deepEqual(calls.map(([tab, body]) => [tab, body.op]), [["t1", "forget"]]);
+});
+
+test("native share events match their share and tab", () => {
+    const native = { id: "s2", tabID: "t1" };
+    assert.equal(nativeEventIsCurrent({ tab: "t1", share: "s2", state: "ended" }, native), true);
+    assert.equal(nativeEventIsCurrent({ tab: "t1", share: "s1", state: "ended" }, native), false);
+    assert.equal(nativeEventIsCurrent({ tab: "t2", share: "s2", state: "ended" }, native), false);
+    assert.equal(nativeEventIsCurrent({ tab: "t1", share: "s2", state: "ended" }, null), false);
 });

@@ -34,6 +34,7 @@ const (
 
 // NativeShareRequest starts a native share for one surface and profile.
 type NativeShareRequest struct {
+	ID        string               `json:"id"` // the webview's share identity, echoed in events
 	Source    nativecapture.Source `json:"source"`
 	MaxWidth  int                  `json:"max_width"`
 	MaxHeight int                  `json:"max_height"`
@@ -43,6 +44,7 @@ type NativeShareRequest struct {
 
 // NativeShareUpdate carries the publication state owned by the webview.
 type NativeShareUpdate struct {
+	ID           string `json:"id"`
 	Generation   uint64 `json:"generation,string"`
 	UploadActive bool   `json:"upload_active"`
 	Codec        string `json:"codec"`
@@ -68,8 +70,25 @@ type NativeShareStatus struct {
 // nativeShareEventData is emitted as "native_share": started, minimized,
 // restored, ended (window closed / stopped) or fallback (with reason).
 type nativeShareEventData struct {
+	Tab    string `json:"tab"`
+	Share  string `json:"share"`
 	State  string `json:"state"`
 	Reason string `json:"reason,omitempty"`
+}
+
+// errNativeShareStopped: a resource finished opening after the share stopped.
+var errNativeShareStopped = errors.New("native screen share stopped")
+
+// nativeBitrateCap bounds the requested bitrate by the server's video limit,
+// less the 15% RTP overhead reserve the webview's capVideoEncodings keeps.
+// shortcut: the budget is not split with an active camera; the server's
+// packet meter stays authoritative. Split it here if cameras share it.
+func nativeBitrateCap(requested int, limits netproto.MediaLimits) int {
+	bitrate := max(requested, 500_000)
+	if limits.VideoMaxBitrate > 0 {
+		bitrate = min(bitrate, limits.VideoMaxBitrate*85/100)
+	}
+	return bitrate
 }
 
 // nativeShareDecision is the pure fallback policy: what a failure leads to.
@@ -220,44 +239,55 @@ func (a *App) UpdateNativeScreenShareForTab(tabID string, update NativeShareUpda
 	if err != nil {
 		return err
 	}
+	if n.req.ID != update.ID {
+		return errors.New("stale native screen share")
+	}
 	return n.applyUpdate(update)
 }
 
 // applyUpdate adopts the webview's publication state. A stale update for an
 // older generation never overrides a newer one.
 func (n *nativeShare) applyUpdate(update NativeShareUpdate) error {
-	if nativeShareCodecFallback(update.Codec) {
-		n.fallback("codec")
-		return errors.New("publication codec is not H.264")
-	}
 	n.mu.Lock()
 	if update.Generation < n.generation {
 		n.mu.Unlock()
 		return errors.New("stale native share generation")
 	}
+	if nativeShareCodecFallback(update.Codec) {
+		n.mu.Unlock()
+		n.fallback("codec")
+		return errors.New("publication codec is not H.264")
+	}
 	n.generation = update.Generation
 	resume := update.UploadActive && !n.upload
 	n.upload = update.UploadActive
-	session := n.session
-	n.mu.Unlock()
-	if session != nil {
-		session.SetPaused(!update.UploadActive)
+	// Under n.mu (atomic stores): overlapping bridge calls reach the session
+	// in the order they adopted their state.
+	if n.session != nil {
+		n.session.SetPaused(!update.UploadActive)
 		if resume {
-			session.RequestKeyframe()
+			n.session.RequestKeyframe()
 		}
 	}
+	n.mu.Unlock()
 	return nil
 }
 
-// StopNativeScreenShareForTab ends the native share and closes the peer.
-func (a *App) StopNativeScreenShareForTab(tabID string) error {
+// StopNativeScreenShareForTab ends native share id and closes its peer; a
+// stop for an older share never ends its replacement.
+func (a *App) StopNativeScreenShareForTab(tabID, id string) error {
 	cm, err := a.requireTabCM(tabID)
 	if err != nil {
 		return err
 	}
 	cm.mu.Lock()
 	n := cm.nativeShare
-	cm.nativeShare = nil
+	if n != nil && n.req.ID != id {
+		n = nil
+	}
+	if n != nil {
+		cm.nativeShare = nil
+	}
 	cm.mu.Unlock()
 	if n != nil {
 		n.close()
@@ -291,9 +321,11 @@ func (a *App) nativeShareFor(tabID string) (*nativeShare, error) {
 
 func (n *nativeShare) start() error {
 	fps := max(1, min(n.req.FPS, 60))
-	top := nativesender.Level{MaxWidth: n.req.MaxWidth, MaxHeight: n.req.MaxHeight, FPS: fps, Bitrate: max(n.req.Bitrate, 500_000)}
+	top := nativesender.Level{MaxWidth: n.req.MaxWidth, MaxHeight: n.req.MaxHeight, FPS: fps, Bitrate: nativeBitrateCap(n.req.Bitrate, n.cm.mediaLimitsSnapshot())}
+	n.mu.Lock()
 	n.ladder = nativesender.NewLadder(top, min(top.Bitrate, 2_500_000))
 	n.level = n.ladder.Current()
+	n.mu.Unlock()
 	if err := n.openSender(); err != nil {
 		return err
 	}
@@ -305,8 +337,36 @@ func (n *nativeShare) start() error {
 	n.prev = nativeSample{at: time.Now()}
 	n.mu.Unlock()
 	go n.watch()
-	n.cm.emit(nativeShareEvent, nativeShareEventData{State: "started"})
+	n.emit("started", "")
 	return nil
+}
+
+func (n *nativeShare) emit(state, reason string) {
+	n.cm.emit(nativeShareEvent, nativeShareEventData{Tab: n.cm.tabID, Share: n.req.ID, State: state, Reason: reason})
+}
+
+// stoppedLocked reports a started shutdown; the caller holds n.mu.
+func (n *nativeShare) stoppedLocked() bool {
+	select {
+	case <-n.stop:
+		return true
+	default:
+		return false
+	}
+}
+
+// applyLimits re-bounds the bitrate after a server media limit change.
+func (n *nativeShare) applyLimits(limits netproto.MediaLimits) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.ladder == nil {
+		return
+	}
+	n.ladder.Top.Bitrate = nativeBitrateCap(n.req.Bitrate, limits)
+	n.level.Bitrate = min(n.level.Bitrate, n.ladder.Top.Bitrate)
+	if n.session != nil {
+		n.session.SetBitrate(n.level.Bitrate)
+	}
 }
 
 func (n *nativeShare) openCapture() error {
@@ -319,6 +379,11 @@ func (n *nativeShare) openCapture() error {
 		return err
 	}
 	n.mu.Lock()
+	if n.stoppedLocked() {
+		n.mu.Unlock()
+		session.Close()
+		return errNativeShareStopped
+	}
 	session.SetPaused(!n.upload)
 	n.session = session
 	n.mu.Unlock()
@@ -349,6 +414,19 @@ func (n *nativeShare) openSender() error {
 		}
 	})
 	n.mu.Lock()
+	if n.stoppedLocked() {
+		n.mu.Unlock()
+		_ = sender.Close()
+		// The server holds this late peer: release it unless a replacement
+		// share (whose own offer supersedes it) is installed.
+		n.cm.mu.Lock()
+		idle := n.cm.nativeShare == nil
+		n.cm.mu.Unlock()
+		if idle {
+			_ = n.cm.write(netproto.MsgWebRTCOffer, netproto.WebRTCOffer{Peer: netproto.PeerNative})
+		}
+		return errNativeShareStopped
+	}
 	n.sender = sender
 	pending := n.pending
 	n.pending = nil
@@ -428,6 +506,9 @@ func (n *nativeShare) peerLost(lost *nativesender.Sender) {
 		case <-time.After(time.Duration(attempt) * time.Second):
 		}
 		if err := n.openSender(); err != nil {
+			if errors.Is(err, errNativeShareStopped) {
+				return
+			}
 			log.Printf("native share re-offer: %v", err)
 			n.mu.Lock()
 			n.sender = lost // let the next failure count another attempt
@@ -467,8 +548,12 @@ func (n *nativeShare) watch() {
 				return
 			case "restart":
 				log.Printf("native share restart after: %v", err)
-				if rerr := n.openCapture(); rerr == nil {
+				rerr := n.openCapture()
+				if rerr == nil {
 					continue
+				}
+				if errors.Is(rerr, errNativeShareStopped) {
+					return
 				}
 				fallthrough
 			default:
@@ -489,7 +574,7 @@ func (n *nativeShare) watch() {
 				if minimized {
 					state = "minimized"
 				}
-				n.cm.emit(nativeShareEvent, nativeShareEventData{State: state})
+				n.emit(state, "")
 			}
 		}
 	}
@@ -497,12 +582,12 @@ func (n *nativeShare) watch() {
 
 func (n *nativeShare) end(reason string) {
 	n.close()
-	n.cm.emit(nativeShareEvent, nativeShareEventData{State: "ended", Reason: reason})
+	n.emit("ended", reason)
 }
 
 func (n *nativeShare) fallback(reason string) {
 	n.close()
-	n.cm.emit(nativeShareEvent, nativeShareEventData{State: "fallback", Reason: reason})
+	n.emit("fallback", reason)
 }
 
 // close stops capture and closes the native peer (an empty-SDP native offer

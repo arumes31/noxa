@@ -1138,8 +1138,8 @@ export function StartedAfterUpdate() {
   return window['go']['main']['App']['StartedAfterUpdate']();
 }
 
-export function StopNativeScreenShareForTab(arg1) {
-  return window['go']['main']['App']['StopNativeScreenShareForTab'](arg1);
+export function StopNativeScreenShareForTab(arg1, arg2) {
+  return window['go']['main']['App']['StopNativeScreenShareForTab'](arg1, arg2);
 }
 
 export function StopPrivateCallForTab(arg1, arg2) {

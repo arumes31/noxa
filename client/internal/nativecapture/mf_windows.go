@@ -4,6 +4,7 @@ package nativecapture
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"unsafe"
@@ -233,9 +234,15 @@ func openEncoder(d *device, activate uintptr, info encoderInfo, width, height, f
 	_ = e.setCodec(&codecMeanBitRate, bitrate, false)
 	_ = e.setCodec(&codecLowLatencyMode, 1, true)
 	_ = e.setCodec(&codecBPictureCount, 0, false)
-	_ = e.setCodec(&codecGOPSize, fps*300, false)          // Long GOP: keyframes on demand (PLI).
-	_ = e.setCodec(&codecSliceMode, 2, false)              // Slices by macroblock rows...
-	_ = e.setCodec(&codecSliceSize, (height+15)/16, false) // ...all rows: exactly one slice.
+	_ = e.setCodec(&codecGOPSize, fps*300, false) // Long GOP: keyframes on demand (PLI).
+	// Slices by macroblock rows, all rows: exactly one slice. The sender
+	// rejects multi-slice access units, so an encoder refusing this is skipped.
+	if err := e.setCodec(&codecSliceMode, 2, false); err != nil {
+		return nil, err
+	}
+	if err := e.setCodec(&codecSliceSize, (height+15)/16, false); err != nil {
+		return nil, err
+	}
 	outType, err := mediaType(mfVideoFormatH264, width, height, fps)
 	if err != nil {
 		return nil, err
@@ -291,7 +298,17 @@ func waitEvent(generator uintptr) (uint32, error) {
 	}
 	defer release(ev)
 	var kind uint32
-	vcall(ev, 33, uintptr(unsafe.Pointer(&kind))) // #nosec G103 -- GetType
+	if hr := vcall(ev, 33, uintptr(unsafe.Pointer(&kind))); hr.failed() { // #nosec G103 -- GetType
+		return 0, hr.err("IMFMediaEvent::GetType")
+	}
+	var status uint32
+	if hr := vcall(ev, 35, uintptr(unsafe.Pointer(&status))); hr.failed() { // #nosec G103 -- GetStatus
+		return 0, hr.err("IMFMediaEvent::GetStatus")
+	}
+	// MEError and failed operations carry their failure here, not in GetEvent.
+	if err := hresult(status).err(fmt.Sprintf("encoder event %d", kind)); err != nil {
+		return 0, err
+	}
 	return kind, nil
 }
 
@@ -306,6 +323,11 @@ func (e *encoder) submit(nv12 uintptr, time, duration int64, keyframe bool) erro
 		return hresult(r).err("MFCreateDXGISurfaceBuffer")
 	}
 	defer release(buf)
+	// Some encoder MFTs (Qualcomm) need a valid current length on the surface buffer.
+	var length uint32
+	if hr := vcall(buf, 7, uintptr(unsafe.Pointer(&length))); hr.succeeded() { // #nosec G103 -- GetMaxLength
+		vcall(buf, 6, uintptr(length)) // SetCurrentLength
+	}
 	if r, _, _ := procMFCreateSample.Call(uintptr(unsafe.Pointer(&sample))); hresult(r).failed() { // #nosec G103
 		return hresult(r).err("MFCreateSample")
 	}

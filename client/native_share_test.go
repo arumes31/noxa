@@ -9,6 +9,7 @@ import (
 	"noxa/client/internal/nativecapture"
 	"noxa/internal/framecrypt"
 	"noxa/internal/nativesender"
+	"noxa/internal/netproto"
 )
 
 func TestNativeShareFallbackDecisions(t *testing.T) {
@@ -93,5 +94,60 @@ func TestNativeShareGenerationUpdates(t *testing.T) {
 	// Demand withdrawn for the same generation pauses upload.
 	if err := n.applyUpdate(NativeShareUpdate{Generation: 9007199254740993, UploadActive: false, Codec: "h264"}); err != nil || n.upload {
 		t.Fatalf("pause not applied: upload=%v err=%v", n.upload, err)
+	}
+}
+
+func TestNativeShareStaleCodecNeverFallsBack(t *testing.T) {
+	n := &nativeShare{stop: make(chan struct{}), generation: 20}
+	// n.cm is nil: a fallback would panic. A late generation-19 VP8 update
+	// must be rejected as stale before the codec can end generation 20.
+	if err := n.applyUpdate(NativeShareUpdate{Generation: 19, Codec: "vp8"}); err == nil {
+		t.Fatal("stale codec update accepted")
+	}
+	if n.stoppedLocked() {
+		t.Fatal("stale codec update stopped the share")
+	}
+}
+
+func TestNativeBitrateCapFollowsServerLimit(t *testing.T) {
+	for _, c := range []struct{ requested, limit, want int }{
+		{8_000_000, 0, 8_000_000},
+		{8_000_000, 1_000_000, 850_000},
+		{2_000_000, 10_000_000, 2_000_000},
+		{100_000, 0, 500_000},
+	} {
+		if got := nativeBitrateCap(c.requested, netproto.MediaLimits{VideoMaxBitrate: c.limit}); got != c.want {
+			t.Errorf("nativeBitrateCap(%d, %d) = %d, want %d", c.requested, c.limit, got, c.want)
+		}
+	}
+	n := &nativeShare{stop: make(chan struct{}), req: NativeShareRequest{Bitrate: 8_000_000}}
+	n.ladder = nativesender.NewLadder(nativesender.Level{MaxWidth: 1920, MaxHeight: 1080, FPS: 60, Bitrate: 8_000_000}, 8_000_000)
+	n.level = n.ladder.Current()
+	n.applyLimits(netproto.MediaLimits{VideoMaxBitrate: 2_000_000})
+	if n.ladder.Top.Bitrate != 1_700_000 || n.level.Bitrate != 1_700_000 {
+		t.Fatalf("limit not applied: top=%d level=%d", n.ladder.Top.Bitrate, n.level.Bitrate)
+	}
+}
+
+func TestStopNativeShareIgnoresAnOlderShare(t *testing.T) {
+	cm := &connManager{}
+	current := &nativeShare{cm: cm, stop: make(chan struct{}), req: NativeShareRequest{ID: "2"}}
+	cm.nativeShare = current
+	app := &App{activeID: "a", tabs: map[string]*tabState{"a": {cm: cm}}}
+	app.cmStore(cm)
+	if err := app.StopNativeScreenShareForTab("a", "1"); err != nil {
+		t.Fatal(err)
+	}
+	if cm.nativeShare != current || current.stoppedLocked() {
+		t.Fatal("a stale stop ended the replacement share")
+	}
+	if err := app.UpdateNativeScreenShareForTab("a", NativeShareUpdate{ID: "1", Generation: 1, UploadActive: true}); err == nil || current.upload {
+		t.Fatal("a stale update reached the replacement share")
+	}
+	if err := app.StopNativeScreenShareForTab("a", "2"); err != nil {
+		t.Fatal(err)
+	}
+	if cm.nativeShare != nil || !current.stoppedLocked() {
+		t.Fatal("the current share was not stopped")
 	}
 }

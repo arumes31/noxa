@@ -79,8 +79,8 @@ export function remoteTrackIDsByMid(sdp = "") {
 }
 
 export class MediaSession {
-    constructor({ adapter, onStatus = () => {}, onError = () => {}, onKeyframeNeeded = () => {}, hardwareVideoRequired = true, onHardwareUnavailable = () => {}, api, workerURL, scope = globalThis }) {
-        this.adapter = adapter; this.onStatus = onStatus; this.onError = onError; this.onKeyframeNeeded = onKeyframeNeeded;
+    constructor({ adapter, onStatus = () => {}, onError = () => {}, onKeyframeNeeded = () => {}, hardwareVideoRequired = true, onHardwareUnavailable = () => {}, api, workerURL, scope = globalThis, owner }) {
+        this.adapter = adapter; this.onStatus = onStatus; this.onError = onError; this.onKeyframeNeeded = onKeyframeNeeded; this.owner = owner;
         this.hardwareVideoRequired = hardwareVideoRequired; this.onHardwareUnavailable = onHardwareUnavailable;
         this.api = api; this.workerURL = workerURL; this.scope = scope;
         this.media = null; this.engine = null; this.identity = null; this.closed = false;
@@ -102,7 +102,7 @@ export class MediaSession {
         if (!status.principal || !status.device || !status.clientID) throw new MediaSessionError("no_device");
         if (this.roster?.find?.(c => String(c.client_id) === String(status.clientID))?.status === "invisible") throw new MediaSessionError("invisible");
         try {
-            this.media = new MediaE2EE({ hardwareVideoRequired: this.hardwareVideoRequired, onHardwareUnavailable: this.onHardwareUnavailable, api: this.api, workerURL: this.workerURL, scope: this.scope, onError: error => this.#fail(error),
+            this.media = new MediaE2EE({ hardwareVideoRequired: this.hardwareVideoRequired, onHardwareUnavailable: this.onHardwareUnavailable, api: this.api, workerURL: this.workerURL, scope: this.scope, owner: this.owner, onError: error => this.#fail(error),
                 onKeyframeNeeded: (receiver, pid) => { const target = keyframeTarget(pid); if (target) { if (target.publisher === "self" && this.identity) target.publisher = this.identity.clientID; this.onKeyframeNeeded(target, receiver); } } });
         } catch (error) {
             throw new MediaSessionError(error instanceof MediaE2EEUnsupported ? "unsupported_runtime" : "worker", String(error?.message || error));
