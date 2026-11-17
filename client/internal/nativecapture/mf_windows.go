@@ -400,13 +400,6 @@ func (e *encoder) sequenceHeader() []byte {
 	return append([]byte(nil), unsafe.Slice(p, n)...)                               // #nosec G103
 }
 
-func (e *encoder) setBitrateIfChanged(bps int) {
-	if bps != e.bitrate {
-		e.bitrate = bps
-		_ = e.setCodec(&codecMeanBitRate, uint32(bps), false)
-	}
-}
-
 func (e *encoder) close() {
 	if e.mft != 0 {
 		vcall(e.mft, 23, msgEndOfStream, 0)

@@ -122,6 +122,23 @@ func TestNativeSenderStreamsThroughEncryptedSFU(t *testing.T) {
 	timingWait(t, "native screen at the viewer", 10*time.Second, func() bool {
 		return viewer.count(slotTrackID("pub", SlotScreen)) > 50
 	})
+	// transport-cc feedback from the SFU drives the send-side estimate (ladder input).
+	initial := sender.Stats().EstimateBPS
+	timingWait(t, "bandwidth estimate from transport-cc", 10*time.Second, func() bool {
+		est := sender.Stats().EstimateBPS
+		return est != initial
+	})
+	// A server-side close (session end, channel move, revocation) is only seen
+	// as the transport ending; the desktop re-offers on Failed/Closed.
+	closedAt := time.Now()
+	if err := voice.CloseNativePeer("pub"); err != nil {
+		t.Fatal(err)
+	}
+	timingWait(t, "native sender notices the server close", 15*time.Second, func() bool {
+		state := sender.ConnectionState()
+		return state == pion.PeerConnectionStateFailed || state == pion.PeerConnectionStateClosed
+	})
+	t.Logf("server close detected after %v", time.Since(closedAt).Round(100*time.Millisecond))
 	if st := sender.Stats(); st.FramesDropped != 0 || st.KeyframesSent < 2 {
 		t.Fatalf("sender stats: %+v", st)
 	}

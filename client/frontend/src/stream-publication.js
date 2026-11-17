@@ -22,7 +22,9 @@ async function supportsCodecRefresh(tabID) {
 
 // A new capable server starts with no media upload until its own catalog
 // confirms a viewer or recorder. Older servers keep continuous publication.
-export async function preparePublicationUpload(slot, track, onChange) {
+// fixedCodecs: the publisher encodes outside the webview (native capture),
+// so the webview's encoder probe does not apply.
+export async function preparePublicationUpload(slot, track, onChange, fixedCodecs = null) {
     const scope = captureMediaScope(), pc = V().state.pc;
     const supported = await window.go.main.App.SupportsStreamSourceQualityForTab?.(scope.tabID) || false;
     const codecSupport = supported && await window.go.main.App.SupportsStreamCodecForTab?.(scope.tabID) || false;
@@ -30,7 +32,7 @@ export async function preparePublicationUpload(slot, track, onChange) {
     // HEVC is still excluded until its encrypted admission path is validated.
     const encrypted = !!channelMedia();
     const hevc = !encrypted && codecSupport && await window.go.main.App.SupportsStreamHEVCForTab?.(scope.tabID) === true;
-    const probe = codecSupport ? await publicationCodecSupport(track, hevc) : null;
+    const probe = !codecSupport ? null : fixedCodecs ? { codecs: fixedCodecs, status: "hardware", preferredAvailable: true } : await publicationCodecSupport(track, hevc);
     const codecs = probe?.codecs;
     const refreshSupported = !encrypted && codecSupport && await supportsCodecRefresh(scope.tabID);
     if (!mediaScopeIsCurrent(scope) || V().state.pc !== pc || track.readyState === "ended") return false;

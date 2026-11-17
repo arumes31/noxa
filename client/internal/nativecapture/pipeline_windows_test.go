@@ -142,3 +142,75 @@ func TestFocusedFullscreenFPS(t *testing.T) {
 		t.Fatalf("encoded fps too low: %+v", st)
 	}
 }
+
+// TestLadderControlsMidStream exercises the quality-ladder controls on the
+// running pipeline: resolution step (encoder reopen), fps step, bitrate
+// target, pause/resume. It logs the produced bitrate against the target.
+func TestLadderControlsMidStream(t *testing.T) {
+	if os.Getenv("NOXA_NATIVE_CAPTURE") == "" {
+		t.Skip("set NOXA_NATIVE_CAPTURE=1 on an interactive Windows desktop")
+	}
+	win := startAnimatedWindow(t, false, 1280, 800)
+	defer win.close()
+	var mu sync.Mutex
+	var bytes, frames int
+	var lastW, lastH int
+	s, err := Start(Config{Source: Source{Window: uint64(win.hwnd.Load())}, MaxWidth: 1920, MaxHeight: 1080, FPS: 30, Bitrate: 4_000_000,
+		AllowSoftware: os.Getenv("NOXA_NATIVE_SOFTWARE") != ""}, func(f Frame) {
+		mu.Lock()
+		bytes += len(f.Data)
+		frames++
+		lastW, lastH = f.Width, f.Height
+		mu.Unlock()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	measure := func(name string, target int) {
+		mu.Lock()
+		bytes, frames = 0, 0
+		mu.Unlock()
+		time.Sleep(2 * time.Second)
+		mu.Lock()
+		defer mu.Unlock()
+		t.Logf("%s: %dx%d %.1f fps %.2f Mbps (target %.2f)", name, lastW, lastH, float64(frames)/2, float64(bytes)*8/2/1e6, float64(target)/1e6)
+		if frames < 10 {
+			t.Fatalf("%s: only %d frames", name, frames)
+		}
+		if mbps := float64(bytes) * 8 / 2; mbps > float64(target)*1.5 {
+			t.Errorf("%s: %.2f Mbps exceeds target %.2f by over 50%%", name, mbps/1e6, float64(target)/1e6)
+		}
+	}
+	measure("start 1080p30", 4_000_000)
+	s.SetMaxSize(640, 400)
+	time.Sleep(300 * time.Millisecond)
+	measure("after resize", 4_000_000)
+	if st := s.Stats(); st.Width > 640 || st.Height > 400 {
+		t.Fatalf("resize not applied: %+v", st)
+	}
+	s.SetBitrate(1_000_000)
+	time.Sleep(1500 * time.Millisecond) // encoder reopen is rate limited
+	measure("1 Mbps", 1_000_000)
+	s.SetFPS(60)
+	measure("1 Mbps 60 fps", 1_000_000)
+	s.SetPaused(true)
+	time.Sleep(300 * time.Millisecond)
+	mu.Lock()
+	frames = 0
+	mu.Unlock()
+	time.Sleep(time.Second)
+	mu.Lock()
+	paused := frames
+	mu.Unlock()
+	if paused > 2 {
+		t.Fatalf("paused pipeline still encoded %d frames", paused)
+	}
+	s.SetPaused(false)
+	measure("resumed", 1_000_000)
+	select {
+	case err := <-s.Fatal():
+		t.Fatal(err)
+	default:
+	}
+}

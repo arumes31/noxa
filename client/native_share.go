@@ -220,11 +220,21 @@ func (a *App) UpdateNativeScreenShareForTab(tabID string, update NativeShareUpda
 	if err != nil {
 		return err
 	}
+	return n.applyUpdate(update)
+}
+
+// applyUpdate adopts the webview's publication state. A stale update for an
+// older generation never overrides a newer one.
+func (n *nativeShare) applyUpdate(update NativeShareUpdate) error {
 	if nativeShareCodecFallback(update.Codec) {
 		n.fallback("codec")
 		return errors.New("publication codec is not H.264")
 	}
 	n.mu.Lock()
+	if update.Generation < n.generation {
+		n.mu.Unlock()
+		return errors.New("stale native share generation")
+	}
 	n.generation = update.Generation
 	resume := update.UploadActive && !n.upload
 	n.upload = update.UploadActive

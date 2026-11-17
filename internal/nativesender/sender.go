@@ -6,6 +6,7 @@
 package nativesender
 
 import (
+	"bytes"
 	"errors"
 	"sync"
 	"time"
@@ -83,6 +84,7 @@ type Sender struct {
 	lastTS      uint32
 	sentAny     bool
 	sps, pps    []byte
+	seqHeader   []byte
 	keyGap      bool // frames were dropped for lack of a key: resume on a keyframe
 	stats       Stats
 	estimator   cc.BandwidthEstimator
@@ -253,7 +255,9 @@ func (s *Sender) WriteFrame(au []byte, keyframe bool, seqHeader []byte, captured
 	if s.closed {
 		return errors.New("native sender closed")
 	}
-	if len(seqHeader) > 0 && s.sps == nil {
+	if len(seqHeader) > 0 && !bytes.Equal(seqHeader, s.seqHeader) {
+		// A reopened encoder (new size/bitrate) brings new parameter sets.
+		s.seqHeader = bytes.Clone(seqHeader)
 		for _, nal := range framecrypt.SplitAnnexB(seqHeader) {
 			switch {
 			case len(nal) > 0 && nal[0]&31 == 7:

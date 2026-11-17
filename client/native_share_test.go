@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"noxa/client/internal/nativecapture"
-	"noxa/internal/nativesender"
 	"noxa/internal/framecrypt"
+	"noxa/internal/nativesender"
 )
 
 func TestNativeShareFallbackDecisions(t *testing.T) {
@@ -72,5 +72,26 @@ func TestNativeDiagnosticsRowIsValid(t *testing.T) {
 	// A reset (counters went backwards) yields no rates, never negative ones.
 	if r := nativeDiagnosticsRow(cur, prev, nativecapture.Stats{}, nativesender.Stats{SSRC: 7}, nativecapture.EncoderInfo{}, nativesender.Level{FPS: 30}, 42); r.EncodedFPS != nil || !r.Valid() {
 		t.Fatalf("reset row: %+v", r)
+	}
+}
+
+func TestNativeShareGenerationUpdates(t *testing.T) {
+	n := &nativeShare{stop: make(chan struct{})}
+	if row := n.diagnostics(time.Now()); row != nil {
+		t.Fatal("diagnostics without a session/generation")
+	}
+	if err := n.applyUpdate(NativeShareUpdate{Generation: 9007199254740993, UploadActive: true, Codec: "h264"}); err != nil {
+		t.Fatal(err)
+	}
+	if n.generation != 9007199254740993 || !n.upload {
+		t.Fatalf("update not applied: gen=%d upload=%v", n.generation, n.upload)
+	}
+	// A late update of an older publication never wins.
+	if err := n.applyUpdate(NativeShareUpdate{Generation: 5, UploadActive: false}); err == nil || n.generation != 9007199254740993 || !n.upload {
+		t.Fatalf("stale update applied: gen=%d upload=%v err=%v", n.generation, n.upload, err)
+	}
+	// Demand withdrawn for the same generation pauses upload.
+	if err := n.applyUpdate(NativeShareUpdate{Generation: 9007199254740993, UploadActive: false, Codec: "h264"}); err != nil || n.upload {
+		t.Fatalf("pause not applied: upload=%v err=%v", n.upload, err)
 	}
 }

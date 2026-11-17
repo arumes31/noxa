@@ -101,6 +101,7 @@ type pipeline struct {
 	pending    []int // ring slots converted but not yet submitted
 	inFlight   []time.Time
 	last       int // ring slot of the newest converted frame, -1 none
+	openedAt   time.Time
 }
 
 func (s *Session) run(ready chan<- error) {
@@ -192,6 +193,7 @@ func (s *Session) ensureSized(p *pipeline, w, h int) error {
 		return err
 	}
 	p.srcW, p.srcH, p.outW, p.outH = w, h, ow, oh
+	p.openedAt = time.Now()
 	p.needInput, p.pending, p.inFlight, p.last = 0, nil, nil, -1
 	if !p.enc.async {
 		p.needInput = 1 << 30 // Synchronous MFT: input is always accepted.
@@ -370,8 +372,13 @@ func (s *Session) loop(p *pipeline, capt *capturer) {
 				s.fail(err)
 				return
 			}
-			if br := int(s.bitrate.Load()); br > 0 {
-				p.enc.setBitrateIfChanged(br)
+			// Dynamic CODECAPI bitrate changes are not honoured by every
+			// hardware MFT (Quick Sync doubled its output instead), so a
+			// significant change reopens the encoder, at most every 3 s.
+			if br := int(s.bitrate.Load()); br > 0 && p.enc != nil && now.Sub(p.openedAt) >= 3*time.Second {
+				if diff := br - p.enc.bitrate; diff*4 > p.enc.bitrate || -diff*4 > p.enc.bitrate {
+					p.srcW = 0 // rebuilt with the new bitrate on the next captured frame
+				}
 			}
 		}
 	}
