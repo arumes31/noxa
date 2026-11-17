@@ -9,6 +9,13 @@ import { MEDIA_E2EE_VERSION, MEDIA_E2EE_CODEC_VERSION, SLOTS, validEpoch, validK
 
 export { MEDIA_E2EE_VERSION, MEDIA_E2EE_CODEC_VERSION, SLOTS };
 
+// A platform observer of key operations (desktop native capture mirrors the
+// own screen slot's keys into Go). Shared with the PWA, which sets none. It
+// gets the instance's opaque owner option; a closed instance notifies none.
+// A hoisted function property, not a module binding: observers may register
+// while this module is still evaluating (import cycles).
+export function observeMediaKeys(observer) { observeMediaKeys.observer = typeof observer === "function" ? observer : null; }
+
 export class MediaE2EEUnsupported extends Error {
     constructor(reason) { super(`Encrypted media is not supported here (${reason})`); this.name = "MediaE2EEUnsupported"; this.reason = reason; }
 }
@@ -28,7 +35,8 @@ let endpointCounter = 0;
 const nextEndpointID = prefix => `${prefix}:${(++endpointCounter).toString(36)}${crypto.getRandomValues(new Uint32Array(1))[0].toString(36)}`;
 
 export class MediaE2EE {
-    constructor({ api, onError = () => {}, onKeyframeNeeded = () => {}, hardwareVideoRequired = true, onHardwareUnavailable = () => {}, workerURL, scope = globalThis } = {}) {
+    constructor({ api, onError = () => {}, onKeyframeNeeded = () => {}, hardwareVideoRequired = true, onHardwareUnavailable = () => {}, workerURL, scope = globalThis, owner } = {}) {
+        this.owner = owner;
         const support = mediaE2EESupport(scope);
         if (!support.ok) throw new MediaE2EEUnsupported(support.reason);
         if (api && api !== support.api && !(api === "streams" && typeof scope.RTCRtpSender?.prototype?.createEncodedStreams === "function")) throw new MediaE2EEUnsupported(api);
@@ -397,12 +405,14 @@ export class MediaE2EE {
     async setKey(pid, epoch, kid, key) {
         if (!validPid(pid) || !validEpoch(epoch) || !validKid(kid) || !(key instanceof Uint8Array) || key.length !== 32) throw new Error("Invalid media key");
         const copy = new Uint8Array(key);
+        this.#observe(pid, { op: "key", epoch, kid, key: copy });
         return this.request("key", { pid, epoch, kid, key: copy });
     }
-    activate(pid, epoch) { return this.request("activate", { pid, epoch }); }
-    retire(pid, through) { return this.request("retire", { pid, through }); }
-    retireOne(pid, epoch) { return this.request("retireOne", { pid, epoch }); }
-    forget(pid) { return this.request("forget", { pid }); }
+    activate(pid, epoch) { this.#observe(pid, { op: "activate", epoch }); return this.request("activate", { pid, epoch }); }
+    retire(pid, through) { this.#observe(pid, { op: "retire", epoch: through }); return this.request("retire", { pid, through }); }
+    retireOne(pid, epoch) { this.#observe(pid, { op: "retireOne", epoch }); return this.request("retireOne", { pid, epoch }); }
+    forget(pid) { this.#observe(pid, { op: "forget" }); return this.request("forget", { pid }); }
+    #observe(pid, op) { if (!this.closed) observeMediaKeys.observer?.(pid, op, this.owner); }
     stats(endpoint) { return this.request("stats", { id: endpoint ? this.endpointID(endpoint) : undefined }); }
 
     close() {

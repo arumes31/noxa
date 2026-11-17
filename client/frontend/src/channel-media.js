@@ -48,6 +48,7 @@ export async function startChannelMedia({ tabID, channelID, roster = [], adapter
     stopChannelMedia();
     const session = factory ? factory({ tabID, channelID }) : new MediaSession({
         adapter: adapter || desktopMediaAdapter(tabID),
+        owner: tabID, // native capture mirrors this session's screen keys into this tab
         hardwareVideoRequired,
         onHardwareUnavailable: error => window.__noxa?.toast?.(t(error?.message === "hardware_unverified" ? "e2ee.reason.hardware_unverified" : "e2ee.reason.hardware_encoder"), "warn"),
         onStatus: status => { if (current === session || status.state === "off") publish(status); },

@@ -1,6 +1,6 @@
 import { hardwareVideoEvidence } from "./hardware-video.js";
 import { updateStartupBlocked } from "./update-transition.js";
-import { retainDisplayCapture, releaseDisplayCapture, stopDisplayCapture, transferDisplayCapture } from "./display-capture-lease.js";
+import { retainDisplayCapture, releaseDisplayCapture, stopDisplayCapture, transferDisplayCapture, onDisplayCaptureStop } from "./display-capture-lease.js";
 // video-publication.js — camera/screen capture and publication lifecycle.
 import { captureCamera, applyCameraPreview } from "./camera-capture.js";
 import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
@@ -24,6 +24,7 @@ import { sampleSenderStats } from "./peer-stats.js";
 import { createScreenResolutionController } from "./screen-resolution.js";
 import { createScreenStartupAttempt } from "./video-startup-plan.js";
 import { createShareResume } from "./share-resume.js";
+import { screenCaptureBackend, setScreenCaptureBackend, nativeShareStatus, nativeSource, nativeSourceOptions, nativeStandInStream, nativeEventIsCurrent } from "./native-share.js";
 import { renegotiate, negotiateOffer, queuePeerNegotiation } from "./video-negotiation.js";
 const V = () => window.__noxa;
 
@@ -555,6 +556,8 @@ export function createVideoPublication({ policy }) {
     globalThis.addEventListener?.("pagehide", () => shareResume.cancel());
     function pauseShareForReconnect() {
         const { state } = V();
+        // A native share has no browser source to resume: end it with the connection.
+        if (state.nativeShare) { void doStopShare(); return; }
         if (!state.screenSharing || !shareResume.pause(state.shareStream)) return;
         // Detach ownership before teardown, keeping the original region/Studio
         // source graph alive. Its tracks are disabled throughout the outage.
@@ -643,10 +646,11 @@ export function createVideoPublication({ policy }) {
         const error = $(".sh-error");
         const choosers = [$(".sh-choose"), $(".sp-change")];
         const start = $(".dlg-ok"), cancel = $(".dlg-cancel"), close = $(".sp-close");
+        let nativeChoice = () => null; // the native source when Native mode can start
         const update = () => {
             for (const button of choosers) button.disabled = picking || publishing;
             cancel.disabled = close.disabled = publishing;
-            start.disabled = picking || publishing || !selectedDisplay || (view.surface() === "region" && !view.region());
+            start.disabled = picking || publishing || (!selectedDisplay && !nativeChoice()) || (view.surface() === "region" && !view.region());
             for (const input of sources()) input.disabled = publishing || (input.value === "region" && !regionSupported);
             $(".sh-audio").disabled = publishing; quality.element.inert = publishing;
         };
@@ -690,12 +694,45 @@ export function createVideoPublication({ policy }) {
             } finally { picking = false; if (isCurrentServerDialog(overlay)) update(); }
         };
         for (const button of choosers) button.onclick = choose;
-        for (const source of sources()) source.addEventListener("change", () => { syncAudioSource(); discardSelection(); });
+        for (const source of sources()) source.addEventListener("change", () => { syncAudioSource(); discardSelection(); refreshNative(); });
+        // Screen capture backend (Windows desktop): Native captures and encodes
+        // in Go; Browser is getDisplayMedia. Region and Studio stay Browser.
+        let nativeStatus = null;
+        const nativeBox = document.createElement("div");
+        nativeBox.className = "set-hint sp-native";
+        nativeBox.hidden = true;
+        const backendLabel = document.createElement("label");
+        backendLabel.textContent = tLabel("share.captureBackend") + " ";
+        const backend = document.createElement("select");
+        for (const value of ["browser", "native"]) backend.add(new Option(tLabel(`share.captureBackend.${value}`), value, false, screenCaptureBackend() === value));
+        backendLabel.appendChild(backend);
+        const nativeSourceSelect = document.createElement("select");
+        nativeSourceSelect.setAttribute("aria-label", tLabel("share.nativeSource"));
+        const nativeNote = document.createElement("span");
+        nativeBox.append(backendLabel, " ", nativeSourceSelect, " ", nativeNote);
+        const refreshNative = () => {
+            const surface = view.surface();
+            const usable = backend.value === "native" && nativeStatus?.available && (surface === "monitor" || surface === "window");
+            nativeSourceSelect.hidden = !usable;
+            nativeSourceSelect.replaceChildren(...(usable ? nativeSourceOptions(nativeStatus, surface).map(o => new Option(o.label, o.value, o.selected, o.selected)) : []));
+            nativeNote.textContent = backend.value !== "native" ? "" : !nativeStatus?.available ? tLabel("share.nativeUnavailable")
+                : usable ? "" : tLabel("share.nativeBrowserOnly");
+            update();
+        };
+        nativeChoice = () => backend.value === "native" && nativeStatus?.available && !nativeSourceSelect.hidden ? nativeSource(view.surface(), nativeSourceSelect.value) : null;
+        backend.addEventListener("change", () => { setScreenCaptureBackend(backend.value); refreshNative(); });
+        nativeSourceSelect.addEventListener("change", update);
+        $(".sp-notes").appendChild(nativeBox);
+        void nativeShareStatus(V().state.activeTabID).then(status => {
+            if (!isCurrentServerDialog(overlay) || status.reason === "unsupported_platform") return;
+            nativeStatus = status; nativeBox.hidden = false; refreshNative();
+        });
         syncAudioSource(); update();
         cancel.onclick = close.onclick = () => closeDialog(overlay, "cancel");
         overlay.onclick = (event) => { if (event.target === overlay && !publishing) closeDialog(overlay, "cancel"); };
         start.onclick = async () => {
-            if (!isCurrentServerDialog(overlay) || publishing || !selectedDisplay) return;
+            const native = nativeChoice();
+            if (!isCurrentServerDialog(overlay) || publishing || (!selectedDisplay && !native)) return;
             const selected = quality.read();
             if (!selected) { view.closePanels(); $(".sp-quality-toggle").click(); quality.read(); return; }
             const surface = view.surface(), region = view.region();
@@ -715,7 +752,14 @@ export function createVideoPublication({ policy }) {
                     transferDisplayCapture(display, cropped.stream);
                     display = cropped.stream;
                 }
-                const started = await startShare({ surface, ...selected, audioMode: view.audio(), replacing, selectedDisplay: display });
+                const scope = captureMediaScope();
+                let started = native ? await startNativeShare({ surface, source: native, ...selected, replacing }) : false;
+                if (started) { stopDisplayCapture(display); display = null; }
+                // An obsolete native attempt (session or tab changed) is no browser fallback.
+                else if (native && !mediaScopeIsCurrent(scope)) { stopDisplayCapture(display); display = null; return; }
+                // Native unavailable or failed: the browser path, with a notice.
+                if (native && !started) V().toast(tLabel("share.nativeFallback"), "warn");
+                if (!started && !(native && V().state.screenSharing)) started = await startShare({ surface, ...selected, audioMode: view.audio(), replacing: replacing && !!V().state.screenSharing, selectedDisplay: display });
                 if (started) closeDialog(overlay, "started");
                 else if (isCurrentServerDialog(overlay)) { view.clearPreview(); error.textContent = tLabel("share.startFailed"); }
             } catch (failure) {
@@ -1017,6 +1061,116 @@ export function createVideoPublication({ policy }) {
         return true;
     }
 
+    let nativePending = null; // the native share whose Start is in flight
+    // startNativeShare captures, encodes, encrypts and sends in Go on the
+    // publish-only native peer. The webview owns the publication (a still
+    // stand-in track is its identity, never sent) and forwards generation,
+    // upload demand and codec; stop and replace go through doStopShare.
+    async function startNativeShare({ surface, source, preset, custom, bitrateCeiling = 0, replacing = false }) {
+        const { state } = V();
+        const tabID = state.activeTabID, pc = state.pc, serverGeneration = state.serverGeneration;
+        const p = shareQuality(preset, custom, bitrateCeiling);
+        if (!p || !pc || !source) return false;
+        const scope = captureMediaScope();
+        const current = () => mediaScopeIsCurrent(scope) && state.pc === pc && state.serverGeneration === serverGeneration && state.activeTabID === tabID;
+        if (replacing) { await doStopShare(); if (!current()) return false; }
+        const limits = state.mediaLimits;
+        const bound = (value, limit) => limit > 0 ? Math.min(value, limit) : value;
+        // Native output is at most 1080p ("original" and larger presets are bounded).
+        const width = Math.min(p.width || 1920, 1920), height = Math.min(p.height || 1080, 1080);
+        // Go bounds it by the server limit too, also after later limit changes.
+        const bitrate = bound(p.bitrateCeiling || Math.min(8000000, Math.round(width * height * p.fps * 0.07)), Math.floor((limits?.video_max_bitrate || 0) * 0.85));
+        // The share identity: Go ignores stops and updates of other shares and tags its events with it.
+        const id = crypto.randomUUID();
+        const stopNative = () => void Promise.resolve().then(() => window.go.main.App.StopNativeScreenShareForTab(tabID, id)).catch(() => {});
+        const stream = nativeStandInStream(tLabel("share.nativeActive"));
+        const track = stream.getVideoTracks()[0];
+        // The capture lease keeps the display awake and raises this process's GPU/CPU priority.
+        retainDisplayCapture(stream);
+        // Paths that drop the share by stopping its stream (channel move, voice end) end Go capture too.
+        onDisplayCaptureStop(track, () => {
+            if (state.nativeShare?.track !== track) return;
+            state.nativeShare = null;
+            stopNative();
+        });
+        // Go may end the share before Start resolves: the event handler marks it here.
+        const pending = { id, tabID, ended: false };
+        nativePending = pending;
+        try {
+            await window.go.main.App.StartNativeScreenShareForTab(tabID, { id, source, max_width: bound(width, limits?.video_max_width),
+                max_height: bound(height, limits?.video_max_height), fps: p.fps, bitrate });
+        } catch (error) {
+            stopDisplayCapture(stream);
+            if (current()) V().sysMsg(tLabel("share.nativeFailed") + (error?.message || error));
+            return false;
+        } finally { if (nativePending === pending) nativePending = null; }
+        // The session, peer or share state changed while Go started (or Go already ended it): discard this capture.
+        if (pending.ended || !current() || state.nativeShare || state.screenSharing || track.readyState !== "live") {
+            stopDisplayCapture(stream);
+            stopNative();
+            return false;
+        }
+        const native = { id, tabID, track, generation: "0", surface, preset: { ...p, width, height } };
+        // Bound calls run concurrently in Go: keep updates in order (a pause and
+        // its resume share a generation).
+        let updates = Promise.resolve();
+        const sync = () => {
+            if (state.nativeShare !== native) return;
+            native.generation = publicationSnapshot().find(entry => entry.publication.slot === "screen" && entry.publication.track === track)?.generation || native.generation;
+            const update = { id, generation: native.generation, upload_active: publicationUploadActive("screen", track) !== false, codec: publicationCodec("screen", track) || "" };
+            updates = updates.then(() => window.go.main.App.UpdateNativeScreenShareForTab(tabID, update)).catch(() => {});
+        };
+        state.nativeShare = native;
+        state.shareStream = stream;
+        state.screenSharing = true;
+        syncShareButton();
+        let failure = "";
+        try {
+            if (!await preparePublicationUpload("screen", track, () => sync(), ["h264", "vp8"])) failure = "capture ended";
+            else if (!await startPublication("screen", track, () => { if (state.nativeShare === native) void doStopShare(); })) failure = "capture ended";
+        } catch (error) { failure = String(error?.message || error); }
+        if (failure || !current() || state.nativeShare !== native) {
+            if (state.nativeShare === native) await doStopShare();
+            if (failure && current()) V().sysMsg(tLabel("desktop.screen.share.permission.failed") + failure);
+            return false;
+        }
+        sync();
+        startShareStatus({ stream, pc, scope: captureMediaScope(), preset: p, surface, audioMode: "none",
+            generation: native.generation,
+            stop: () => { V().$("voice-screen").focus(); void doStopShare(); },
+            change: () => openShareDialog(true, preset, "none", surface, custom, bitrateCeiling),
+            changeQuality: () => openShareDialog(true, preset, "none", surface, custom, bitrateCeiling),
+            reduction: () => "" });
+        return true;
+    }
+
+    // Go reports the native pipeline's own lifecycle: window closed, failure
+    // after one restart, minimized source (the last frame is held).
+    window.runtime?.EventsOn?.("native_share", payload => {
+        let event = payload;
+        if (typeof payload === "string") { try { event = JSON.parse(payload); } catch { event = null; } }
+        const { state } = V();
+        if ((event?.state === "ended" || event?.state === "fallback") && nativeEventIsCurrent(event, nativePending)) { nativePending.ended = true; return; }
+        // A delayed event of an older share or another tab never touches this one.
+        if (!event || !nativeEventIsCurrent(event, state.nativeShare)) return;
+        if (event.state === "minimized") V().toast(tLabel("share.nativeMinimized"), "warn");
+        else if (event.state === "ended") void doStopShare();
+        else if (event.state === "fallback") {
+            const { surface, preset } = state.nativeShare;
+            // Another startup owns the share slot: only end this one.
+            if (state.shareStarting || state.shareStopping) { void doStopShare(); return; }
+            const request = {}; state.shareStarting = request; syncShareButton();
+            const scope = captureMediaScope();
+            void doStopShare().then(() => {
+                if (state.shareStarting !== request || state.screenSharing || !mediaScopeIsCurrent(scope)) return;
+                V().toast(tLabel("share.nativeFallback"), "warn");
+                // Some runtimes need a user gesture for the browser picker; a refusal leaves the share off.
+                return startShare({ surface, preset: "custom", custom: { width: preset.width, height: preset.height, fps: preset.fps },
+                    bitrateCeiling: preset.bitrateCeiling || 0, audioMode: "none" });
+            }).catch(() => {}).finally(() => { if (state.shareStarting === request) { state.shareStarting = null; syncShareButton(); } });
+        }
+    });
+
     // startStudioShare publishes the Studio's stable program stream through
     // the same guarded screen publication as an ordinary share: the media
     // session attached the encrypted transform to the share transceiver, so
@@ -1205,6 +1359,10 @@ export function createVideoPublication({ policy }) {
     async function doStopShare() {
         const { state } = V();
         cancelShareResume();
+        // A native share ends in Go even when another path already reset the share state.
+        const native = state.nativeShare;
+        state.nativeShare = null;
+        if (native) void Promise.resolve().then(() => window.go.main.App.StopNativeScreenShareForTab(native.tabID, native.id)).catch(() => {});
         if (!state.screenSharing) return;
         const pc = state.pc;
         const generation = state.serverGeneration;
@@ -1222,7 +1380,7 @@ export function createVideoPublication({ policy }) {
             state.shareAudioSender.replaceTrack(null).catch(() => {});
             state.shareAudioSender = null;
         }
-        const screenSender = state.shareVideoTransceiver?.sender;
+        const screenSender = native ? null : state.shareVideoTransceiver?.sender;
         if (screenSender) void screenSender.replaceTrack(null).catch(() => {});
         if (state.shareStream) {
             stopDisplayCapture(state.shareStream);
@@ -1234,7 +1392,7 @@ export function createVideoPublication({ policy }) {
         try { studio?.onEnded(); } catch { /* the share stop proceeds */ }
         try {
             await stopPublication("screen");
-            if (pc && current()) await renegotiate(pc, generation);
+            if (pc && current() && !native) await renegotiate(pc, generation);
         } catch (error) {
             if (current()) V().sysMsg(tLabel("desktop.stopping.screen.share.failed") + (error.message || error.name));
         } finally {

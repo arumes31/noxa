@@ -1,3 +1,4 @@
+import { nativeSenderRow } from "./native-share.js";
 import { vendorLabel } from "./encoder-vendor.js";
 import { softwareShareNotice } from "./hardware-video.js";
 import { saveStreamDiagnostics } from "./stream-diagnostic-export.js";
@@ -174,6 +175,11 @@ async function poll(s) {
         const report = sender?.getStats ? await sampleSenderStats(sender, { fresh: !s.previous }) : null;
         if (!current(s)) return;
         s.layers = report ? collectVideoSenders(report, s.previous, [source], s.previousSource ? [s.previousSource] : []) : [];
+        if (window.__noxa.state.nativeShare) {
+            const row = await nativeSenderRow(window.__noxa.state.activeTabID);
+            if (!current(s)) return;
+            s.layers = row ? [row] : [];
+        }
         s.sample = primaryVideoSender(s.layers);
         s.previous = report; s.previousSource = source; s.sampledAt = Date.now(); s.measuredAt = performance.now(); s.statsFailed = false;
         if (softwareShareNotice(s.softwareWarned, s.sample)) {

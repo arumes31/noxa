@@ -21,6 +21,7 @@ import (
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"noxa/internal/auth"
+	"noxa/internal/framecrypt"
 	"noxa/internal/netproto"
 	"noxa/internal/tlscert"
 	"noxa/internal/version"
@@ -118,6 +119,12 @@ type connManager struct {
 	// supportsMediaE2EE: the server requires end-to-end encrypted channel
 	// media and supports its key transport (Task 2).
 	supportsMediaE2EE bool
+	// Native screen share (native_share.go): server capability, the running
+	// share and the mirrored "self|screen" media keys of this session.
+	supportsNativeMediaPeer bool
+	nativeShare             *nativeShare
+	nativeKeyring           *framecrypt.Encryptor
+	detachedNative          []*nativeShare // detached with their connection, closed by finishDetach
 	// ratchetWake: the server's olm_pending doorbell wakes the drain loop.
 	ratchetWake        chan struct{}
 	authorizationModel string
@@ -826,6 +833,11 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.supportsConversationActivity = slices.Contains(resp.Capabilities, netproto.CapabilityConversationActivity)
 	m.supportsHandover = slices.Contains(resp.Capabilities, netproto.CapabilityHandover)
 	m.iceServers = resp.ICEServers
+	m.supportsNativeMediaPeer = slices.Contains(resp.Capabilities, netproto.CapabilityNativeMediaPeer)
+	m.nativeKeyring = nil
+	// A native share never outlives its connection's keys.
+	staleNative := m.nativeShare
+	m.nativeShare = nil
 	m.managedRelay = slices.Contains(resp.Capabilities, netproto.CapabilityManagedRelay)
 	m.recommendedVersion = resp.ClientRecommendedVersion
 	m.relayLease = netproto.RelayResponse{}
@@ -840,6 +852,9 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.transferEpoch++
 	m.acceptingTransfers = true
 	m.mu.Unlock()
+	if staleNative != nil {
+		staleNative.close()
+	}
 	m.rememberOutboxServer()
 
 	// The KeyPublish above triggers the server to answer with sealed
@@ -953,6 +968,10 @@ func (m *connManager) detachLocked() (net.Conn, []chan requestResult, []net.Conn
 	m.controlQueue = nil
 	// The media-key roster belongs to its connection too.
 	m.mediaRoster, m.mediaRosterLast = nil, nil
+	// So does a native share: finishDetach stops its capture and peer.
+	if m.nativeShare != nil {
+		m.detachedNative, m.nativeShare = append(m.detachedNative, m.nativeShare), nil
+	}
 	// The consumer is fenced by the epoch change; stopping awaits its
 	// in-flight operation (which takes m.mu), so it runs after unlocking.
 	if s := m.takeRatchetLocked(); s != nil {
@@ -1010,6 +1029,13 @@ func (m *connManager) sendGoodbye(conn net.Conn) {
 }
 
 func (m *connManager) finishDetach(conn net.Conn, waiters []chan requestResult, transferConns []net.Conn, emitDisconnected bool) {
+	m.mu.Lock()
+	detached := m.detachedNative
+	m.detachedNative = nil
+	m.mu.Unlock()
+	for _, native := range detached {
+		native.close() // conn is detached: no native offer reaches a later session
+	}
 	if m.pubKeys != nil {
 		m.pubKeys.clear()
 	}
@@ -1411,7 +1437,11 @@ func (m *connManager) dispatchAccepted(conn net.Conn, epoch uint64, checkSource 
 		}
 		changed := m.mediaLimits != mediaUpdate.MediaLimits
 		m.mediaLimits, m.mediaLimitsRevision = mediaUpdate.MediaLimits, mediaUpdate.Revision
+		native := m.nativeShare
 		m.mu.Unlock()
+		if changed && native != nil {
+			native.applyLimits(mediaUpdate.MediaLimits)
+		}
 		m.teeFrame("in", f)
 		if changed {
 			// An invalidation carries no snapshot that could become stale while
@@ -1506,6 +1536,10 @@ func (m *connManager) dispatchAccepted(conn net.Conn, epoch uint64, checkSource 
 			}
 		}
 	case netproto.MsgICECandidate:
+		var candidate netproto.ICECandidate
+		if netproto.Decode(f, &candidate) == nil && m.routeNativeCandidate(candidate) {
+			return
+		}
 		m.emit("ice", string(f.Payload))
 	case netproto.MsgWebRTCOffer:
 		m.emit("offer", string(f.Payload))

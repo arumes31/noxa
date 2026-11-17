@@ -97,10 +97,16 @@ export function retainDisplayCapture(stream) {
 export function releaseDisplayCapture(stream) {
     for (const track of stream?.getTracks() || []) displayLeases.release(track);
 }
+const stopHooks = new WeakMap();
+// onDisplayCaptureStop runs once when stopDisplayCapture stops this track.
+export function onDisplayCaptureStop(track, hook) { if (track) stopHooks.set(track, hook); }
 export function stopDisplayCapture(stream) {
     for (const track of stream?.getTracks() || []) {
         displayLeases.release(track); // MediaStreamTrack.stop() does not emit ended.
         track.stop();
+        const hook = stopHooks.get(track);
+        stopHooks.delete(track);
+        try { hook?.(); } catch { /* a hook never blocks the stop */ }
     }
 }
 

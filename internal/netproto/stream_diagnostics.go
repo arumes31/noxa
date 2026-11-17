@@ -54,6 +54,9 @@ type VideoSenderDiagnostics struct {
 	// EncoderVendor is the GPU vendor of a hardware encoder ("nvidia", "amd",
 	// "intel"), never the device or driver text. Empty when unknown.
 	EncoderVendor string `json:"encoder_vendor,omitempty"`
+	// CaptureBackend is "native" (Windows Graphics Capture + Media Foundation
+	// in the desktop client) or "browser" (getDisplayMedia). Empty when unknown.
+	CaptureBackend string `json:"capture_backend,omitempty"`
 }
 
 func (r VideoSenderDiagnostics) Valid() bool {
@@ -77,6 +80,11 @@ func (r VideoSenderDiagnostics) Valid() bool {
 	}
 	switch r.EncoderVendor {
 	case "", "nvidia", "amd", "intel":
+	default:
+		return false
+	}
+	switch r.CaptureBackend {
+	case "", "native", "browser":
 	default:
 		return false
 	}
