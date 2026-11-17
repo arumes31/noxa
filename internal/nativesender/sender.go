@@ -284,7 +284,7 @@ func (s *Sender) WriteFrame(au []byte, keyframe bool, seqHeader []byte, captured
 		return ErrDropped
 	}
 	ts := uint32(captured.Sub(s.start).Seconds() * clockRate)
-	if s.sentAny && int32(ts-s.lastTS) <= 0 {
+	if s.sentAny && (ts == s.lastTS || ts-s.lastTS >= 1<<31) { // not newer (serial number arithmetic)
 		ts = s.lastTS + 1 // The IV and replay window need strictly increasing timestamps.
 	}
 	encrypted, err := s.cfg.Keys.EncryptH264(canonical, s.ssrc, ts)
