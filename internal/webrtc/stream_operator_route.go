@@ -107,7 +107,7 @@ func (r *Router) streamRoute(request StreamRouteRequest, read func(*PeerConnecti
 	r.mu.RLock()
 	r.watchMu.RLock()
 	key := publicationKey{request.PublisherID, request.Slot}
-	peer, channel := r.pubPeers[request.PublisherID], r.clientChan[request.PublisherID]
+	peer, channel := r.publisherPeerLocked(request.PublisherID, request.Slot), r.clientChan[request.PublisherID]
 	var ingress *videoIngressDiagnostic
 	var rid string
 	for _, candidateRID := range []string{"", "f", "h", "q"} {
@@ -147,7 +147,7 @@ func (r *Router) streamRoute(request StreamRouteRequest, read func(*PeerConnecti
 	defer r.mu.RUnlock()
 	r.watchMu.RLock()
 	defer r.watchMu.RUnlock()
-	if r.pubPeers[request.PublisherID] != peer || r.clientChan[request.PublisherID] != channel || r.publications[key] != request.Generation || r.videoIngress[videoIngressKey{request.PublisherID, request.Slot, rid}] != ingress || r.videoSources[request.PublisherID][request.Slot][rid] != request.SSRC {
+	if r.publisherPeerLocked(request.PublisherID, request.Slot) != peer || r.clientChan[request.PublisherID] != channel || r.publications[key] != request.Generation || r.videoIngress[videoIngressKey{request.PublisherID, request.Slot, rid}] != ingress || r.videoSources[request.PublisherID][request.Slot][rid] != request.SSRC {
 		return nil, ErrStreamRouteUnavailable
 	}
 	return &StreamRouteDiagnostics{SampledAt: time.Now().UnixMilli(), PublisherID: request.PublisherID, Slot: request.Slot, Generation: request.Generation, ChannelID: channel, SSRC: request.SSRC, RID: rid, IngressStartedAt: ingress.started.UnixMilli(), PeerID: first.peerID, RouteToken: token, Local: first.local, Remote: first.remote}, nil

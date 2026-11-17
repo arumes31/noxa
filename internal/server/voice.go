@@ -111,6 +111,9 @@ func (s *TCPServer) handleWebRTCOffer(ctx context.Context, client *Client, f *ne
 	if s.deps == nil || s.deps.Voice == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "voice backend unavailable")
 	}
+	if msg.Peer != "" {
+		return s.handleNativeOffer(ctx, client, msg)
+	}
 	// Refused before the voice backend sees the offer: no peer, no media.
 	if reason := s.mediaE2EEOfferRejection(client, msg); reason != "" {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, reason)
@@ -200,6 +203,10 @@ func (s *TCPServer) handleWebRTCAnswer(ctx context.Context, client *Client, f *n
 	if s.deps == nil || s.deps.Voice == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "voice backend unavailable")
 	}
+	if msg.Peer != "" {
+		// The server never sends offers to the native media peer.
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "webrtc_answer for an unknown peer")
+	}
 	return s.roleChannelControl(ctx, client, authorization.Connect, true, func(ctx context.Context, _ int64) error {
 		return s.applyWebRTCAnswer(ctx, client, msg)
 	})
@@ -221,13 +228,20 @@ func (s *TCPServer) handleICECandidate(ctx context.Context, client *Client, f *n
 	if s.deps == nil || s.deps.Voice == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "voice backend unavailable")
 	}
+	peerID := client.ID
+	switch _, native := s.deps.Voice.(nativePeerBackend); {
+	case msg.Peer == netproto.PeerNative && native:
+		peerID = webrtc.NativePeerID(client.ID)
+	case msg.Peer != "":
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "ice_candidate for an unknown peer")
+	}
 	return s.roleChannelControl(ctx, client, authorization.Connect, true, func(context.Context, int64) error {
-		return s.applyICECandidate(client, msg)
+		return s.applyICECandidate(client, peerID, msg)
 	})
 }
 
-func (s *TCPServer) applyICECandidate(client *Client, msg netproto.ICECandidate) error {
-	if err := s.deps.Voice.AddICECandidate(client.ID, msg.Candidate, msg.SDPMid, msg.SDPMLineIndex); err != nil {
+func (s *TCPServer) applyICECandidate(client *Client, peerID string, msg netproto.ICECandidate) error {
+	if err := s.deps.Voice.AddICECandidate(peerID, msg.Candidate, msg.SDPMid, msg.SDPMLineIndex); err != nil {
 		s.logger.Debug("ice candidate rejected",
 			zap.String("client_id", client.ID),
 			zap.Error(err),

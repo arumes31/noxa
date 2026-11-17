@@ -779,6 +779,9 @@ type WebRTCOffer struct {
 	// the encoded-frame encryption transform (MediaE2EEVersion). Servers that
 	// advertise CapabilityMediaE2EE refuse client offers without it.
 	MediaE2EE string `json:"media_e2ee,omitempty"`
+	// Peer selects the client peer: "" is the browser peer, PeerNative the
+	// publish-only native media peer (CapabilityNativeMediaPeer).
+	Peer string `json:"peer,omitempty"`
 }
 
 // TrackSlot names the media slot one outbound track of a WebRTC offer
@@ -801,6 +804,8 @@ type TrackSlot struct {
 // WebRTCAnswer carries an SDP answer to a previously received offer.
 type WebRTCAnswer struct {
 	SDP string `json:"sdp"`
+	// Peer is the WebRTCOffer.Peer of the offer this answers.
+	Peer string `json:"peer,omitempty"`
 }
 
 // ICECandidate carries a single trickle ICE candidate in either direction.
@@ -808,6 +813,8 @@ type ICECandidate struct {
 	Candidate     string `json:"candidate"`
 	SDPMid        string `json:"sdp_mid,omitempty"`
 	SDPMLineIndex uint16 `json:"sdp_mline_index,omitempty"`
+	// Peer names the peer the candidate belongs to (see WebRTCOffer.Peer).
+	Peer string `json:"peer,omitempty"`
 }
 
 // MaxWhisperTargets bounds each WhisperSet target list. Every entry is

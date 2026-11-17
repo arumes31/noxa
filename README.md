@@ -173,6 +173,19 @@ Like the channel member limit, the count includes invisible members, so a full
 channel can hint that an invisible member is present. A second live session of
 the same device counts as its own participant.
 
+**Native media peer (`native-media-peer-v1`).** Servers advertising this
+capability accept a second, publish-only WebRTC peer per session for native
+desktop screen capture. It uses the same `webrtc_offer`/`webrtc_answer`/
+`ice_candidate` messages with `"peer": "native"` (no `peer` = the existing
+browser peer, unchanged). It may carry only declared `screen` and
+`screenaudio` tracks, needs the screen-share permission and, on encrypted
+servers, the same `media_e2ee` declaration; its media is treated exactly as
+the session's own screen share (same slots, publications, viewers and checks)
+and keyframe requests go back to it. The newest declaration of a slot on
+either peer takes the slot over. It closes with the browser peer, on a channel
+leave or move, when screen sharing is revoked, and on an offer with
+`"peer": "native"` and an empty `sdp`.
+
 **What stays off while channel media is encrypted, and why.**
 * *Whisper* stays unavailable. A whisper would need its own key scope for an
   authorized recipient set that is not the channel, verified like channel keys;

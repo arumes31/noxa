@@ -490,6 +490,7 @@ func (v *Voice) redeliverOffer(clientID string, st *renegState, seq uint64, wrap
 		if v.engine.closePeerIf(clientID, wrapper) {
 			v.stopRenegIf(clientID, st)
 			v.router.detachPeerKeepChannelIf(clientID, wrapper)
+			v.closeNativeOwnedBy(clientID, wrapper)
 		}
 		return
 	}
@@ -653,6 +654,8 @@ func (v *Voice) HandleOffer(clientID, offerSDP string, onLocalCandidate func(can
 	v.stopReneg(clientID)
 	v.router.DetachPeerKeepChannel(clientID)
 	_ = v.engine.ClosePeerConnection(clientID)
+	// The detach above retired the native peer's claims and publications.
+	_ = v.CloseNativePeer(clientID)
 
 	wrapper, err := v.engine.NewPeerConnection(clientID)
 	if err != nil {
@@ -689,33 +692,40 @@ func (v *Voice) HandleOffer(clientID, offerSDP string, onLocalCandidate func(can
 		v.resumePending(clientID)
 	}
 
-	if onLocalCandidate != nil {
-		go func() {
-			candidates := wrapper.LocalCandidates()
-			for {
-				select {
-				case c, ok := <-candidates:
-					if !ok {
-						return
-					}
-					var mid string
-					if c.SDPMid != nil {
-						mid = *c.SDPMid
-					}
-					var idx uint16
-					if c.SDPMLineIndex != nil {
-						idx = *c.SDPMLineIndex
-					}
-					onLocalCandidate(c.Candidate, mid, idx)
-				case <-wrapper.Done():
-					return
-				}
-			}
-		}()
-	}
+	forwardLocalCandidates(wrapper, onLocalCandidate)
 
 	v.logger.Info("voice session established", zap.String("client_id", clientID))
 	return answer, nil
+}
+
+// forwardLocalCandidates invokes onLocalCandidate (if non-nil) for every
+// locally gathered ICE candidate until the peer connection is closed.
+func forwardLocalCandidates(wrapper *PeerConnectionWrapper, onLocalCandidate func(candidate, sdpMid string, mlineIndex uint16)) {
+	if onLocalCandidate == nil {
+		return
+	}
+	go func() {
+		candidates := wrapper.LocalCandidates()
+		for {
+			select {
+			case c, ok := <-candidates:
+				if !ok {
+					return
+				}
+				var mid string
+				if c.SDPMid != nil {
+					mid = *c.SDPMid
+				}
+				var idx uint16
+				if c.SDPMLineIndex != nil {
+					idx = *c.SDPMLineIndex
+				}
+				onLocalCandidate(c.Candidate, mid, idx)
+			case <-wrapper.Done():
+				return
+			}
+		}
+	}()
 }
 
 // The bundled transport must have one unambiguous DTLS identity. Media-level
@@ -812,7 +822,11 @@ func (v *Voice) AddICECandidate(clientID, candidate, sdpMid string, mlineIndex u
 func (v *Voice) ClosePeer(clientID string) error {
 	v.stopReneg(clientID)
 	v.router.DetachPeer(clientID)
-	return v.engine.ClosePeerConnection(clientID)
+	err := v.engine.ClosePeerConnection(clientID)
+	// After the browser peer is gone, so a concurrent native offer either
+	// sees no browser peer or registers before this close.
+	_ = v.CloseNativePeer(clientID)
+	return err
 }
 
 // stopReneg drops the peer's renegotiation scheduling state, cancelling a
@@ -849,12 +863,18 @@ func (v *Voice) stopRenegIf(clientID string, st *renegState) {
 
 // JoinChannel records channel membership for routing.
 func (v *Voice) JoinChannel(clientID string, channelID int64) {
+	previous, joined := v.router.ChannelOf(clientID)
 	v.router.JoinChannel(channelID, clientID)
+	if joined && previous != channelID {
+		// A move retires the client's publications, like a leave.
+		_ = v.CloseNativePeer(clientID)
+	}
 }
 
 // LeaveChannel removes channel membership for routing.
 func (v *Voice) LeaveChannel(clientID string, channelID int64) {
 	v.router.LeaveChannel(channelID, clientID)
+	_ = v.CloseNativePeer(clientID)
 }
 
 // SetWhisper replaces the client's whisper configuration.

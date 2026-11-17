@@ -283,6 +283,13 @@ type Router struct {
 	// MSID track ID -> slot. Declared by the client alongside its SDP offer;
 	// an undeclared track takes its kind's default slot (70).
 	trackSlots map[string]map[string]string
+	// nativeSlots is trackSlots for the publisher's native media peer
+	// (screen and screenaudio only). The latest declaration of a slot wins:
+	// declaring it on one peer drops it from the other peer's map.
+	nativeSlots map[string]map[string]string
+	// nativePeers is each publisher's attached native media peer. Native
+	// declaration and detach calls act only for the current one.
+	nativePeers map[string]nativePeer
 	// slotClaims records which inbound track currently owns each of a
 	// publisher's slots (publisherID -> claim key -> token). A second track
 	// claiming a live slot is refused, so two sources can never be
@@ -352,6 +359,7 @@ func NewRouter(logger *zap.Logger) *Router {
 		whispers:     make(map[string]*whisperConfig),
 		whisperPairs: make(map[string]map[string]bool),
 		trackSlots:   make(map[string]map[string]string),
+		nativeSlots:  make(map[string]map[string]string),
 		slotClaims:   make(map[string]map[string]slotClaim),
 	}
 }
@@ -629,12 +637,14 @@ func slotStreamID(publisherID, slot string) string {
 func (r *Router) publisherSlotsLocked(publisherID string) []string {
 	extra := make([]string, 0, 2)
 	seen := make(map[string]bool, 2)
-	for _, slot := range r.trackSlots[publisherID] {
-		if _, ok := slotKinds[slot]; !ok || isDefaultSlot(slot) || seen[slot] {
-			continue
+	for _, declared := range []map[string]string{r.trackSlots[publisherID], r.nativeSlots[publisherID]} {
+		for _, slot := range declared {
+			if _, ok := slotKinds[slot]; !ok || isDefaultSlot(slot) || seen[slot] {
+				continue
+			}
+			seen[slot] = true
+			extra = append(extra, slot)
 		}
-		seen[slot] = true
-		extra = append(extra, slot)
 	}
 	sort.Strings(extra)
 	return append([]string{SlotMic, SlotCam}, extra...)
@@ -846,26 +856,66 @@ func (r *Router) removePublisherLocked(subscriberID, publisherID string) bool {
 // renegotiated. Unknown slot names are rejected: an inbound track the router
 // cannot place is dropped rather than merged into another slot (70).
 func (r *Router) SetTrackSlots(publisherID string, slots map[string]string) {
+	r.setTrackSlots(publisherID, slots, nil)
+}
+
+// SetNativeTrackSlots is SetTrackSlots for the publisher's native media peer
+// pc, limited to the screen and screenaudio slots, and a no-op unless pc is
+// the attached native peer. Declaring a slot on either peer drops the other
+// peer's declaration of it, so the newest declared track takes over the slot
+// (see claimSlotFrom) and the publication is unchanged. It wakes pc's track
+// readers, so a track that lost its slot resumes without a new OnTrack.
+func (r *Router) SetNativeTrackSlots(publisherID string, pc *PeerConnectionWrapper, slots map[string]string) {
+	r.setTrackSlots(publisherID, slots, pc)
+}
+
+func (r *Router) setTrackSlots(publisherID string, slots map[string]string, nativePC *PeerConnectionWrapper) {
+	native := nativePC != nil
 	r.mu.Lock()
+	if native {
+		current := r.nativePeers[publisherID]
+		if current.pc != nativePC {
+			r.mu.Unlock()
+			return
+		}
+		close(current.wake)
+		current.wake = make(chan struct{})
+		r.nativePeers[publisherID] = current
+	}
 	before := r.publisherSlotsLocked(publisherID)
 	previousRecordingSlot := r.recordingVideoSlotLocked(publisherID)
 
 	declared := make(map[string]string, len(slots))
 	for trackID, slot := range slots {
-		if _, ok := slotKinds[slot]; !ok {
+		if _, ok := slotKinds[slot]; !ok || native && !nativeSlot(slot) {
 			r.logger.Warn("router: ignoring unknown track slot",
 				zap.String("publisher_id", publisherID),
 				zap.String("track_id", trackID),
 				zap.String("slot", slot),
+				zap.Bool("native", native),
 			)
 			continue
 		}
 		declared[trackID] = slot
 	}
+	own, other := r.trackSlots, r.nativeSlots
+	if native {
+		own, other = r.nativeSlots, r.trackSlots
+	}
 	if len(declared) == 0 {
-		delete(r.trackSlots, publisherID)
+		delete(own, publisherID)
 	} else {
-		r.trackSlots[publisherID] = declared
+		own[publisherID] = declared
+	}
+	for trackID, slot := range other[publisherID] {
+		for _, claimed := range declared {
+			if claimed == slot {
+				delete(other[publisherID], trackID)
+			}
+		}
+	}
+	if len(other[publisherID]) == 0 {
+		delete(other, publisherID)
 	}
 	after := r.publisherSlotsLocked(publisherID)
 
@@ -949,15 +999,25 @@ type slotClaim struct {
 	token   uint64
 	trackID string
 	gop     *gopCache // video reader's cache; set on the reader's own copy
+	// native is the publisher's native media peer when the track arrived on
+	// it (nil: the browser peer). It receives the source's PLI/FIR.
+	native *PeerConnectionWrapper
 }
 
 func (r *Router) claimSlot(clientID, key string, trackIDs ...string) (uint64, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	trackID := ""
 	if len(trackIDs) > 0 {
 		trackID = trackIDs[0]
 	}
+	return r.claimSlotFrom(clientID, key, trackID, nil)
+}
+
+// claimSlotFrom is claimSlot for a track of the browser peer (native nil) or
+// of the publisher's native media peer. Each peer's declarations judge its
+// own tracks.
+func (r *Router) claimSlotFrom(clientID, key, trackID string, native *PeerConnectionWrapper) (uint64, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	claims, ok := r.slotClaims[clientID]
 	if !ok {
 		claims = make(map[string]slotClaim)
@@ -968,8 +1028,14 @@ func (r *Router) claimSlot(clientID, key string, trackIDs ...string) (uint64, bo
 		// its old reader wakes and releases the slot. Duplicate live tracks
 		// remain forbidden, and an undeclared track cannot steal the slot.
 		slot, _, _ := strings.Cut(key, slotSep)
-		declared := r.trackSlots[clientID]
-		if previous.trackID == "" || trackID == "" || declared[previous.trackID] != "" || declared[trackID] != slot {
+		declared, previousDeclared := r.trackSlots[clientID], r.trackSlots[clientID]
+		if native != nil {
+			declared = r.nativeSlots[clientID]
+		}
+		if previous.native != nil {
+			previousDeclared = r.nativeSlots[clientID]
+		}
+		if previous.trackID == "" || trackID == "" || previousDeclared[previous.trackID] != "" || declared[trackID] != slot {
 			return 0, false
 		}
 	}
@@ -979,8 +1045,165 @@ func (r *Router) claimSlot(clientID, key string, trackIDs ...string) (uint64, bo
 	r.slotEpoch++
 	live := new(atomic.Bool)
 	live.Store(true)
-	claims[key] = slotClaim{token: r.slotEpoch, trackID: trackID, live: live}
+	claims[key] = slotClaim{token: r.slotEpoch, trackID: trackID, live: live, native: native}
+	r.retireOtherPeerSlotLocked(clientID, key, native)
 	return r.slotEpoch, true
+}
+
+// retireOtherPeerSlotLocked ends every claim of the OTHER peer on the slot
+// of keep (any simulcast layer) whose track its peer no longer declares, and
+// drops those layers' source registrations: a native "" layer otherwise
+// leaves superseded browser f/h/q layers dispatching. Callers hold mu.
+func (r *Router) retireOtherPeerSlotLocked(publisherID, keep string, native *PeerConnectionWrapper) {
+	slot, _, _ := strings.Cut(keep, slotSep)
+	for key, claim := range r.slotClaims[publisherID] {
+		claimSlot, rid, video := strings.Cut(key, slotSep)
+		if key == keep || claimSlot != slot || (claim.native == nil) == (native == nil) {
+			continue
+		}
+		declared := r.trackSlots[publisherID]
+		if claim.native != nil {
+			declared = r.nativeSlots[publisherID]
+		}
+		if declared[claim.trackID] != "" {
+			continue
+		}
+		if claim.live != nil {
+			claim.live.Store(false)
+		}
+		delete(r.slotClaims[publisherID], key)
+		if !video {
+			continue
+		}
+		if sources := r.videoSources[publisherID][slot]; sources != nil {
+			r.forgetKeyframeSourceLocked(sources[rid])
+			delete(sources, rid)
+			if len(sources) == 0 {
+				delete(r.videoSources[publisherID], slot)
+			}
+		}
+		delete(r.videoSeen[videoSourceRef{publisherID, slot}], rid)
+		ingress := videoIngressKey{publisherID, slot, rid}
+		delete(r.videoIngress, ingress)
+		if cache := r.gopCaches[ingress]; cache != nil {
+			cache.invalidate()
+			delete(r.gopCaches, ingress)
+		}
+	}
+}
+
+// nativeSlot reports whether the native media peer may publish slot.
+func nativeSlot(slot string) bool { return slot == SlotScreen || slot == SlotScreenAudio }
+
+// rtcpWriterLocked returns the RTCP destination of a publisher's source layer:
+// the native media peer while it holds the layer's claim, else the browser
+// peer. Callers hold mu.
+func (r *Router) rtcpWriterLocked(publisherID, slot, rid string) RTCPWriter {
+	if claim := r.slotClaims[publisherID][slot+slotSep+rid]; claim.native != nil {
+		return claim.native
+	}
+	return r.rtcpWriters[publisherID]
+}
+
+// publisherPeerLocked returns the peer carrying a publisher's video slot (see
+// rtcpWriterLocked), for transport diagnostics. Callers hold mu.
+func (r *Router) publisherPeerLocked(publisherID, slot string) *PeerConnectionWrapper {
+	for key, claim := range r.slotClaims[publisherID] {
+		if claim.native != nil && strings.HasPrefix(key, slot+slotSep) {
+			return claim.native
+		}
+	}
+	return r.pubPeers[publisherID]
+}
+
+// AttachNativePeer routes the tracks of publisherID's native media peer as
+// the publisher's own: same slots, publications, permissions and media
+// validation as browser-peer tracks. Only tracks declared through
+// SetNativeTrackSlots (screen, screenaudio) are read. pc is never a
+// subscriber: it gets no output tracks and no renegotiation. owner is the
+// browser peer pc belongs to (see Voice.closeNativeOwnedBy).
+func (r *Router) AttachNativePeer(publisherID string, pc, owner *PeerConnectionWrapper) {
+	r.mu.Lock()
+	if previous := r.nativePeers[publisherID]; previous.wake != nil {
+		close(previous.wake)
+	}
+	if r.nativePeers == nil {
+		r.nativePeers = make(map[string]nativePeer)
+	}
+	r.nativePeers[publisherID] = nativePeer{pc: pc, owner: owner, wake: make(chan struct{})}
+	delete(r.nativeSlots, publisherID)
+	r.mu.Unlock()
+	pc.OnTrack(func(remote *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+		go r.readSourceTiming(publisherID, remote, receiver)
+		go r.nativeTrackLoop(publisherID, pc, remote)
+	})
+}
+
+// nativeTrackLoop reads one native track whenever it is declared and holds
+// its slot. Pion reports a reused receiver only once, so a track that loses
+// its slot (or is not declared yet) waits for the next native declaration
+// instead of ending, and resumes on the same receiver.
+func (r *Router) nativeTrackLoop(publisherID string, pc *PeerConnectionWrapper, remote *webrtc.TrackRemote) {
+	for {
+		r.mu.RLock()
+		current := r.nativePeers[publisherID]
+		slot := r.nativeSlots[publisherID][remote.ID()]
+		r.mu.RUnlock()
+		if current.pc != pc {
+			return
+		}
+		switch {
+		case !nativeSlot(slot) || slotKinds[slot] != remote.Kind():
+			r.logger.Warn("router: native track not declared as screen or screenaudio",
+				zap.String("client_id", publisherID),
+				zap.String("track_id", remote.ID()),
+				zap.String("kind", remote.Kind().String()),
+			)
+		case remote.Kind() == webrtc.RTPCodecTypeAudio:
+			r.readLoop(publisherID, slot, remote, 0, pc)
+		default:
+			r.readVideoLoop(publisherID, slot, remote, pc)
+		}
+		select {
+		case <-current.wake:
+		case <-pc.Done():
+			return
+		}
+	}
+}
+
+// DetachNativePeer forgets pc as publisherID's native media peer: its slot
+// declarations end and its readers stop. A stale pc is a no-op, so it cannot
+// detach a replacement. The caller closes pc.
+func (r *Router) DetachNativePeer(publisherID string, pc *PeerConnectionWrapper) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	current := r.nativePeers[publisherID]
+	if current.pc != pc {
+		return
+	}
+	close(current.wake)
+	delete(r.nativePeers, publisherID)
+	delete(r.nativeSlots, publisherID)
+	for _, claim := range r.slotClaims[publisherID] {
+		if claim.native == pc && claim.live != nil {
+			claim.live.Store(false)
+		}
+	}
+}
+
+// nativePeerOf returns publisherID's attached native media peer, if any.
+func (r *Router) nativePeerOf(publisherID string) nativePeer {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.nativePeers[publisherID]
+}
+
+type nativePeer struct {
+	pc, owner *PeerConnectionWrapper
+	// wake is closed (and replaced) on every native declaration and on
+	// detach, waking track readers waiting to resume.
+	wake chan struct{}
 }
 
 func (r *Router) ownsSlot(clientID, key string, token uint64) bool {
@@ -1542,7 +1765,13 @@ func (r *Router) targetSubscribersLocked(senderID, slot string) []string {
 // slot. extID is the negotiated ssrc-audio-level header extension ID, or 0
 // when the extension was not negotiated (VAD disabled).
 func (r *Router) ReadLoop(clientID, slot string, track TrackReader, extID uint8) {
-	token, claimed := r.claimSlot(clientID, slot, inboundTrackID(track))
+	r.readLoop(clientID, slot, track, extID, nil)
+}
+
+// readLoop is ReadLoop for a track of the browser peer (native nil) or of
+// clientID's native media peer.
+func (r *Router) readLoop(clientID, slot string, track TrackReader, extID uint8, native *PeerConnectionWrapper) {
+	token, claimed := r.claimSlotFrom(clientID, slot, inboundTrackID(track), native)
 	if !claimed {
 		r.logger.Warn("router: dropping audio track, slot already in use",
 			zap.String("client_id", clientID),
@@ -1755,9 +1984,11 @@ func (r *Router) senderVideoTapID(senderID string) string {
 // output, matching the former camera-replacement behavior. Concurrent camera
 // packets must never be interleaved with that publisher's screen stream.
 func (r *Router) recordingVideoSlotLocked(publisherID string) string {
-	for _, slot := range r.trackSlots[publisherID] {
-		if slot == SlotScreen {
-			return SlotScreen
+	for _, declared := range []map[string]string{r.trackSlots[publisherID], r.nativeSlots[publisherID]} {
+		for _, slot := range declared {
+			if slot == SlotScreen {
+				return SlotScreen
+			}
 		}
 	}
 	return SlotCam
@@ -1770,6 +2001,12 @@ func (r *Router) recordingVideoSlotLocked(publisherID string) string {
 // under the slot so subscribers can select layers and PLIs can be routed back
 // to this publisher.
 func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
+	r.readVideoLoop(clientID, slot, track, nil)
+}
+
+// readVideoLoop is ReadVideoLoop for a track of the browser peer (native nil)
+// or of clientID's native media peer, which then receives its PLI/FIR.
+func (r *Router) readVideoLoop(clientID, slot string, track VideoTrackReader, native *PeerConnectionWrapper) {
 	r.mu.RLock()
 	encrypted := r.mediaPolicy.E2EE
 	r.mu.RUnlock()
@@ -1798,7 +2035,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 	// Simulcast layers are separate inbound tracks of the SAME slot, so the
 	// RID is part of the claim key (70).
 	claimKey := slot + slotSep + rid
-	token, claimed := r.claimSlot(clientID, claimKey, inboundTrackID(track))
+	token, claimed := r.claimSlotFrom(clientID, claimKey, inboundTrackID(track), native)
 	if !claimed {
 		r.logger.Warn("router: dropping video track, slot layer already in use",
 			zap.String("client_id", clientID),
@@ -1903,7 +2140,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		h264Frame.onReject = ingress.rejectH264
 	}
 	r.mu.RLock()
-	repairPeer, _ := r.rtcpWriters[clientID].(interface {
+	repairPeer, _ := r.rtcpWriterLocked(clientID, slot, rid).(interface {
 		RequestVideoRepairRTT() *videoRepairRTTResult
 	})
 	r.mu.RUnlock()
@@ -2569,7 +2806,6 @@ func (r *Router) requestKeyframeAsync(publisherID, slot, rid string, reason keyf
 
 func (r *Router) requestKeyframeMode(publisherID, slot, rid string, reason keyframeRequestReason, async bool) {
 	r.mu.RLock()
-	w := r.rtcpWriters[publisherID]
 	var ssrc uint32
 	if src, ok := r.videoSources[publisherID][slot]; ok {
 		if s, ok := src[rid]; ok {
@@ -2582,6 +2818,7 @@ func (r *Router) requestKeyframeMode(publisherID, slot, rid string, reason keyfr
 			}
 		}
 	}
+	w := r.rtcpWriterLocked(publisherID, slot, rid)
 	ingress := r.videoIngress[videoIngressKey{publisherID, slot, rid}]
 	if ingress != nil && ingress.ssrc != ssrc {
 		ingress = nil

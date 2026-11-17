@@ -262,6 +262,9 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 	if s.deps.Relay != nil {
 		resp.Capabilities = append(resp.Capabilities, netproto.CapabilityManagedRelay)
 	}
+	if _, ok := s.deps.Voice.(nativePeerBackend); ok {
+		resp.Capabilities = append(resp.Capabilities, netproto.CapabilityNativeMediaPeer)
+	}
 	if s.deps.Devices != nil {
 		if s.cfg.Web.Enabled {
 			resp.Capabilities = append(resp.Capabilities, netproto.CapabilityWebLogin)
