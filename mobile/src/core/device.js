@@ -144,6 +144,8 @@ export function loginChallengeMessage(challenge) {
 // Optional behaviour announced to the server (internal/netproto/pow.go).
 export const CLIENT_FEATURE_POW = "pow-v1";
 export const CLIENT_FEATURE_RETRY_HINT = "retry-hint-v1";
+// The app retries "server is busy" (netproto.ReasonServerBusy).
+export const CLIENT_FEATURE_BUSY = "busy-v1";
 // The app sends Msg.Goodbye before a deliberate close (internal/netproto/goodbye.go);
 // short worker sessions do not announce it and keep the legacy reading.
 export const CLIENT_FEATURE_GOODBYE = "goodbye-v1";
@@ -156,7 +158,7 @@ export async function signIn(conn, identity, { version, nickname = "", serverPas
     const authenticate = {
         client_version: version, authorization_models: ["roles-v1"], username: uniqueID, anonymous: true,
         nickname, server_password: serverPassword, x25519_public_key: x25519,
-        client_features: [CLIENT_FEATURE_POW, CLIENT_FEATURE_RETRY_HINT, ...(goodbye ? [CLIENT_FEATURE_GOODBYE, CLIENT_FEATURE_RESUME] : [])],
+        client_features: [CLIENT_FEATURE_POW, CLIENT_FEATURE_RETRY_HINT, CLIENT_FEATURE_BUSY, ...(goodbye ? [CLIENT_FEATURE_GOODBYE, CLIENT_FEATURE_RESUME] : [])],
         ...(resumeToken ? { resume_token: resumeToken } : {}),
     };
     let first = await conn.request(Msg.Authenticate, authenticate, [Msg.AuthChallenge, Msg.AuthResponse, Msg.PowChallenge], { timeout: 10000 });

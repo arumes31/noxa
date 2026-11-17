@@ -584,7 +584,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.mu.Unlock()
 	authMsg.AuthorizationModels = []string{netproto.AuthorizationModelRolesV1}
 	authMsg.ClientVersion = version.Short()
-	authMsg.ClientFeatures = []string{netproto.ClientFeaturePow, netproto.ClientFeatureRetryHint, netproto.ClientFeatureGoodbye, netproto.ClientFeatureResume}
+	authMsg.ClientFeatures = []string{netproto.ClientFeaturePow, netproto.ClientFeatureRetryHint, netproto.ClientFeatureGoodbye, netproto.ClientFeatureResume, netproto.ClientFeatureBusy}
 	if handoverBegin != nil {
 		authMsg.Handover = true
 		authMsg.ClientFeatures = append(authMsg.ClientFeatures, netproto.ClientFeatureHandover)

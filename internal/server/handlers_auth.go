@@ -114,7 +114,7 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	if hash := s.deps.ServerPasswordHash; hash != "" && !s.verifiedSecrets.known(hash, msg.ServerPassword) {
 		attempt, allowed, busy := s.loginLimiter.ReservePassword(serverPasswordScope)
 		if !allowed {
-			return s.refuseLoginAttempt(client, busy)
+			return s.refuseLoginAttempt(client, busy, msg.ClientFeatures)
 		}
 		defer attempt.Cancel()
 		if err := s.verifyServerPassword(msg.ServerPassword, hash); err != nil {
@@ -157,7 +157,7 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 
 	attempt, allowed, busy := s.loginLimiter.ReservePassword(accountSourceScope, principalScope, accountScope)
 	if !allowed {
-		return s.refuseLoginAttempt(client, busy)
+		return s.refuseLoginAttempt(client, busy, msg.ClientFeatures)
 	}
 	defer attempt.Cancel()
 
@@ -210,9 +210,12 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 
 // refuseLoginAttempt answers a password login the limiter refused: busy KDF
 // slots clear in moments, a lockout only after its window.
-func (s *TCPServer) refuseLoginAttempt(client *Client, busy bool) error {
+func (s *TCPServer) refuseLoginAttempt(client *Client, busy bool, features []string) error {
 	if busy {
 		s.metricsSink().IncAuthFailure("tcp", "busy")
+		if !slices.Contains(features, netproto.ClientFeatureBusy) {
+			return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "too many failed logins, try again later"})
+		}
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: netproto.ReasonServerBusy})
 	}
 	s.metricsSink().IncAuthFailure("tcp", "locked_out")

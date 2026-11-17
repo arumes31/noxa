@@ -26,6 +26,9 @@ const (
 	// ClientFeatureRetryHint: the client understands RetryAfterReason and
 	// keeps reconnecting after it (a shutting-down server tells it when).
 	ClientFeatureRetryHint = "retry-hint-v1"
+	// ClientFeatureBusy: the client retries ReasonServerBusy; others get the
+	// legacy lockout text, which they already retry.
+	ClientFeatureBusy = "busy-v1"
 )
 
 // PowAlgorithm identifies the hash construction below.
