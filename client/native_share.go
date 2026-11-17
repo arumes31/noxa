@@ -402,7 +402,7 @@ func (n *nativeShare) openSender() error {
 	initial := n.level.Bitrate
 	maxBitrate := n.ladder.Top.Bitrate
 	n.mu.Unlock()
-	sender, err := nativesender.New(nativesender.Config{ICEServers: ice, Signaling: nativeSignaling{n.cm}, Keys: n.keys,
+	sender, err := nativesender.New(nativesender.Config{ICEServers: ice, Signaling: nativeSignaling{n.cm, n}, Keys: n.keys,
 		InitialBitrate: initial, MaxBitrate: maxBitrate,
 		OnKeyframeRequest: n.requestKeyframe, OnEstimate: n.onEstimate})
 	if err != nil {
@@ -707,9 +707,22 @@ func nativeDiagnosticsRow(prev, cur nativeSample, cs nativecapture.Stats, ss nat
 
 // nativeSignaling sends the native peer's offer and candidates on the
 // control connection; the reply must be the native answer.
-type nativeSignaling struct{ cm *connManager }
+type nativeSignaling struct {
+	cm    *connManager
+	share *nativeShare
+}
+
+// current: a replaced share must not signal over its replacement.
+func (s nativeSignaling) current() bool {
+	s.cm.mu.Lock()
+	defer s.cm.mu.Unlock()
+	return s.cm.nativeShare == s.share
+}
 
 func (s nativeSignaling) Offer(offer netproto.WebRTCOffer) (netproto.WebRTCAnswer, error) {
+	if !s.current() {
+		return netproto.WebRTCAnswer{}, errNativeShareStopped
+	}
 	f, err := s.cm.request(netproto.MsgWebRTCOffer, netproto.MsgWebRTCAnswer, offer, 10*time.Second)
 	if err != nil {
 		return netproto.WebRTCAnswer{}, err
@@ -725,6 +738,9 @@ func (s nativeSignaling) Offer(offer netproto.WebRTCOffer) (netproto.WebRTCAnswe
 }
 
 func (s nativeSignaling) Candidate(c netproto.ICECandidate) error {
+	if !s.current() {
+		return errNativeShareStopped
+	}
 	return s.cm.write(netproto.MsgICECandidate, c)
 }
 
