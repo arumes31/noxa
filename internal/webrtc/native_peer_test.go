@@ -401,16 +401,16 @@ func TestBrowserTrackResumesAfterNativeClaim(t *testing.T) {
 			}
 			timingWait(t, "browser track at the viewer", 10*time.Second, func() bool { return viewer.count(id) > 0 })
 
+			// The browser stops sharing: its reader stays blocked in ReadRTP.
+			f.sources[0].pause.Store(true)
 			native := &PeerConnectionWrapper{}
 			f.router.AttachNativePeer("pub", native, nil)
 			f.router.SetNativeTrackSlots("pub", native, map[string]string{"native": kind.slot})
 			if _, ok := f.router.claimSlotFrom("pub", key, "native", native); !ok {
 				t.Fatal("native claim rejected")
 			}
-			// Let the retired browser reader notice it lost its slot.
-			time.Sleep(200 * time.Millisecond)
-
 			f.router.SetTrackSlots("pub", map[string]string{kind.trackID: kind.slot})
+			f.sources[0].pause.Store(false)
 			timingWait(t, "browser track reclaimed", 5*time.Second, func() bool {
 				f.router.mu.RLock()
 				defer f.router.mu.RUnlock()
@@ -418,6 +418,17 @@ func TestBrowserTrackResumesAfterNativeClaim(t *testing.T) {
 			})
 			before := viewer.count(id)
 			timingWait(t, "browser track flowing again", 5*time.Second, func() bool { return viewer.count(id) > before+10 })
+
+			// A rebuilt peer keeps the declaration; the old peer's reader must
+			// not reclaim the slot for its stale track.
+			f.router.DetachPeerKeepChannel("pub")
+			time.Sleep(200 * time.Millisecond)
+			f.router.mu.RLock()
+			_, stale := f.router.slotClaims["pub"][key]
+			f.router.mu.RUnlock()
+			if stale {
+				t.Fatal("detached peer's reader reclaimed the slot")
+			}
 		})
 	}
 }

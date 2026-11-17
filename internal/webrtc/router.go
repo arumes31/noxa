@@ -1182,10 +1182,14 @@ func (r *Router) nativeTrackLoop(publisherID string, pc *PeerConnectionWrapper, 
 // reuses it with replaceTrack, and Pion reports a reused receiver only once.
 // After its reader ends, the track waits for the publisher's next slot
 // declaration and resumes only while explicitly declared (so an undeclared
-// track cannot take a default slot later), until pc closes.
+// track cannot take a default slot later), until pc closes or is replaced.
 func (r *Router) browserTrackLoop(clientID string, pc *PeerConnectionWrapper, remote *webrtc.TrackRemote, extID uint8) {
 	for first := true; ; first = false {
 		r.mu.Lock()
+		if r.pubPeers[clientID] != pc { // detached or rebuilt: the new peer reads
+			r.mu.Unlock()
+			return
+		}
 		if r.trackWake == nil {
 			r.trackWake = make(map[string]chan struct{})
 		}
