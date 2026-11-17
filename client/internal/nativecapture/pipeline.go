@@ -142,10 +142,15 @@ func freeSlot(next, size int, inFlight []flight, now time.Time) int {
 	return -1
 }
 
-// Window is one capturable top-level window.
+// Window is one capturable top-level window (noXa's own are never listed).
 type Window struct {
 	Handle uint64 `json:"handle,string"`
 	Title  string `json:"title"`
+	// Exe is the owning process's executable file name (e.g. "game.exe").
+	Exe string `json:"exe"`
+	// Fullscreen: the window covers its whole monitor (a running game, a
+	// fullscreen video); the picker lists these first.
+	Fullscreen bool `json:"fullscreen"`
 }
 
 // Monitor is one display, in EnumDisplayMonitors order.

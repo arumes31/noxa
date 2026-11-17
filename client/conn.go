@@ -124,6 +124,7 @@ type connManager struct {
 	supportsNativeMediaPeer bool
 	nativeShare             *nativeShare
 	nativeKeyring           *framecrypt.Encryptor
+	nativeAudioKeyring      *framecrypt.Encryptor
 	detachedNative          []*nativeShare // detached with their connection, closed by finishDetach
 	// ratchetWake: the server's olm_pending doorbell wakes the drain loop.
 	ratchetWake        chan struct{}
@@ -835,7 +836,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.supportsHandover = slices.Contains(resp.Capabilities, netproto.CapabilityHandover)
 	m.iceServers = resp.ICEServers
 	m.supportsNativeMediaPeer = slices.Contains(resp.Capabilities, netproto.CapabilityNativeMediaPeer)
-	m.nativeKeyring = nil
+	m.nativeKeyring, m.nativeAudioKeyring = nil, nil
 	// A native share never outlives its connection's keys.
 	staleNative := m.nativeShare
 	m.nativeShare = nil

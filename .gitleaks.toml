@@ -40,4 +40,4 @@ paths = ['^mobile/unit/fixtures/interop\.json$']
 # protect nothing.
 [[rules.allowlists]]
 description = "Frame cipher test vectors"
-paths = ['^internal/framecrypt/testdata/livekit-h264-vectors\.json$']
+paths = ['^internal/framecrypt/testdata/livekit-(h264|opus)-vectors\.json$']

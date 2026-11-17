@@ -2,6 +2,8 @@
 
 package nativecapture
 
+import "time"
+
 // Session is unavailable off Windows.
 type Session struct{}
 
@@ -29,3 +31,6 @@ func ForegroundWindow() uint64 { return 0 }
 
 // WindowState reports no window off Windows.
 func WindowState(uint64) (bool, bool) { return false, false }
+
+// Thumbnails renders nothing off Windows.
+func Thumbnails([]Source, int, int, time.Duration) map[Source][]byte { return nil }

@@ -181,7 +181,9 @@ browser peer, unchanged). It may carry only declared `screen` and
 `screenaudio` tracks, needs the screen-share permission and, on encrypted
 servers, the same `media_e2ee` declaration; its media is treated exactly as
 the session's own screen share (same slots, publications, viewers and checks)
-and keyframe requests go back to it. The newest declaration of a slot on
+and keyframe requests go back to it. Its `screenaudio` track is Opus with the
+same frame encryption as browser share audio (one clear TOC byte) and RTP
+timestamps on the video's capture clock, so receivers can synchronize them. The newest declaration of a slot on
 either peer takes the slot over. It closes with the browser peer, on a channel
 leave or move, when screen sharing is revoked, and on an offer with
 `"peer": "native"` and an empty `sdp`.

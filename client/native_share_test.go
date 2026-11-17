@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -178,5 +179,125 @@ func TestNativeReconnectBudgetResetsOnConnect(t *testing.T) {
 	n.peerConnected(current)
 	if n.reconnects != 0 {
 		t.Fatalf("reconnects = %d after connect, want 0", n.reconnects)
+	}
+}
+
+// TestNativeShareAudioFallbacks: application audio falls back to system
+// audio (with a notice), a missing libopus leaves the share silent without
+// trying other sources, and "none" never opens a loopback.
+func TestNativeShareAudioFallbacks(t *testing.T) {
+	appFails := errors.New("activation failed")
+	cases := []struct {
+		name, audio string
+		window      uint64
+		fail        map[nativecapture.AudioMode]error
+		wantTried   []nativecapture.AudioMode
+		wantNotice  string
+		wantSession bool
+	}{
+		{"none", "none", 7, nil, nil, "", false},
+		{"application", "application", 7, nil, []nativecapture.AudioMode{"application"}, "", true},
+		{"application falls back to system", "application", 7, map[nativecapture.AudioMode]error{"application": appFails},
+			[]nativecapture.AudioMode{"application", "system"}, "system", true},
+		{"monitor application means system", "application", 0, nil, []nativecapture.AudioMode{"system"}, "system", true},
+		{"system", "system", 0, nil, []nativecapture.AudioMode{"system"}, "", true},
+		{"old windows", "application", 7, map[nativecapture.AudioMode]error{"application": nativecapture.ErrAudioUnsupported, "system": nativecapture.ErrAudioUnsupported},
+			[]nativecapture.AudioMode{"application", "system"}, "none", false},
+		{"no libopus", "application", 7, map[nativecapture.AudioMode]error{"application": nativecapture.ErrOpusUnavailable},
+			[]nativecapture.AudioMode{"application"}, "none", false},
+	}
+	defer func(orig func(nativecapture.AudioMode, uint64, func(nativecapture.AudioPacket)) (*nativecapture.AudioSession, error)) {
+		startNativeAudio = orig
+	}(startNativeAudio)
+	for _, c := range cases {
+		var tried []nativecapture.AudioMode
+		startNativeAudio = func(mode nativecapture.AudioMode, window uint64, _ func(nativecapture.AudioPacket)) (*nativecapture.AudioSession, error) {
+			tried = append(tried, mode)
+			if window != c.window {
+				t.Errorf("%s: window %d", c.name, window)
+			}
+			if err := c.fail[mode]; err != nil {
+				return nil, err
+			}
+			return &nativecapture.AudioSession{Mode: mode}, nil
+		}
+		n := &nativeShare{req: NativeShareRequest{Audio: c.audio, Source: nativecapture.Source{Window: c.window}}}
+		notice := n.openAudio()
+		if notice != c.wantNotice || (n.audio != nil) != c.wantSession || len(tried) != len(c.wantTried) {
+			t.Errorf("%s: notice %q session %v tried %v", c.name, notice, n.audio != nil, tried)
+			continue
+		}
+		for i := range tried {
+			if tried[i] != c.wantTried[i] {
+				t.Errorf("%s: tried %v, want %v", c.name, tried, c.wantTried)
+			}
+		}
+	}
+}
+
+func TestNativeKeySlotsAreSeparate(t *testing.T) {
+	cm := &connManager{}
+	if cm.nativeKeys("") != cm.nativeKeys("screen") || cm.nativeKeys("screen") == cm.nativeKeys("screenaudio") {
+		t.Fatal("screen and screenaudio keys must be separate keyrings")
+	}
+	app := &App{activeID: "a", tabs: map[string]*tabState{"a": {cm: cm}}}
+	app.cmStore(cm)
+	material := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	if err := app.NativeScreenKeyForTab("a", NativeKeyOp{Slot: "screenaudio", Op: "key", Epoch: 1, Key: material}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.NativeScreenKeyForTab("a", NativeKeyOp{Slot: "screenaudio", Op: "activate", Epoch: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cm.nativeKeys("screenaudio").Active(); !ok {
+		t.Fatal("screenaudio key not active")
+	}
+	if _, ok := cm.nativeKeys("screen").Active(); ok {
+		t.Fatal("a screenaudio key reached the screen keyring")
+	}
+	if app.NativeScreenKeyForTab("a", NativeKeyOp{Slot: "mic", Op: "forget"}) == nil {
+		t.Fatal("a mic key operation was accepted")
+	}
+}
+
+func TestNativePickerSource(t *testing.T) {
+	for value, want := range map[string]nativecapture.Source{"m:0": {Monitor: 0}, "m:2": {Monitor: 2}, "w:123456": {Window: 123456}} {
+		if got, ok := nativePickerSource(value); !ok || got != want {
+			t.Errorf("%q -> %+v %v", value, got, ok)
+		}
+	}
+	for _, value := range []string{"", "m", "w:0", "w:-1", "m:x", "x:1", "m:99", "w:1:2"} {
+		if _, ok := nativePickerSource(value); ok {
+			t.Errorf("%q accepted", value)
+		}
+	}
+	if got := (&App{}).NativeScreenThumbnails([]string{"bogus"}); len(got) != 0 {
+		t.Fatalf("thumbnails for an invalid value: %v", got)
+	}
+}
+
+// TestNativeShareAudioFailureEndsAudio: a capture that broke for good drops
+// the share's audio and tells the webview (notice "none"); a failure of an
+// already replaced session does nothing.
+func TestNativeShareAudioFailureEndsAudio(t *testing.T) {
+	events := &eventRecorder{}
+	session := &nativecapture.AudioSession{Mode: nativecapture.AudioSystem}
+	n := &nativeShare{cm: &connManager{sink: events, tabID: "a"}, stop: make(chan struct{}), audio: session, req: NativeShareRequest{ID: "s1"}}
+	failed := make(chan error, 1)
+	failed <- errors.New("audio service restarted")
+	n.watchAudio(session, failed)
+	if n.audio != nil {
+		t.Fatal("a failed audio session stayed installed")
+	}
+	payload := events.waitFor(t, nativeShareEvent, nil, time.Second, "audio notice")
+	if !strings.Contains(payload, "audio") || !strings.Contains(payload, "none") {
+		t.Fatalf("audio notice payload %s", payload)
+	}
+	other := &nativecapture.AudioSession{}
+	n.audio = other
+	failed <- errors.New("stale")
+	n.watchAudio(session, failed)
+	if n.audio != other {
+		t.Fatal("a stale failure removed the current audio session")
 	}
 }

@@ -120,3 +120,76 @@ func TestNativeCaptureStreamsToReceiver(t *testing.T) {
 		}
 	}
 }
+
+// TestNativeAudioStreamsToReceiver captures a test tone with WASAPI process
+// loopback, encodes it with the bundled libopus, encrypts and sends it on
+// the native peer's screenaudio track; the in-process receiver authenticates,
+// decrypts and decodes it back to the tone. NOXA_NATIVE_CAPTURE=1 enables it.
+func TestNativeAudioStreamsToReceiver(t *testing.T) {
+	if os.Getenv("NOXA_NATIVE_CAPTURE") == "" {
+		t.Skip("set NOXA_NATIVE_CAPTURE=1 on an interactive Windows desktop with audio output")
+	}
+	requireOpus(t)
+	requireLoopback(t)
+	cmd := playTone(t, writeToneWAV(t, 30))
+	time.Sleep(1500 * time.Millisecond)
+	server := sendertest.NewReceiver(t)
+	material := make([]byte, 32)
+	_, _ = rand.Read(material)
+	video, audio := framecrypt.NewEncryptor(), framecrypt.NewEncryptor()
+	if err := audio.SetKey(1, 2, material); err != nil {
+		t.Fatal(err)
+	}
+	if err := audio.Activate(1); err != nil {
+		t.Fatal(err)
+	}
+	sender, err := nativesender.New(nativesender.Config{Signaling: server, Keys: video, AudioKeys: audio, SettingEngine: sendertest.LoopbackSettings()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sender.Close() }()
+	server.SetSender(sender)
+	deadline := time.Now().Add(10 * time.Second)
+	for sender.ConnectionState() != webrtc.PeerConnectionStateConnected {
+		if time.Now().After(deadline) {
+			t.Fatal("native peer did not connect")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	s, err := startLoopback(AudioApplication, uint32(cmd.Process.Pid), processLoopbackInclude, func(p AudioPacket) { // #nosec G115
+		if err := sender.WriteAudio(p.Data, p.Captured); err != nil {
+			t.Errorf("WriteAudio: %v", err)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(3 * time.Second)
+	s.Close()
+	dec := newTestDecoder(t)
+	var energy float64
+	received := 0
+	var lastTS uint32
+	for done := false; !done; {
+		select {
+		case p := <-server.Audio:
+			pcm := dec.decode(t, sendertest.DecryptOpus(t, material, p.Payload))
+			if received > 0 && p.Timestamp-lastTS != AudioFrame {
+				t.Logf("timestamp step %d at packet %d", p.Timestamp-lastTS, received)
+			}
+			lastTS = p.Timestamp
+			if received >= 25 {
+				energy += rms(pcm)
+			}
+			received++
+		case <-time.After(time.Second):
+			done = true
+		}
+	}
+	st := sender.Stats()
+	avg := energy / float64(max(received-25, 1))
+	t.Logf("audio received=%d sent=%d dropped=%d decoded rms %.0f", received, st.AudioFramesSent, st.AudioFramesDropped, avg)
+	if received < 100 || uint64(received) != st.AudioFramesSent || avg < 1000 {
+		t.Fatalf("received %d of %d packets, rms %.0f", received, st.AudioFramesSent, avg)
+	}
+}

@@ -234,3 +234,50 @@ func TestCanonicalH264(t *testing.T) {
 		t.Error("keyframe without SPS/PPS accepted")
 	}
 }
+
+// TestLiveKitOpusVectors: Opus packets encrypt byte-identically to the
+// pinned LiveKit worker's audio path (1 clear TOC byte, no escaping).
+func TestLiveKitOpusVectors(t *testing.T) {
+	raw, err := os.ReadFile("testdata/livekit-opus-vectors.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file struct{ Vectors []vector }
+	if err := json.Unmarshal(raw, &file); err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Vectors) < 5 {
+		t.Fatalf("only %d vectors", len(file.Vectors))
+	}
+	var enc *Encryptor
+	for i, v := range file.Vectors {
+		if v.Index == 0 {
+			enc = NewEncryptor()
+			seed := v.Seed
+			enc.seed = func() uint64 { return seed }
+			if err := enc.SetKey(1, v.Kid, unhex(t, v.Key)); err != nil {
+				t.Fatal(err)
+			}
+			if err := enc.Activate(1); err != nil {
+				t.Fatal(err)
+			}
+		}
+		plain, want := unhex(t, v.Plaintext), unhex(t, v.Ciphertext)
+		got, err := enc.EncryptOpus(plain, v.SSRC, v.TS)
+		if err != nil {
+			t.Fatalf("vector %d: %v", i, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("vector %d differs from LiveKit\n got %x\nwant %x", i, got, want)
+		}
+		if len(got) != len(plain)+30 {
+			t.Fatalf("vector %d: %d bytes, want plaintext + 30", i, len(got))
+		}
+	}
+	if _, err := NewEncryptor().EncryptOpus([]byte{0xfc, 1}, 1, 1); !errors.Is(err, ErrNoKey) {
+		t.Fatalf("keyless Opus encrypt: %v", err)
+	}
+	if _, err := enc.EncryptOpus(nil, 1, 1); err == nil {
+		t.Fatal("empty Opus packet encrypted")
+	}
+}

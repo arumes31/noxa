@@ -20,16 +20,11 @@ var (
 	procPeekMessageW     = user32.NewProc("PeekMessageW")
 	procTranslateMessage = user32.NewProc("TranslateMessage")
 	procDispatchMessageW = user32.NewProc("DispatchMessageW")
-	procGetDC            = user32.NewProc("GetDC")
-	procReleaseDC        = user32.NewProc("ReleaseDC")
 	procSetForeground    = user32.NewProc("SetForegroundWindow")
 	procShowWindow       = user32.NewProc("ShowWindow")
 	procSetWindowPos     = user32.NewProc("SetWindowPos")
-	gdi32                = windows.NewLazySystemDLL("gdi32.dll")
 	procPatBlt           = gdi32.NewProc("PatBlt")
 	procCreateSolidBrush = gdi32.NewProc("CreateSolidBrush")
-	procSelectObject     = gdi32.NewProc("SelectObject")
-	procDeleteObject     = gdi32.NewProc("DeleteObject")
 	testWndProc          = windows.NewCallback(func(hwnd, msg, w, l uintptr) uintptr {
 		r, _, _ := procDefWindowProcW.Call(hwnd, msg, w, l)
 		return r

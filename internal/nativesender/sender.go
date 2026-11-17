@@ -32,7 +32,26 @@ const (
 	clockRate  = 90000
 	h264FMTP   = "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"
 	minBitrate = 300_000
+	// AudioTrackID is declared as slot "screenaudio" when the share has audio.
+	AudioTrackID = "noxa-native-screenaudio"
+	audioRate    = 48000
+	audioFrame   = 960 // 20 ms
+	opusFMTP     = "minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1"
 )
+
+// nextAudioTimestamp keeps 20 ms packets contiguous (last + 960) while
+// following the capture clock: when capture resumes after a gap (nothing
+// played, a pause) it jumps to the capture-time anchor, never backwards.
+func nextAudioTimestamp(sentAny bool, last, anchor uint32) uint32 {
+	if !sentAny {
+		return anchor
+	}
+	expected := last + audioFrame
+	if ahead := int32(anchor - expected); ahead > 2*audioFrame { // #nosec G115 -- serial number arithmetic
+		return anchor
+	}
+	return expected
+}
 
 // Signaling carries the native peer's SDP and ICE over the control
 // connection. The server never offers to the native peer: the client offers,
@@ -47,6 +66,8 @@ type Config struct {
 	ICEServers []webrtc.ICEServer
 	Signaling  Signaling
 	Keys       *framecrypt.Encryptor
+	// AudioKeys ("self|screenaudio") adds the Opus screenaudio track; nil = video only.
+	AudioKeys *framecrypt.Encryptor
 	// OnKeyframeRequest runs on PLI/FIR from the SFU (and after a key gap).
 	OnKeyframeRequest func()
 	// OnEstimate receives the send-side bandwidth estimate (bits/s).
@@ -61,6 +82,8 @@ type Config struct {
 type Stats struct {
 	SSRC                                     uint32
 	FramesSent, KeyframesSent, FramesDropped uint64
+	AudioSSRC                                uint32
+	AudioFramesSent, AudioFramesDropped      uint64
 	PacketsSent, BytesSent                   uint64
 	RetransmittedPackets, RetransmittedBytes uint64
 	RTT                                      time.Duration // 0 = unknown
@@ -92,6 +115,12 @@ type Sender struct {
 	rtxSSRC     uint32
 	estimatorCh chan cc.BandwidthEstimator
 	closed      bool
+
+	audioTrack   *webrtc.TrackLocalStaticRTP
+	audioSSRC    uint32
+	audioSeq     uint16
+	audioLastTS  uint32
+	audioSentAny bool
 }
 
 // New creates the peer, adds the screen track and negotiates it.
@@ -113,6 +142,10 @@ func New(cfg Config) (*Sender, error) {
 	}
 	if err := media.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{
 		MimeType: webrtc.MimeTypeRTX, ClockRate: clockRate, SDPFmtpLine: "apt=102"}, PayloadType: 103}, webrtc.RTPCodecTypeVideo); err != nil {
+		return nil, err
+	}
+	opus := webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: audioRate, Channels: 2, SDPFmtpLine: opusFMTP}
+	if err := media.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: opus, PayloadType: 111}, webrtc.RTPCodecTypeAudio); err != nil {
 		return nil, err
 	}
 	registry := &interceptor.Registry{}
@@ -176,6 +209,29 @@ func New(cfg Config) (*Sender, error) {
 	}
 	s.stats.SSRC = s.ssrc
 	go s.readRTCP()
+	if cfg.AudioKeys != nil {
+		// Same stream as the video: one capture clock for both RTP timelines.
+		if s.audioTrack, err = webrtc.NewTrackLocalStaticRTP(opus, AudioTrackID, streamID); err != nil {
+			_ = pc.Close()
+			return nil, err
+		}
+		audio, err := pc.AddTransceiverFromTrack(s.audioTrack, webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionSendonly})
+		if err != nil {
+			_ = pc.Close()
+			return nil, err
+		}
+		if encodings := audio.Sender().GetParameters().Encodings; len(encodings) > 0 {
+			s.audioSSRC = uint32(encodings[0].SSRC)
+		}
+		s.stats.AudioSSRC = s.audioSSRC
+		go func() { // drain RTCP so the interceptors keep running
+			for {
+				if _, _, err := audio.Sender().ReadRTCP(); err != nil {
+					return
+				}
+			}
+		}()
+	}
 	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
 		if c == nil {
 			return
@@ -205,8 +261,12 @@ func (s *Sender) negotiate() error {
 	if err := s.pc.SetLocalDescription(offer); err != nil {
 		return err
 	}
+	tracks := []netproto.TrackSlot{{TrackID: TrackID, Slot: "screen"}}
+	if s.audioTrack != nil {
+		tracks = append(tracks, netproto.TrackSlot{TrackID: AudioTrackID, Slot: "screenaudio"})
+	}
 	answer, err := s.cfg.Signaling.Offer(netproto.WebRTCOffer{SDP: offer.SDP, Peer: netproto.PeerNative,
-		Tracks: []netproto.TrackSlot{{TrackID: TrackID, Slot: "screen"}}, MediaE2EE: netproto.MediaE2EEVersion})
+		Tracks: tracks, MediaE2EE: netproto.MediaE2EEVersion})
 	if err != nil {
 		return err
 	}
@@ -309,6 +369,33 @@ func (s *Sender) WriteFrame(au []byte, keyframe bool, seqHeader []byte, captured
 	if key {
 		s.stats.KeyframesSent++
 	}
+	return nil
+}
+
+// WriteAudio encrypts and sends one 20 ms Opus packet whose first sample was
+// captured at captured (the video capture clock). A packet without an active
+// "self|screenaudio" key is dropped (ErrDropped), never sent in the clear.
+func (s *Sender) WriteAudio(packet []byte, captured time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return errors.New("native sender closed")
+	}
+	if s.audioTrack == nil {
+		return errors.New("native sender has no audio track")
+	}
+	ts := nextAudioTimestamp(s.audioSentAny, s.audioLastTS, uint32(int64(captured.Sub(s.start).Seconds()*audioRate))) // #nosec G115 -- RTP timestamps wrap
+	encrypted, err := s.cfg.AudioKeys.EncryptOpus(packet, s.audioSSRC, ts)
+	if err != nil {
+		s.stats.AudioFramesDropped++
+		return errors.Join(ErrDropped, err)
+	}
+	s.audioSeq++
+	if err := s.audioTrack.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, Marker: !s.audioSentAny, SequenceNumber: s.audioSeq, Timestamp: ts, SSRC: s.audioSSRC}, Payload: encrypted}); err != nil {
+		return err
+	}
+	s.audioLastTS, s.audioSentAny = ts, true
+	s.stats.AudioFramesSent++
 	return nil
 }
 
