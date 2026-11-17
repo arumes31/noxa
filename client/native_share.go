@@ -361,6 +361,15 @@ func (n *nativeShare) start() error {
 	if notice != "" {
 		n.emit("audio", notice)
 	}
+	// Watch only after the startup notice, so a later "none" stays final.
+	n.mu.Lock()
+	session := n.audio
+	n.mu.Unlock()
+	if session != nil {
+		if failed := session.Failed(); failed != nil {
+			go n.watchAudio(session, failed)
+		}
+	}
 	return nil
 }
 
@@ -385,9 +394,6 @@ func (n *nativeShare) openAudio() string {
 		n.mu.Lock()
 		n.audio = session
 		n.mu.Unlock()
-		if failed := session.Failed(); failed != nil {
-			go n.watchAudio(session, failed)
-		}
 		if mode != nativecapture.AudioMode(n.req.Audio) {
 			return string(mode)
 		}
