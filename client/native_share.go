@@ -852,14 +852,15 @@ func nativePickerSource(value string) (nativecapture.Source, bool) {
 	if !ok {
 		return nativecapture.Source{}, false
 	}
-	n, err := strconv.ParseUint(id, 10, 64)
-	switch {
-	case err != nil:
-		return nativecapture.Source{}, false
-	case kind == "m" && n < 64:
-		return nativecapture.Source{Monitor: int(n)}, true
-	case kind == "w" && n != 0:
-		return nativecapture.Source{Window: n}, true
+	switch kind {
+	case "m":
+		if i, err := strconv.Atoi(id); err == nil && i >= 0 && i < 64 && id[0] != '+' {
+			return nativecapture.Source{Monitor: i}, true
+		}
+	case "w":
+		if n, err := strconv.ParseUint(id, 10, 64); err == nil && n != 0 {
+			return nativecapture.Source{Window: n}, true
+		}
 	}
 	return nativecapture.Source{}, false
 }
