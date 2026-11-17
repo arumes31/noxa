@@ -215,17 +215,17 @@ func (a *App) StartNativeScreenShareForTab(tabID string, req NativeShareRequest)
 	if st := cm.nativeStatus(); !st.Available {
 		return fmt.Errorf("native screen capture unavailable: %s", st.Reason)
 	}
+	n := &nativeShare{cm: cm, keys: cm.nativeKeys(), req: req, stop: make(chan struct{})}
+	// One swap: concurrent starts cannot both install a share. Installed before
+	// the offer, so its answer's candidates route here; old.close() leaves a
+	// newer cm.nativeShare alone and sends its empty offer before n's offer.
 	cm.mu.Lock()
 	old := cm.nativeShare
-	cm.nativeShare = nil
+	cm.nativeShare = n
 	cm.mu.Unlock()
 	if old != nil {
 		old.close()
 	}
-	n := &nativeShare{cm: cm, keys: cm.nativeKeys(), req: req, stop: make(chan struct{})}
-	cm.mu.Lock()
-	cm.nativeShare = n // Before the offer: its answer's candidates route here.
-	cm.mu.Unlock()
 	if err := n.start(); err != nil {
 		n.close()
 		return err
@@ -409,7 +409,10 @@ func (n *nativeShare) openSender() error {
 		return err
 	}
 	sender.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		if state == webrtc.PeerConnectionStateFailed || state == webrtc.PeerConnectionStateClosed {
+		switch state {
+		case webrtc.PeerConnectionStateConnected:
+			n.peerConnected(sender)
+		case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateClosed:
 			n.peerLost(sender)
 		}
 	})
@@ -480,6 +483,16 @@ func (n *nativeShare) onEstimate(bps int) {
 	if level.MaxWidth != before.MaxWidth || level.MaxHeight != before.MaxHeight {
 		session.SetMaxSize(level.MaxWidth, level.MaxHeight)
 	}
+}
+
+// peerConnected restarts the reconnect budget: only consecutive failures
+// count towards nativeReconnectLimit.
+func (n *nativeShare) peerConnected(s *nativesender.Sender) {
+	n.mu.Lock()
+	if n.sender == s {
+		n.reconnects = 0
+	}
+	n.mu.Unlock()
 }
 
 // peerLost re-offers while the share is active: the server closes the native

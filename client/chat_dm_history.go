@@ -241,35 +241,7 @@ func (s dmHistoryStore) save(l dmLog) error {
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, ".dm-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer func() {
-		_ = tmp.Close()
-		if tmpName != "" {
-			_ = os.Remove(tmpName)
-		}
-	}()
-	if _, err := tmp.Write(blob); err != nil {
-		return err
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return err
-	}
-	tmpName = ""
-	return nil
+	return writePrivateFileAtomic(path, blob)
 }
 
 // DMHistoryLoad returns a peer's stored conversation, oldest first, decrypted.

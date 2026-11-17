@@ -214,3 +214,53 @@ func TestLadderControlsMidStream(t *testing.T) {
 	default:
 	}
 }
+
+// TestWindowResizeRebuildsAfterItSettles resizes a window that then stops
+// repainting: the debounced rebuild must still reach the new size.
+func TestWindowResizeRebuildsAfterItSettles(t *testing.T) {
+	if os.Getenv("NOXA_NATIVE_CAPTURE") == "" {
+		t.Skip("set NOXA_NATIVE_CAPTURE=1 on an interactive Windows desktop")
+	}
+	win := startAnimatedWindow(t, false, 640, 480)
+	defer win.close()
+	var mu sync.Mutex
+	var keysAfter int
+	var resized bool
+	s, err := Start(Config{Source: Source{Window: uint64(win.hwnd.Load())}, MaxWidth: 1920, MaxHeight: 1080, FPS: 30, Bitrate: 2_000_000,
+		AllowSoftware: os.Getenv("NOXA_NATIVE_SOFTWARE") != ""}, func(f Frame) {
+		mu.Lock()
+		if resized && f.Keyframe {
+			keysAfter++
+		}
+		mu.Unlock()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	time.Sleep(500 * time.Millisecond)
+	before := s.Stats()
+	win.still.Store(true)
+	mu.Lock()
+	resized = true
+	mu.Unlock()
+	_, _, _ = procSetWindowPos.Call(win.hwnd.Load(), 0, 0, 0, 900, 600, 0x16) // SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE
+	time.Sleep(150 * time.Millisecond)
+	if st := s.Stats(); st.Width != before.Width || st.Height != before.Height {
+		t.Fatalf("rebuilt before the size settled: %dx%d -> %dx%d", before.Width, before.Height, st.Width, st.Height)
+	}
+	time.Sleep(time.Second)
+	after := s.Stats()
+	mu.Lock()
+	keys := keysAfter
+	mu.Unlock()
+	t.Logf("%dx%d -> %dx%d, keyframes after resize=%d", before.Width, before.Height, after.Width, after.Height, keys)
+	if after.Width <= before.Width || after.Height <= before.Height || keys == 0 {
+		t.Fatalf("static window not rebuilt at its new size: %+v keyframes=%d", after, keys)
+	}
+	select {
+	case err := <-s.Fatal():
+		t.Fatal(err)
+	default:
+	}
+}

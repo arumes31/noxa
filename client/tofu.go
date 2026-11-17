@@ -183,8 +183,8 @@ func (k *knownServers) trust(addr, fp string) error {
 	if err != nil {
 		return err
 	}
-	if err := writeKnownServers(k.path, raw); err != nil {
-		return err
+	if err := writePrivateFileAtomic(k.path, raw); err != nil {
+		return fmt.Errorf("write TLS trust store: %w", err)
 	}
 	k.Servers = next
 	return nil
@@ -215,45 +215,6 @@ func normalizeServerAddr(addr string) (string, error) {
 		}
 	}
 	return net.JoinHostPort(host, strconv.Itoa(port)), nil
-}
-
-func writeKnownServers(path string, raw []byte) (retErr error) {
-	dir := filepath.Dir(path)
-	// #nosec G703 -- dir is derived from the application-owned trust-store path.
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("create TLS trust-store directory: %w", err)
-	}
-	// #nosec G304 -- dir is derived from the application-owned trust-store path.
-	tmp, err := os.CreateTemp(dir, ".known_servers-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temporary TLS trust store: %w", err)
-	}
-	tmpPath := tmp.Name()
-	keep := false
-	defer func() {
-		_ = tmp.Close()
-		if !keep {
-			_ = os.Remove(tmpPath)
-		}
-	}()
-	if err := tmp.Chmod(0o600); err != nil {
-		return fmt.Errorf("secure temporary TLS trust store: %w", err)
-	}
-	if _, err := tmp.Write(raw); err != nil {
-		return fmt.Errorf("write temporary TLS trust store: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		return fmt.Errorf("sync temporary TLS trust store: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temporary TLS trust store: %w", err)
-	}
-	// #nosec G703 -- both paths are within the application-owned trust-store directory.
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("replace TLS trust store: %w", err)
-	}
-	keep = true
-	return nil
 }
 
 func normalizeFingerprint(fingerprint string) (string, error) {

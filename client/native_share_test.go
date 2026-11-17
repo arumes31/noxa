@@ -167,3 +167,16 @@ func TestDetachClosesEveryDetachedNativeShare(t *testing.T) {
 		t.Fatal("a detached native share was not closed")
 	}
 }
+
+func TestNativeReconnectBudgetResetsOnConnect(t *testing.T) {
+	current, stale := &nativesender.Sender{}, &nativesender.Sender{}
+	n := &nativeShare{stop: make(chan struct{}), sender: current, reconnects: 2}
+	n.peerConnected(stale)
+	if n.reconnects != 2 {
+		t.Fatal("a replaced peer reset the reconnect budget")
+	}
+	n.peerConnected(current)
+	if n.reconnects != 0 {
+		t.Fatalf("reconnects = %d after connect, want 0", n.reconnects)
+	}
+}
