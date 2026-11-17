@@ -797,7 +797,9 @@ func run() (retErr error) {
 	}
 	// One limiter owns every expensive credential verification in this process.
 	// Transports use separate source scopes while sharing this KDF gate.
-	loginLimiter := auth.NewLoginFailureLimiter(auth.LoginFailureLimiterConfig{})
+	// Three 64 MiB Argon2id verifications (plus two channel-password ones)
+	// fit a 1 GiB container next to the media server.
+	loginLimiter := auth.NewLoginFailureLimiter(auth.LoginFailureLimiterConfig{MaxConcurrentKDF: 3})
 	authSvc.SetLoginLimiter(loginLimiter)
 	for _, warning := range server.AssetStorageSecurityWarnings() {
 		logger.Error("ASSET STORAGE SECURITY LIMITATION", zap.String("warning", warning))

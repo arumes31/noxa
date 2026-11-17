@@ -90,25 +90,15 @@ func TestIdentityChallengeCredentialPaths(t *testing.T) {
 				}
 				return VerifyChallenge(key, gotChallenge, gotSignature)
 			}
-			for _, wrapper := range []bool{false, true} {
-				calls = 0
-				var key string
-				var ok bool
-				var err error
-				if wrapper {
-					ok, err = svc.AuthenticateChallenge(t.Context(), uid, tc.challenge, tc.signature)
-				} else {
-					key, ok, err = svc.AuthenticateIdentityChallenge(t.Context(), uid, tc.challenge, tc.signature)
-				}
-				if (tc.missing && !errors.Is(err, ErrUserNotFound)) || (!tc.missing && err != nil) {
-					t.Fatalf("error=%v missing=%v", err, tc.missing)
-				}
-				if ok != tc.wantOK || calls != 1 {
-					t.Fatalf("ok=%v want=%v verification calls=%d", ok, tc.wantOK, calls)
-				}
-				if !wrapper && ((ok && key != public) || (!ok && key != "")) {
-					t.Fatalf("incorrect returned identity %q", key)
-				}
+			key, ok, err := svc.AuthenticateIdentityChallenge(t.Context(), uid, tc.challenge, tc.signature)
+			if (tc.missing && !errors.Is(err, ErrUserNotFound)) || (!tc.missing && err != nil) {
+				t.Fatalf("error=%v missing=%v", err, tc.missing)
+			}
+			if ok != tc.wantOK || calls != 1 {
+				t.Fatalf("ok=%v want=%v verification calls=%d", ok, tc.wantOK, calls)
+			}
+			if (ok && key != public) || (!ok && key != "") {
+				t.Fatalf("incorrect returned identity %q", key)
 			}
 		})
 	}

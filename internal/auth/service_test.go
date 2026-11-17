@@ -176,17 +176,17 @@ func TestRegisterAuthenticatePasswordRoundTrip(t *testing.T) {
 		t.Fatal("expected non-empty unique id")
 	}
 
-	ok, err := svc.AuthenticatePassword(context.Background(), uid, pw)
+	ok, err := authenticatePassword(svc, context.Background(), uid, pw)
 	if err != nil {
-		t.Fatalf("AuthenticatePassword(correct): %v", err)
+		t.Fatalf("AuthenticateIdentifier(correct): %v", err)
 	}
 	if !ok {
 		t.Fatal("expected successful authentication with correct password")
 	}
 
-	ok, err = svc.AuthenticatePassword(context.Background(), uid, "wrong-password")
+	ok, err = authenticatePassword(svc, context.Background(), uid, "wrong-password")
 	if err != nil {
-		t.Fatalf("AuthenticatePassword(wrong): %v", err)
+		t.Fatalf("AuthenticateIdentifier(wrong): %v", err)
 	}
 	if ok {
 		t.Fatal("expected failed authentication with wrong password")
@@ -240,9 +240,9 @@ func TestRegisterAuthenticateChallengeRoundTrip(t *testing.T) {
 		t.Fatalf("SignChallenge: %v", err)
 	}
 
-	ok, err := svc.AuthenticateChallenge(context.Background(), newUID, challenge, sig)
+	_, ok, err := svc.AuthenticateIdentityChallenge(context.Background(), newUID, challenge, sig)
 	if err != nil {
-		t.Fatalf("AuthenticateChallenge(valid): %v", err)
+		t.Fatalf("AuthenticateIdentityChallenge(valid): %v", err)
 	}
 	if !ok {
 		t.Fatal("expected successful challenge authentication")
@@ -252,9 +252,9 @@ func TestRegisterAuthenticateChallengeRoundTrip(t *testing.T) {
 	tampered := make([]byte, len(sig))
 	copy(tampered, sig)
 	tampered[0] ^= 0xff
-	ok, err = svc.AuthenticateChallenge(context.Background(), newUID, challenge, tampered)
+	_, ok, err = svc.AuthenticateIdentityChallenge(context.Background(), newUID, challenge, tampered)
 	if err != nil {
-		t.Fatalf("AuthenticateChallenge(tampered): %v", err)
+		t.Fatalf("AuthenticateIdentityChallenge(tampered): %v", err)
 	}
 	if ok {
 		t.Fatal("expected failed authentication with tampered signature")
@@ -373,6 +373,12 @@ func TestLookupActiveBan(t *testing.T) {
 	})
 }
 
+// authenticatePassword reports whether a password authenticates uid.
+func authenticatePassword(svc *AuthService, ctx context.Context, uid, password string) (bool, error) {
+	u, err := svc.AuthenticateIdentifier(ctx, uid, password)
+	return u != nil, err
+}
+
 // TestAuthenticatePasswordVerifiesEveryCall is the BUG-1 regression test:
 // after a successful password auth, a wrong password for the same unique ID
 // must FAIL immediately (a positive-result cache keyed only by unique ID
@@ -389,27 +395,27 @@ func TestAuthenticatePasswordVerifiesEveryCall(t *testing.T) {
 	}
 
 	// First: correct password succeeds.
-	ok, err := svc.AuthenticatePassword(ctx, uid, pw)
+	ok, err := authenticatePassword(svc, ctx, uid, pw)
 	if err != nil {
-		t.Fatalf("AuthenticatePassword(correct): %v", err)
+		t.Fatalf("AuthenticateIdentifier(correct): %v", err)
 	}
 	if !ok {
 		t.Fatal("correct password rejected")
 	}
 
 	// Immediately after: a wrong password must fail (no positive caching).
-	ok, err = svc.AuthenticatePassword(ctx, uid, "wrong-password")
+	ok, err = authenticatePassword(svc, ctx, uid, "wrong-password")
 	if err != nil {
-		t.Fatalf("AuthenticatePassword(wrong): %v", err)
+		t.Fatalf("AuthenticateIdentifier(wrong): %v", err)
 	}
 	if ok {
 		t.Fatal("wrong password accepted immediately after a successful login")
 	}
 
 	// And the correct password still works afterwards.
-	ok, err = svc.AuthenticatePassword(ctx, uid, pw)
+	ok, err = authenticatePassword(svc, ctx, uid, pw)
 	if err != nil {
-		t.Fatalf("AuthenticatePassword(correct again): %v", err)
+		t.Fatalf("AuthenticateIdentifier(correct again): %v", err)
 	}
 	if !ok {
 		t.Fatal("correct password rejected on second attempt")
@@ -432,6 +438,24 @@ func TestLookupActiveBanEquivalentIPs(t *testing.T) {
 	}
 	if sameBanIP("", "") || sameBanIP("bad", "192.0.2.78") || sameBanIP("fe80::1%a", "fe80::1%b") {
 		t.Fatal("unrelated address matched")
+	}
+}
+
+func TestSameBanIPMatchesStoredPrefix(t *testing.T) {
+	for _, tc := range []struct {
+		stored, peer string
+		want         bool
+	}{
+		{"2001:db8:1:2::/64", "2001:db8:1:2:ffff::9", true},
+		{"2001:db8:1:2::/64", "2001:db8:1:3::9", false},
+		{"2001:db8:1:2::/64", "192.0.2.1", false},
+		{"2001:db8:1:2::/64", "not-an-ip", false},
+		{"192.0.2.78", "192.0.2.78", true}, // exact admin/guest IPv4 bans
+		{"192.0.2.78", "192.0.2.79", false},
+	} {
+		if got := sameBanIP(tc.stored, tc.peer); got != tc.want {
+			t.Errorf("sameBanIP(%q, %q) = %v, want %v", tc.stored, tc.peer, got, tc.want)
+		}
 	}
 }
 

@@ -74,6 +74,7 @@ func TestGuestBanIPSkipsMembersAndPossibleProxies(t *testing.T) {
 		want   string
 	}{
 		{guestOn("::ffff:203.0.113.7", false), "203.0.113.7"},
+		{guestOn("2001:db8:1:2::7", false), "2001:db8:1:2::/64"},
 		{guestOn("127.0.0.1", false), "127.0.0.1"},
 		{guestOn("203.0.113.7", true), "203.0.113.7"},
 		{guestOn("127.0.0.1", true), ""},

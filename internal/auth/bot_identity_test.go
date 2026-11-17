@@ -28,7 +28,7 @@ func TestBotIdentitySurvivesEveryAccountLookup(t *testing.T) {
 		lookup func() (*User, error)
 	}{
 		{"unique_id", func() (*User, error) { return svc.LookupUser(t.Context(), uid) }},
-		{"nickname", func() (*User, error) { return svc.AuthenticateNickname(t.Context(), nick, "bot-password") }},
+		{"nickname", func() (*User, error) { return svc.AuthenticateIdentifier(t.Context(), nick, "bot-password") }},
 		{"identifier", func() (*User, error) { return svc.AuthenticateIdentifier(t.Context(), uid, "bot-password") }},
 		{"public_key", func() (*User, error) { return svc.LookupUserByPublicKey(t.Context(), key) }},
 	} {

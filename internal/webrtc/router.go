@@ -1297,16 +1297,6 @@ func (r *Router) EnsurePublishers(clientID string) {
 	}
 }
 
-// LeaveAll removes clientID from every channel. Intended for disconnects.
-func (r *Router) LeaveAll(clientID string) {
-	r.mu.Lock()
-	channelID, ok := r.clientChan[clientID]
-	r.mu.Unlock()
-	if ok {
-		r.LeaveChannel(channelID, clientID)
-	}
-}
-
 // SetWhisper replaces the whisper configuration for clientID. Activating a
 // whisper creates publisher tracks towards targets that have no track for
 // this publisher yet (typically targets outside the client's channel) and
@@ -1439,13 +1429,6 @@ func (r *Router) AddOutput(clientID string, w TrackWriter) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.outputs[clientID] = w
-}
-
-// RemoveOutput removes the audio output track for clientID, if any.
-func (r *Router) RemoveOutput(clientID string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.outputs, clientID)
 }
 
 // AttachPeer prepares a peer connection for routing: it registers the

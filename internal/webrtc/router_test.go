@@ -115,7 +115,7 @@ func TestRouterJoinLeave(t *testing.T) {
 	}
 
 	r.LeaveChannel(1, "a") // no-op: a already moved
-	r.LeaveAll("b")
+	r.LeaveChannel(1, "b")
 	stats = r.Stats()
 	if stats.Clients != 1 {
 		t.Fatalf("clients = %d, want 1 (only a)", stats.Clients)

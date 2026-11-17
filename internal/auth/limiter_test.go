@@ -163,6 +163,32 @@ func TestLoginFailureLimiterPrincipalLockoutsCannotFillTheTable(t *testing.T) {
 	}
 }
 
+func TestLoginFailureLimiterReportsBusySlotsApartFromLockout(t *testing.T) {
+	limiter := NewLoginFailureLimiter(LoginFailureLimiterConfig{MaxFailures: 1, MaxConcurrentKDF: 2})
+	locked := LoginFailureScope("tcp", "locked")
+	attempt, ok, busy := limiter.ReservePassword(locked)
+	if !ok || busy {
+		t.Fatalf("free limiter: ok=%v busy=%v", ok, busy)
+	}
+	attempt.Fail()
+	held, ok := limiter.Reserve(LoginFailureScope("tcp", "a"))
+	if !ok {
+		t.Fatal("reservation rejected")
+	}
+	defer held.Cancel()
+	other, ok := limiter.Reserve(LoginFailureScope("tcp", "b"))
+	if !ok {
+		t.Fatal("reservation rejected")
+	}
+	defer other.Cancel()
+	if _, ok, busy := limiter.ReservePassword(LoginFailureScope("tcp", "c")); ok || !busy {
+		t.Fatalf("saturated KDF slots: ok=%v busy=%v, want refused as busy", ok, busy)
+	}
+	if _, ok, busy := limiter.ReservePassword(locked); ok || busy {
+		t.Fatalf("locked scope: ok=%v busy=%v, want refused as lockout", ok, busy)
+	}
+}
+
 func TestLoginFailureLimiterSignatureReservationTakesNoKDFSlot(t *testing.T) {
 	limiter := NewLoginFailureLimiter(LoginFailureLimiterConfig{MaxFailures: 1, MaxConcurrentKDF: 1})
 	held, ok := limiter.Reserve(LoginFailureScope("tcp", "busy"))

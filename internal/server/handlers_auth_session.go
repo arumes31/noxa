@@ -121,7 +121,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		parked = resumed.parked
 		id.uniqueID = parked.uniqueID
 	}
-	var rejection, keptToken string
+	var rejection, rejectionLabel, keptToken string
 	err := s.withRolePolicy(ctx, func(ctx context.Context) error {
 		s.roleMetadataMu.Lock()
 		defer s.roleMetadataMu.Unlock()
@@ -137,6 +137,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 			return err
 		}
 		if rejection != "" {
+			rejectionLabel = "banned"
 			return authorization.ErrRoleForbidden
 		}
 		rejection, err = s.sessionDeviceRejection(ctx, client, id.uniqueID)
@@ -144,6 +145,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 			return err
 		}
 		if rejection != "" {
+			rejectionLabel = "device_revoked"
 			return authorization.ErrRoleForbidden
 		}
 		// A role manager may have enrolled this proven identity while its
@@ -159,7 +161,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		}
 		if id.guest && client.isWebTransport() {
 			if allowed, _ := s.WebGuestLoginPolicy(); !allowed {
-				rejection = "guest login is disabled on this server"
+				rejection, rejectionLabel = "guest login is disabled on this server", "guest_disabled"
 				return authorization.ErrRoleForbidden
 			}
 		}
@@ -168,11 +170,11 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		// Sessions are counted by client ID, live or reserved for a handover
 		// commit, each once; a commit does not count the session it takes over.
 		if max := s.EffectiveMaxClients(ctx); max > 0 && s.sessionCount(client.handoverTarget()) >= max {
-			rejection = "server is full"
+			rejection, rejectionLabel = "server is full", "full"
 			return authorization.ErrRoleForbidden
 		}
 		if id.userID == 0 && s.guestSessionsFrom(client) >= s.guestSessionsPerAddress() {
-			rejection = "too many guest sessions from your address"
+			rejection, rejectionLabel = "too many guest sessions from your address", "guest_limit"
 			return authorization.ErrRoleForbidden
 		}
 		if id.customName || client.isWebTransport() {
@@ -209,7 +211,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		if rejection == "" {
 			rejection = "internal error"
 		} else {
-			s.metricsSink().IncAuthFailure("tcp", "banned")
+			s.metricsSink().IncAuthFailure("tcp", rejectionLabel)
 		}
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: rejection})
 	}

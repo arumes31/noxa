@@ -203,7 +203,10 @@ func (s *TCPServer) handleJoinChannel(ctx context.Context, client *Client, f *ne
 	if passwordHash != "" && !s.verifiedSecrets.known(passwordHash, msg.Password) {
 		source := auth.LoginFailureScope("channel:"+auth.SourceAddressKey(remoteIP(client.Conn)), "")
 		principal := auth.LoginFailureScope("channel", fmt.Sprintf("%s:%d", client.UniqueID, msg.ChannelID))
-		attempt, allowed := s.channelPasswordLimiter.Reserve(source, principal)
+		attempt, allowed, busy := s.channelPasswordLimiter.ReservePassword(source, principal)
+		if busy {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, netproto.ReasonServerBusy)
+		}
 		if !allowed {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "too many channel password attempts, try again later")
 		}

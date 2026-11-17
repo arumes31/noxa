@@ -99,6 +99,10 @@ func SolvePow(ctx context.Context, ch PowChallenge) (uint64, bool) {
 // raised: it cannot solve the challenge.
 const ReasonIngressShieldUpdate = "the server is under heavy load; update noXa to connect"
 
+// ReasonServerBusy refuses a password login while every password-check slot
+// is in use. Unlike a lockout, it clears within moments.
+const ReasonServerBusy = "server is busy, try again in a moment"
+
 // ReasonIngressShieldBusy refuses device linking while the shield is raised.
 const ReasonIngressShieldBusy = "the server is under heavy load; try again in a few minutes"
 

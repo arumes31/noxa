@@ -120,35 +120,10 @@ func validateRegistrationPassword(password string) error {
 	return nil
 }
 
-// AuthenticatePassword looks up the user by unique ID and verifies the supplied
-// password against the stored Argon2id hash. It returns true on success and
-// false (with a nil error) on a password mismatch. Every call verifies.
-func (a *AuthService) AuthenticatePassword(ctx context.Context, uniqueID, password string) (bool, error) {
-	var hash string
-	// Accounts without a password (enrolled identities) have a NULL hash; they
-	// take the same dummy-verification path as a wrong password.
-	const q = `SELECT COALESCE(password_hash, '') FROM users WHERE unique_id = $1`
-	err := a.store.DB().QueryRowContext(ctx, q, uniqueID).Scan(&hash)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			a.verifyUnknownPassword(password)
-			return false, ErrUserNotFound
-		}
-		return false, fmt.Errorf("querying user password hash: %w", err)
-	}
-	return a.verifyCredential(password, hash), nil
-}
-
-// AuthenticateChallenge looks up the user's public key by unique ID and
-// verifies the Ed25519 signature over the challenge. It returns true on success
-// and false (with a nil error) on a signature mismatch. Every call verifies.
-func (a *AuthService) AuthenticateChallenge(ctx context.Context, uniqueID string, challenge, signature []byte) (bool, error) {
-	_, ok, err := a.AuthenticateIdentityChallenge(ctx, uniqueID, challenge, signature)
-	return ok, err
-}
-
-// AuthenticateIdentityChallenge returns the exact identity used for verification,
-// avoiding a second lookup that could race an account key replacement.
+// AuthenticateIdentityChallenge verifies the Ed25519 signature over the
+// challenge with the user's proven public key and returns that exact key,
+// avoiding a second lookup that could race an account key replacement. A
+// signature mismatch returns false with a nil error. Every call verifies.
 func (a *AuthService) AuthenticateIdentityChallenge(ctx context.Context, uniqueID string, challenge, signature []byte) (string, bool, error) {
 	var pubPEM string
 	// An unproven binding never authenticates; it verifies like an unbound key.
@@ -260,33 +235,6 @@ func (a *AuthService) LookupActiveBan(ctx context.Context, uniqueID, ip string) 
 		return &b, nil
 	}
 	return nil, rows.Err()
-}
-
-// AuthenticateNickname looks up a user by nickname and verifies the supplied
-// password against the stored Argon2id hash. It returns the user on success,
-// (nil, nil) on a password mismatch, and ErrUserNotFound when no user has
-// the nickname. Migration 023 enforces nickname uniqueness for registered
-// accounts, so this query has one unambiguous result.
-func (a *AuthService) AuthenticateNickname(ctx context.Context, nickname, password string) (*User, error) {
-	var (
-		u    User
-		hash string
-	)
-	const q = `SELECT id, unique_id, COALESCE(nickname, ''), is_bot, COALESCE(password_hash, '')
-	          FROM users WHERE nickname = $1`
-	err := a.store.DB().QueryRowContext(ctx, q, nickname).
-		Scan(&u.ID, &u.UniqueID, &u.Nickname, &u.IsBot, &hash)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			a.verifyUnknownPassword(password)
-			return nil, ErrUserNotFound
-		}
-		return nil, fmt.Errorf("querying user by nickname: %w", err)
-	}
-	if !a.verifyCredential(password, hash) {
-		return nil, nil
-	}
-	return &u, nil
 }
 
 // AuthenticateIdentifier authenticates either a unique ID or nickname with

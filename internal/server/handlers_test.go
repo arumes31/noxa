@@ -67,14 +67,6 @@ type fakeAuth struct {
 	e2eByUID map[string]string
 }
 
-func (f *fakeAuth) AuthenticatePassword(_ context.Context, uniqueID, password string) (bool, error) {
-	pw, ok := f.passwords[uniqueID]
-	if !ok {
-		return false, auth.ErrUserNotFound
-	}
-	return pw == password, nil
-}
-
 func (f *fakeAuth) AuthenticateIdentifier(_ context.Context, identifier, password string) (*auth.User, error) {
 	if f.identifierAuth != nil {
 		return f.identifierAuth(identifier, password)
@@ -95,37 +87,22 @@ func (f *fakeAuth) AuthenticateIdentifier(_ context.Context, identifier, passwor
 	return u, nil
 }
 
-func (f *fakeAuth) AuthenticateIdentityChallenge(ctx context.Context, uid string, challenge, signature []byte) (string, bool, error) {
-	ok, err := f.AuthenticateChallenge(ctx, uid, challenge, signature)
-	if !ok || err != nil {
-		return "", ok, err
-	}
-	return f.pubkeys[uid], true, nil
-}
-
-func (f *fakeAuth) AuthenticateChallenge(_ context.Context, uniqueID string, challenge, signature []byte) (bool, error) {
+func (f *fakeAuth) AuthenticateIdentityChallenge(_ context.Context, uid string, challenge, signature []byte) (string, bool, error) {
 	if f.challengeAuth != nil {
-		return f.challengeAuth(uniqueID, challenge, signature)
+		ok, err := f.challengeAuth(uid, challenge, signature)
+		if !ok || err != nil {
+			return "", ok, err
+		}
+		return f.pubkeys[uid], true, nil
 	}
-	pub, ok := f.pubkeys[uniqueID]
+	pub, ok := f.pubkeys[uid]
 	if !ok {
-		return false, auth.ErrUserNotFound
+		return "", false, auth.ErrUserNotFound
 	}
 	if err := auth.VerifyLoginChallenge(pub, challenge, signature); err != nil { // mirrors AuthService
-		return false, nil
+		return "", false, nil
 	}
-	return true, nil
-}
-
-func (f *fakeAuth) AuthenticateNickname(_ context.Context, nickname, password string) (*auth.User, error) {
-	u, ok := f.nicknames[nickname]
-	if !ok {
-		return nil, auth.ErrUserNotFound
-	}
-	if f.passwords[u.UniqueID] != password {
-		return nil, nil
-	}
-	return u, nil
+	return pub, true, nil
 }
 
 func (f *fakeAuth) LookupUser(_ context.Context, uniqueID string) (*auth.User, error) {

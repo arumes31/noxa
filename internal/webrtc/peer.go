@@ -42,9 +42,12 @@ type PeerConnectionWrapper struct {
 	// applies them to the underlying PeerConnection.
 	remoteCandidates chan webrtc.ICECandidateInit
 
-	// localSDP / remoteSDP carry the negotiated session descriptions.
-	localSDP  chan webrtc.SessionDescription
-	remoteSDP chan webrtc.SessionDescription
+	// candidateMu guards the distinct remote candidates seen since the last
+	// remote ICE credentials (see AddICECandidate).
+	candidateMu     sync.Mutex
+	seenCandidates  map[string]struct{}
+	remoteUfrag     string
+	candidateWarned bool
 
 	onTrack             func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver)
 	videoStartupMu      sync.Mutex
@@ -90,8 +93,6 @@ func newPeerConnectionWrapper(pc *webrtc.PeerConnection, clientID string, logger
 		logger:           logger,
 		localCandidates:  make(chan webrtc.ICECandidateInit, 64),
 		remoteCandidates: make(chan webrtc.ICECandidateInit, 64),
-		localSDP:         make(chan webrtc.SessionDescription, 4),
-		remoteSDP:        make(chan webrtc.SessionDescription, 4),
 		closed:           make(chan struct{}),
 		videoStartupWake: make(chan struct{}, 1),
 	}
@@ -121,18 +122,6 @@ func (w *PeerConnectionWrapper) LocalCandidates() <-chan webrtc.ICECandidateInit
 	return w.localCandidates
 }
 
-// LocalSDP returns a channel that receives the local session description once
-// it has been set (after HandleOffer or a future CreateOffer).
-func (w *PeerConnectionWrapper) LocalSDP() <-chan webrtc.SessionDescription {
-	return w.localSDP
-}
-
-// RemoteSDP returns a channel that receives the remote session description once
-// it has been set via HandleOffer or HandleAnswer.
-func (w *PeerConnectionWrapper) RemoteSDP() <-chan webrtc.SessionDescription {
-	return w.remoteSDP
-}
-
 // maxRemoteSSRCAttributes bounds the a=ssrc and a=ssrc-group lines a client
 // description may carry. Pion collects receiver SSRCs with repeated linear
 // scans, so a 1 MiB signaling frame of SSRC attributes would cost quadratic
@@ -147,6 +136,15 @@ const maxRemoteSSRCAttributes = 512
 // and the data channel; the rest is headroom for recycled sections.
 const maxRemoteMediaSections = 384
 
+// maxRemoteICECandidates bounds the distinct remote candidates of one peer
+// (per set of remote ICE credentials), trickled or in a description. Pion
+// pairs every remote candidate with every local one using linear checklist
+// scans; a browser sends a handful (connectionbenchmark uses the same cap).
+const maxRemoteICECandidates = 64
+
+// ErrTooManyICECandidates rejects remote candidates over that budget.
+var ErrTooManyICECandidates = errors.New("webrtc: too many remote ICE candidates")
+
 // ErrSDPTooManySSRCs rejects a remote description over the SSRC budget.
 var ErrSDPTooManySSRCs = errors.New("webrtc: session description declares too many SSRCs")
 
@@ -154,7 +152,7 @@ var ErrSDPTooManySSRCs = errors.New("webrtc: session description declares too ma
 var ErrSDPTooManyMediaSections = errors.New("webrtc: session description declares too many media sections")
 
 func checkRemoteSDPBudget(sdp string) error {
-	ssrcs, sections := 0, 0
+	ssrcs, sections, candidates := 0, 0, 0
 	// Pion's lexer also ends a line at a bare CR, so split at CR and LF alike.
 	for _, line := range strings.FieldsFunc(sdp, func(r rune) bool { return r == '\r' || r == '\n' }) {
 		line = strings.TrimSpace(line)
@@ -168,8 +166,34 @@ func checkRemoteSDPBudget(sdp string) error {
 				return ErrSDPTooManyMediaSections
 			}
 		}
+		if strings.HasPrefix(line, "a=candidate:") {
+			if candidates++; candidates > maxRemoteICECandidates {
+				return ErrTooManyICECandidates
+			}
+		}
 	}
 	return nil
+}
+
+// remoteICEUfrag returns the first a=ice-ufrag value of a description.
+func remoteICEUfrag(sdp string) string {
+	for _, line := range strings.FieldsFunc(sdp, func(r rune) bool { return r == '\r' || r == '\n' }) {
+		if ufrag, ok := strings.CutPrefix(strings.TrimSpace(line), "a=ice-ufrag:"); ok {
+			return ufrag
+		}
+	}
+	return ""
+}
+
+// resetCandidatesOnRestart starts a fresh candidate budget when a remote
+// offer carries new ICE credentials (an ICE restart reuses this peer).
+func (w *PeerConnectionWrapper) resetCandidatesOnRestart(sdp string) {
+	ufrag := remoteICEUfrag(sdp)
+	w.candidateMu.Lock()
+	defer w.candidateMu.Unlock()
+	if ufrag != w.remoteUfrag {
+		w.remoteUfrag, w.seenCandidates, w.candidateWarned = ufrag, nil, false
+	}
 }
 
 // HandleOffer sets the remote description (an offer SDP), creates an answer,
@@ -200,10 +224,7 @@ func (w *PeerConnectionWrapper) handleOffer(sdp string, bounds *VideoBounds) (re
 	if err := w.pc.SetRemoteDescription(offer); err != nil {
 		return "", fmt.Errorf("setting remote offer: %w", err)
 	}
-	select {
-	case w.remoteSDP <- offer:
-	default:
-	}
+	w.resetCandidatesOnRestart(sdp)
 
 	if bounds != nil {
 		w.videoBounds = *bounds
@@ -217,11 +238,6 @@ func (w *PeerConnectionWrapper) handleOffer(sdp string, bounds *VideoBounds) (re
 	}
 	if err := w.pc.SetLocalDescription(answer); err != nil {
 		return "", fmt.Errorf("setting local answer: %w", err)
-	}
-
-	select {
-	case w.localSDP <- answer:
-	default:
 	}
 
 	w.logger.Info("webrtc offer handled",
@@ -244,10 +260,6 @@ func (w *PeerConnectionWrapper) HandleAnswer(sdp string) error {
 	answer := webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: sdp}
 	if err := w.pc.SetRemoteDescription(answer); err != nil {
 		return fmt.Errorf("setting remote answer: %w", err)
-	}
-	select {
-	case w.remoteSDP <- answer:
-	default:
 	}
 	w.logger.Info("webrtc answer handled",
 		zap.String("client_id", w.clientID),
@@ -289,10 +301,6 @@ func (w *PeerConnectionWrapper) CreateOffer() (string, error) {
 	if err := w.pc.SetLocalDescription(offer); err != nil {
 		return "", fmt.Errorf("setting local offer: %w", err)
 	}
-	select {
-	case w.localSDP <- wireOffer:
-	default:
-	}
 	w.logger.Info("webrtc renegotiation offer created",
 		zap.String("client_id", w.clientID),
 		zap.Int("sdp_len", len(wireOffer.SDP)),
@@ -309,8 +317,30 @@ func (w *PeerConnectionWrapper) SignalingState() webrtc.SignalingState {
 
 // AddICECandidate enqueues a remote ICE candidate for application to the
 // underlying PeerConnection. Candidates are applied asynchronously by an
-// internal goroutine to avoid blocking the signaling path.
+// internal goroutine to avoid blocking the signaling path. Repeated
+// candidates are free; new ones beyond maxRemoteICECandidates are rejected.
 func (w *PeerConnectionWrapper) AddICECandidate(candidate webrtc.ICECandidateInit) error {
+	if candidate.Candidate != "" { // "" is end-of-candidates
+		w.candidateMu.Lock()
+		if _, seen := w.seenCandidates[candidate.Candidate]; !seen {
+			if len(w.seenCandidates) >= maxRemoteICECandidates {
+				warn := !w.candidateWarned
+				w.candidateWarned = true
+				w.candidateMu.Unlock()
+				if warn {
+					w.logger.Warn("webrtc remote ice candidate budget exhausted",
+						zap.String("client_id", w.clientID),
+						zap.Int("limit", maxRemoteICECandidates))
+				}
+				return ErrTooManyICECandidates
+			}
+			if w.seenCandidates == nil {
+				w.seenCandidates = make(map[string]struct{})
+			}
+			w.seenCandidates[candidate.Candidate] = struct{}{}
+		}
+		w.candidateMu.Unlock()
+	}
 	select {
 	case w.remoteCandidates <- candidate:
 		return nil
@@ -419,11 +449,9 @@ func (w *PeerConnectionWrapper) OnTrack(fn func(track *webrtc.TrackRemote, recei
 // Close closes the underlying PeerConnection and releases all resources. It is
 // safe to call multiple times.
 //
-// Note: localCandidates, localSDP, and remoteSDP are deliberately NOT closed
-// here. Pion's ICE gatherer and late signaling calls (e.g. a renegotiation
-// answer racing with Close) may send on them concurrently with Close, and
-// sending on a closed channel would race/panic. Consumers should select on
-// Done() instead; sends fall through the non-blocking default once closed.
+// Note: localCandidates is deliberately NOT closed here. Pion's ICE gatherer
+// may send on it concurrently with Close, and sending on a closed channel
+// would race/panic. Consumers should select on Done() instead.
 func (w *PeerConnectionWrapper) Close() error {
 	var err error
 	w.closeOnce.Do(func() {

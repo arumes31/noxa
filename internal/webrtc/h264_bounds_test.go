@@ -209,16 +209,18 @@ func FuzzH264BoundsInspector(f *testing.F) {
 	f.Add([]byte{0x7c, 0x85, 0xb8})
 	f.Add([]byte{0x78, 0, 255, 0x67})
 	f.Fuzz(func(t *testing.T, payload []byte) {
-		v := h264BoundsInspector{bounds: VideoBounds{1280, 720}}
-		now := time.Now()
-		_, _ = v.push(h264TestPacket(1, 1, true, h264TestSTAP(h264TestSPS(640, 360), h264TestPPS, h264TestIDR)), now)
-		for i := 0; i < 3; i++ {
-			unit, _ := v.push(h264TestPacket(uint16(i+2), 2, i == 2, payload), now)
-			if v.bytes > h264AccessUnitBytes || len(v.packets) > h264AccessUnitPackets || len(v.nals) > h264AccessUnitNALs || len(v.fragment) > h264AccessUnitBytes || len(v.sps) > 32 || len(v.pps) > 256 {
-				t.Fatal("unbounded buffering")
-			}
-			if unit != nil && (unit.width < 1 || unit.width > 1280 || unit.height < 1 || unit.height > 720) {
-				t.Fatalf("unbounded dimensions: %+v", unit)
+		for _, encrypted := range []bool{false, true} {
+			v := h264BoundsInspector{encrypted: encrypted, bounds: VideoBounds{1280, 720}}
+			now := time.Now()
+			_, _ = v.push(h264TestPacket(1, 1, true, h264TestSTAP(h264TestSPS(640, 360), h264TestPPS, h264TestIDR)), now)
+			for i := 0; i < 3; i++ {
+				unit, _ := v.push(h264TestPacket(uint16(i+2), 2, i == 2, payload), now)
+				if v.bytes > h264AccessUnitBytes || len(v.packets) > h264AccessUnitPackets || len(v.nals) > h264AccessUnitNALs || len(v.fragment) > h264AccessUnitBytes || len(v.sps) > 32 || len(v.pps) > 256 {
+					t.Fatalf("unbounded buffering (encrypted=%v)", encrypted)
+				}
+				if unit != nil && (unit.width < 1 || unit.width > 1280 || unit.height < 1 || unit.height > 720) {
+					t.Fatalf("unbounded dimensions (encrypted=%v): %+v", encrypted, unit)
+				}
 			}
 		}
 	})

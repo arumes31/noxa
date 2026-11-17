@@ -360,10 +360,10 @@ func (s *TCPServer) pushDirect(client *Client, toUniqueID string) {
 }
 
 // spoolPageSize and spoolDeliveryBudget bound the database and heap work of
-// one delivery pass; anything beyond the budget is delivered on the next pass.
+// one delivery pass; deliverSpooled runs passes until the backlog is drained.
 const (
 	spoolPageSize       = 256
-	spoolDeliveryBudget = 4096
+	spoolDeliveryBudget = 512
 )
 
 // sessionPendingSpool is implemented by spools that can select, in the
@@ -399,11 +399,21 @@ func (s *TCPServer) pendingForSession(ctx context.Context, client *Client, userI
 }
 
 // deliverSpooled sends any spooled offline messages for the user to the
-// client as offline chat events and marks them delivered.
+// client as offline chat events and marks them delivered. They are written
+// straight to the connection, not through its small broadcast queue (a
+// backlog would overflow it and close the client), in passes of at most
+// spoolDeliveryBudget rows until a pass delivers nothing more.
 func (s *TCPServer) deliverSpooled(ctx context.Context, client *Client, userID int64) {
-	if userID <= 0 || s.deps.Spool == nil || s.deps.Broadcast == nil {
+	if userID <= 0 || s.deps.Spool == nil {
 		return
 	}
+	for ctx.Err() == nil && s.deliverSpooledPass(ctx, client, userID) {
+	}
+}
+
+// deliverSpooledPass delivers one pass and reports whether another may find
+// more: a full pass whose rows were all written and marked delivered.
+func (s *TCPServer) deliverSpooledPass(ctx context.Context, client *Client, userID int64) bool {
 	// Concurrent sessions must not both read and deliver the same pending row.
 	// A fixed stripe set bounds memory while retaining single-recipient delivery.
 	lock := &s.spoolDelivery[userID%int64(len(s.spoolDelivery))]
@@ -416,11 +426,13 @@ func (s *TCPServer) deliverSpooled(ctx context.Context, client *Client, userID i
 			zap.String("client_id", client.ID),
 			zap.Error(err),
 		)
-		return
+		return false
 	}
 	if len(msgs) == 0 {
-		return
+		return false
 	}
+	more := len(msgs) >= spoolDeliveryBudget
+	msgs = msgs[:min(len(msgs), spoolDeliveryBudget)] // the fallback PendingMessages is unpaged
 
 	device := client.currentDeviceID()
 	ids := make([]int64, 0, len(msgs))
@@ -465,21 +477,31 @@ func (s *TCPServer) deliverSpooled(ctx context.Context, client *Client, userID i
 		if err != nil {
 			continue
 		}
-		if err := s.deps.Broadcast.BroadcastToClient(client.ID, payload); err != nil {
+		// Only rows written to the connection are marked; the rest stay
+		// pending for the next login or key publish.
+		writeCtx, cancel := context.WithTimeout(ctx, roleWriteCeiling)
+		err = s.writeFrameInContext(writeCtx, client, &netproto.Frame{Type: uint16(netproto.MsgEvent), Payload: payload})
+		cancel()
+		if err != nil {
 			s.logger.Warn("delivering spooled message failed",
 				zap.String("client_id", client.ID),
 				zap.Int64("message_id", m.ID),
 				zap.Error(err),
 			)
-			continue
+			more = false
+			break
 		}
 		ids = append(ids, m.ID)
 	}
-
+	if len(ids) == 0 {
+		return false
+	}
 	if err := s.deps.Spool.MarkMessagesDelivered(ctx, ids); err != nil {
 		s.logger.Warn("marking spooled messages delivered failed",
 			zap.String("client_id", client.ID),
 			zap.Error(err),
 		)
+		return false
 	}
+	return more
 }
