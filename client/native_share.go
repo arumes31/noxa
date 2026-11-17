@@ -215,17 +215,17 @@ func (a *App) StartNativeScreenShareForTab(tabID string, req NativeShareRequest)
 	if st := cm.nativeStatus(); !st.Available {
 		return fmt.Errorf("native screen capture unavailable: %s", st.Reason)
 	}
+	n := &nativeShare{cm: cm, keys: cm.nativeKeys(), req: req, stop: make(chan struct{})}
+	// One swap: concurrent starts cannot both install a share. Installed before
+	// the offer, so its answer's candidates route here; old.close() leaves a
+	// newer cm.nativeShare alone and sends its empty offer before n's offer.
 	cm.mu.Lock()
 	old := cm.nativeShare
-	cm.nativeShare = nil
+	cm.nativeShare = n
 	cm.mu.Unlock()
 	if old != nil {
 		old.close()
 	}
-	n := &nativeShare{cm: cm, keys: cm.nativeKeys(), req: req, stop: make(chan struct{})}
-	cm.mu.Lock()
-	cm.nativeShare = n // Before the offer: its answer's candidates route here.
-	cm.mu.Unlock()
 	if err := n.start(); err != nil {
 		n.close()
 		return err
@@ -402,14 +402,17 @@ func (n *nativeShare) openSender() error {
 	initial := n.level.Bitrate
 	maxBitrate := n.ladder.Top.Bitrate
 	n.mu.Unlock()
-	sender, err := nativesender.New(nativesender.Config{ICEServers: ice, Signaling: nativeSignaling{n.cm}, Keys: n.keys,
+	sender, err := nativesender.New(nativesender.Config{ICEServers: ice, Signaling: nativeSignaling{n.cm, n}, Keys: n.keys,
 		InitialBitrate: initial, MaxBitrate: maxBitrate,
 		OnKeyframeRequest: n.requestKeyframe, OnEstimate: n.onEstimate})
 	if err != nil {
 		return err
 	}
 	sender.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		if state == webrtc.PeerConnectionStateFailed || state == webrtc.PeerConnectionStateClosed {
+		switch state {
+		case webrtc.PeerConnectionStateConnected:
+			n.peerConnected(sender)
+		case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateClosed:
 			n.peerLost(sender)
 		}
 	})
@@ -480,6 +483,16 @@ func (n *nativeShare) onEstimate(bps int) {
 	if level.MaxWidth != before.MaxWidth || level.MaxHeight != before.MaxHeight {
 		session.SetMaxSize(level.MaxWidth, level.MaxHeight)
 	}
+}
+
+// peerConnected restarts the reconnect budget: only consecutive failures
+// count towards nativeReconnectLimit.
+func (n *nativeShare) peerConnected(s *nativesender.Sender) {
+	n.mu.Lock()
+	if n.sender == s {
+		n.reconnects = 0
+	}
+	n.mu.Unlock()
 }
 
 // peerLost re-offers while the share is active: the server closes the native
@@ -694,9 +707,22 @@ func nativeDiagnosticsRow(prev, cur nativeSample, cs nativecapture.Stats, ss nat
 
 // nativeSignaling sends the native peer's offer and candidates on the
 // control connection; the reply must be the native answer.
-type nativeSignaling struct{ cm *connManager }
+type nativeSignaling struct {
+	cm    *connManager
+	share *nativeShare
+}
+
+// current: a replaced share must not signal over its replacement.
+func (s nativeSignaling) current() bool {
+	s.cm.mu.Lock()
+	defer s.cm.mu.Unlock()
+	return s.cm.nativeShare == s.share
+}
 
 func (s nativeSignaling) Offer(offer netproto.WebRTCOffer) (netproto.WebRTCAnswer, error) {
+	if !s.current() {
+		return netproto.WebRTCAnswer{}, errNativeShareStopped
+	}
 	f, err := s.cm.request(netproto.MsgWebRTCOffer, netproto.MsgWebRTCAnswer, offer, 10*time.Second)
 	if err != nil {
 		return netproto.WebRTCAnswer{}, err
@@ -712,6 +738,9 @@ func (s nativeSignaling) Offer(offer netproto.WebRTCOffer) (netproto.WebRTCAnswe
 }
 
 func (s nativeSignaling) Candidate(c netproto.ICECandidate) error {
+	if !s.current() {
+		return errNativeShareStopped
+	}
 	return s.cm.write(netproto.MsgICECandidate, c)
 }
 

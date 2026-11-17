@@ -171,10 +171,11 @@ func (c *converter) outputView(nv12 uintptr) (uintptr, error) {
 	return view, nil
 }
 
-// blt scales c.input into the NV12 texture behind outView. Output sizes keep
-// the source aspect ratio (outputSize), so no letterbox is needed.
-func (c *converter) blt(outView uintptr) error {
-	src := rect{0, 0, int32(c.inW), int32(c.inH)}
+// blt scales the top-left w x h of c.input into the NV12 texture behind
+// outView. Output sizes keep the source aspect ratio (outputSize), so no
+// letterbox is needed.
+func (c *converter) blt(outView uintptr, w, h uint32) error {
+	src := rect{0, 0, int32(w), int32(h)}
 	full := rect{0, 0, int32(c.outW), int32(c.outH)}
 	vcall(c.d.videoCtx, 13, c.vp, 1, uintptr(unsafe.Pointer(&full)))    // #nosec G103 -- SetOutputTargetRect
 	vcall(c.d.videoCtx, 30, c.vp, 0, 1, uintptr(unsafe.Pointer(&src)))  // #nosec G103 -- SetStreamSourceRect

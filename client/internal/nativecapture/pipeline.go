@@ -17,14 +17,10 @@ var (
 	ErrSourceClosed = errors.New("captured window closed")
 )
 
-// Region is a crop rectangle in source pixels.
-type Region struct{ X, Y, Width, Height int }
-
 // Source selects what to capture: a window when Window != 0, else a monitor.
 type Source struct {
-	Monitor int     `json:"monitor"`
-	Window  uint64  `json:"window,string"`
-	Region  *Region `json:"region,omitempty"`
+	Monitor int    `json:"monitor"`
+	Window  uint64 `json:"window,string"`
 }
 
 // Config is the requested capture/encode profile.
@@ -79,10 +75,55 @@ func outputSize(w, h, maxW, maxH int) (int, int) {
 	return max(ow, 2), max(oh, 2)
 }
 
-// flight is one submitted picture: its capture time and NV12 ring slot.
+// flight is one submitted picture: its capture time, NV12 ring slot and
+// encoder sample time (100 ns units).
 type flight struct {
 	at   time.Time
 	slot int
+	ts   int64
+}
+
+// takeFlight pops the in-flight pictures up to an output's sample time (an
+// async MFT may drop inputs) and returns the matching capture time. Without a
+// usable sample time it falls back to the oldest picture.
+func takeFlight(inFlight []flight, ts int64, hasTS bool) ([]flight, time.Time, bool) {
+	n := 0
+	if hasTS {
+		for n < len(inFlight) && inFlight[n].ts <= ts {
+			n++
+		}
+	}
+	if n == 0 {
+		if len(inFlight) == 0 {
+			return inFlight, time.Time{}, false
+		}
+		n = 1
+	}
+	return inFlight[n:], inFlight[n-1].at, true
+}
+
+// resizeSettle is how long a new source size must hold before the sized
+// pipeline is rebuilt: dragging a window edge changes it every frame.
+const resizeSettle = 300 * time.Millisecond
+
+// sizeHold debounces source size changes.
+type sizeHold struct {
+	w, h  int
+	since time.Time
+}
+
+// rebuild reports whether a curW x curH pipeline is due a rebuild for a w x h
+// source at now: only once that size has held for resizeSettle.
+func (s *sizeHold) rebuild(curW, curH, w, h int, now time.Time) bool {
+	if w == curW && h == curH {
+		*s = sizeHold{}
+		return false
+	}
+	if w != s.w || h != s.h {
+		*s = sizeHold{w: w, h: h, since: now}
+		return false
+	}
+	return now.Sub(s.since) >= resizeSettle
 }
 
 // flightHold bounds how long a submitted slot counts as held: an encoder

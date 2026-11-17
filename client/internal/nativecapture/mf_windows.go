@@ -67,7 +67,6 @@ const (
 	msgBeginStreaming     = 0x10000000
 	msgStartOfStream      = 0x10000003
 	msgEndOfStream        = 0x10000002
-	msgDrain              = 0x1
 	meTransformNeedInput  = 601
 	meTransformHaveOutput = 602
 	eNotImpl              = 0x80004001
@@ -99,7 +98,6 @@ type encoder struct {
 	mft, codec, events, manager uintptr
 	info                        encoderInfo
 	async                       bool
-	width, height, fps          uint32
 	bitrate                     int
 	seqHeader                   []byte
 }
@@ -197,7 +195,7 @@ func newEncoder(d *device, width, height, fps, bitrate uint32, allowSoftware boo
 }
 
 func openEncoder(d *device, activate uintptr, info encoderInfo, width, height, fps, bitrate uint32) (_ *encoder, err error) {
-	e := &encoder{info: info, width: width, height: height, fps: fps, bitrate: int(bitrate)}
+	e := &encoder{info: info, bitrate: int(bitrate)}
 	defer func() {
 		if err != nil {
 			vcall(activate, 34) // ShutdownObject
@@ -345,15 +343,16 @@ type mftOutputBuffer struct {
 	events   uintptr
 }
 
-// collect pulls one encoded access unit; nil when the MFT needs more input.
-func (e *encoder) collect() ([]byte, bool, error) {
+// collect pulls one encoded access unit and its sample time (100 ns; hasTS
+// when the MFT set one); nil when the MFT needs more input.
+func (e *encoder) collect() ([]byte, bool, int64, bool, error) {
 	var info struct{ flags, size, align uint32 }
 	vcall(e.mft, 7, 0, uintptr(unsafe.Pointer(&info))) // #nosec G103 -- GetOutputStreamInfo
 	out := mftOutputBuffer{}
 	if info.flags&(0x100|0x200) == 0 { // Caller must allocate (software MFT).
 		var buf uintptr
 		if r, _, _ := procMFCreateMemoryBuffer.Call(uintptr(max(info.size, 4<<20)), uintptr(unsafe.Pointer(&buf))); hresult(r).failed() { // #nosec G103
-			return nil, false, hresult(r).err("MFCreateMemoryBuffer")
+			return nil, false, 0, false, hresult(r).err("MFCreateMemoryBuffer")
 		}
 		_, _, _ = procMFCreateSample.Call(uintptr(unsafe.Pointer(&out.sample))) // #nosec G103
 		vcall(out.sample, 42, buf)
@@ -364,35 +363,37 @@ func (e *encoder) collect() ([]byte, bool, error) {
 	release(out.events)
 	if uint32(hr) == mfENeedMoreInput {
 		release(out.sample)
-		return nil, false, nil
+		return nil, false, 0, false, nil
 	}
 	if uint32(hr) == mfEStreamChange {
 		release(out.sample)
-		return nil, false, e.renegotiateOutput()
+		return nil, false, 0, false, e.renegotiateOutput()
 	}
 	if hr.failed() {
 		release(out.sample)
-		return nil, false, hr.err("ProcessOutput")
+		return nil, false, 0, false, hr.err("ProcessOutput")
 	}
 	defer release(out.sample)
 	var key uint32
 	vcall(out.sample, 7, uintptr(unsafe.Pointer(&mfSampleCleanPoint)), uintptr(unsafe.Pointer(&key))) // #nosec G103
 	var contiguous uintptr
 	if hr := vcall(out.sample, 41, uintptr(unsafe.Pointer(&contiguous))); hr.failed() { // #nosec G103
-		return nil, false, hr.err("ConvertToContiguousBuffer")
+		return nil, false, 0, false, hr.err("ConvertToContiguousBuffer")
 	}
 	defer release(contiguous)
 	var p *byte
 	var maxLen, cur uint32
 	if hr := vcall(contiguous, 3, uintptr(unsafe.Pointer(&p)), uintptr(unsafe.Pointer(&maxLen)), uintptr(unsafe.Pointer(&cur))); hr.failed() { // #nosec G103
-		return nil, false, hr.err("Lock")
+		return nil, false, 0, false, hr.err("Lock")
 	}
 	data := append([]byte(nil), unsafe.Slice(p, cur)...) // #nosec G103
 	vcall(contiguous, 4)
 	if e.seqHeader == nil {
 		e.seqHeader = e.sequenceHeader()
 	}
-	return data, key != 0, nil
+	var ts int64
+	hasTS := vcall(out.sample, 35, uintptr(unsafe.Pointer(&ts))).succeeded() // #nosec G103 -- IMFSample::GetSampleTime
+	return data, key != 0, ts, hasTS, nil
 }
 
 var procMFCreateMemoryBuffer = mfplat.NewProc("MFCreateMemoryBuffer")

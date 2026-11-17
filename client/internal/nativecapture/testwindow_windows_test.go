@@ -24,6 +24,7 @@ var (
 	procReleaseDC        = user32.NewProc("ReleaseDC")
 	procSetForeground    = user32.NewProc("SetForegroundWindow")
 	procShowWindow       = user32.NewProc("ShowWindow")
+	procSetWindowPos     = user32.NewProc("SetWindowPos")
 	gdi32                = windows.NewLazySystemDLL("gdi32.dll")
 	procPatBlt           = gdi32.NewProc("PatBlt")
 	procCreateSolidBrush = gdi32.NewProc("CreateSolidBrush")
@@ -44,6 +45,7 @@ type animatedWindow struct {
 	stop    chan struct{}
 	stopped chan struct{}
 	paints  atomic.Uint64
+	still   atomic.Bool // stop repainting (messages are still pumped)
 }
 
 func startAnimatedWindow(t *testing.T, fullscreen bool, w, h int) *animatedWindow {
@@ -96,6 +98,10 @@ func startAnimatedWindow(t *testing.T, fullscreen bool, w, h int) *animatedWindo
 				}
 				_, _, _ = procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg))) // #nosec G103
 				_, _, _ = procDispatchMessageW.Call(uintptr(unsafe.Pointer(&msg))) // #nosec G103
+			}
+			if a.still.Load() {
+				time.Sleep(4 * time.Millisecond)
+				continue
 			}
 			dc, _, _ := procGetDC.Call(hwnd)
 			brush, _, _ := procCreateSolidBrush.Call(uintptr(i*7%256) | uintptr(i*3%256)<<8 | uintptr(255-i%256)<<16)

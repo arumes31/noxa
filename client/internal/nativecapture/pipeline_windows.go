@@ -102,11 +102,27 @@ type pipeline struct {
 	inFlight   []flight
 	last       int // ring slot of the newest converted frame, -1 none
 	openedAt   time.Time
+	size       sizeHold
+	// held is a frame (AddRef'd) whose size differs from the pipeline's: a
+	// window that stops repainting after a resize still gets its rebuild.
+	held         uintptr
+	heldW, heldH int
+}
+
+// keep retains tex while its size differs from the pipeline's.
+func (p *pipeline) keep(tex uintptr, w, h int) {
+	release(p.held)
+	p.held = 0
+	if w != p.srcW || h != p.srcH {
+		vcall(tex, 1) // AddRef
+		p.held, p.heldW, p.heldH = tex, w, h
+	}
 }
 
 func (s *Session) run(ready chan<- error) {
+	// Never unlocked: the thread was raised to HIGHEST priority and joined to
+	// the MTA, so it exits with this goroutine instead of returning to Go.
 	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
 	defer close(s.exited)
 	initThread()
 	// Capture is latency critical: keep its thread ahead of the game's.
@@ -125,6 +141,7 @@ func (s *Session) run(ready chan<- error) {
 	defer capt.close()
 	p := &pipeline{d: d, last: -1}
 	defer p.closeSized()
+	defer func() { release(p.held) }()
 	// The first frame fixes the source size; wait for it before reporting ready.
 	deadline := time.Now().Add(3 * time.Second)
 	started := false
@@ -135,7 +152,7 @@ func (s *Session) run(ready chan<- error) {
 				started = true
 				return
 			}
-			s.convert(p, tex)
+			s.convert(p, tex, int(w), int(h))
 			started = true
 			ready <- nil
 		})
@@ -159,21 +176,18 @@ func (s *Session) run(ready chan<- error) {
 }
 
 func (s *Session) ensureSized(p *pipeline, w, h int) error {
-	if r := s.cfg.Source.Region; r != nil {
-		w, h = min(r.Width, w-r.X), min(r.Height, h-r.Y)
-		if w < 2 || h < 2 {
-			return errors.New("capture region outside the source")
-		}
-	}
 	maxW, maxH := s.cfg.MaxWidth, s.cfg.MaxHeight
 	if r := s.resize.Swap(nil); r != nil {
 		s.cfg.MaxWidth, s.cfg.MaxHeight = r[0], r[1]
 		maxW, maxH = r[0], r[1]
 		p.srcW = 0 // force rebuild
 	}
-	if p.enc != nil && p.srcW == w && p.srcH == h {
+	// A forced rebuild (srcW 0) is immediate; a source resize waits until the
+	// size settles, and convert scales the current frame meanwhile.
+	if p.enc != nil && p.srcW != 0 && !p.size.rebuild(p.srcW, p.srcH, w, h, time.Now()) {
 		return nil
 	}
+	p.size = sizeHold{}
 	ow, oh := outputSize(w, h, maxW, maxH)
 	p.closeSized()
 	var err error
@@ -213,8 +227,7 @@ func (s *Session) ensureSized(p *pipeline, w, h int) error {
 // waitEvents forwards async MFT events; it ends when the MFT shuts down.
 func waitEvents(generator uintptr, events chan<- uint32, errs chan<- error) {
 	defer release(generator)
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	runtime.LockOSThread() // Never unlocked: the MTA thread exits with this goroutine.
 	initThread()
 	for {
 		kind, err := waitEvent(generator)
@@ -247,21 +260,19 @@ func (p *pipeline) closeSized() {
 	}
 }
 
-// convert crops the captured texture into the converter input and scales it
-// into the next NV12 ring slot.
-func (s *Session) convert(p *pipeline, tex uintptr) {
-	box := d3dBox{Right: uint32(p.srcW), Bottom: uint32(p.srcH), Back: 1}
-	if r := s.cfg.Source.Region; r != nil {
-		box = d3dBox{Left: uint32(r.X), Top: uint32(r.Y), Right: uint32(r.X + p.srcW), Bottom: uint32(r.Y + p.srcH), Back: 1}
-	}
-	p.d.copyRegion(p.conv.input, tex, box)
+// convert copies the w x h captured texture into the converter input and
+// scales it into the next NV12 ring slot. While a resize settles the frame may
+// differ from the pipeline size: its overlap is copied and scaled to fill.
+func (s *Session) convert(p *pipeline, tex uintptr, w, h int) {
+	w, h = min(w, p.srcW), min(h, p.srcH)
+	p.d.copyRegion(p.conv.input, tex, d3dBox{Right: uint32(w), Bottom: uint32(h), Back: 1})
 	// The encoder may still read a submitted texture: never overwrite one.
 	slot := freeSlot(p.next, nv12Ring, p.inFlight, time.Now())
 	if slot < 0 {
 		return // every slot is held: drop this frame
 	}
 	p.next = (slot + 1) % nv12Ring
-	if err := p.conv.blt(p.ring[slot].view); err != nil {
+	if err := p.conv.blt(p.ring[slot].view, uint32(w), uint32(h)); err != nil {
 		s.fail(err)
 		return
 	}
@@ -274,6 +285,7 @@ func (s *Session) convert(p *pipeline, tex uintptr) {
 func (s *Session) loop(p *pipeline, capt *capturer) {
 	start := time.Now()
 	var lastSubmit time.Time
+	var lastTS int64
 	tick := time.NewTicker(time.Millisecond)
 	defer tick.Stop()
 	nextCapture := time.Now()
@@ -284,15 +296,18 @@ func (s *Session) loop(p *pipeline, capt *capturer) {
 		slot := p.pending[0]
 		p.pending = p.pending[:0]
 		interval := time.Second / time.Duration(s.fps.Load())
-		if err := p.enc.submit(p.ring[slot].tex, now.Sub(start).Nanoseconds()/100, int64(interval/100), s.keyframe.Swap(false)); err != nil {
+		// Strictly increasing: drain matches outputs to inputs by sample time.
+		ts := max(now.Sub(start).Nanoseconds()/100, lastTS+1)
+		if err := p.enc.submit(p.ring[slot].tex, ts, int64(interval/100), s.keyframe.Swap(false)); err != nil {
 			return err
 		}
+		lastTS = ts
 		p.needInput--
 		queued := p.ring[slot].queued
 		if !queued.After(lastSubmit) {
 			queued = now // A resent picture: measure from the resend.
 		}
-		p.inFlight = append(p.inFlight, flight{at: queued, slot: slot})
+		p.inFlight = append(p.inFlight, flight{at: queued, slot: slot, ts: ts})
 		lastSubmit = now
 		if !p.enc.async {
 			return s.drain(p)
@@ -344,16 +359,21 @@ func (s *Session) loop(p *pipeline, capt *capturer) {
 			if s.resize.Load() != nil {
 				p.srcW = 0
 			}
-			got, err := capt.latest(func(tex uintptr, w, h uint32) {
-				if err := s.ensureSized(p, int(w), int(h)); err != nil {
+			frame := func(tex uintptr, w, h int) {
+				if err := s.ensureSized(p, w, h); err != nil {
 					s.fail(err)
 					return
 				}
-				s.convert(p, tex)
-			})
+				s.convert(p, tex, w, h)
+				p.keep(tex, w, h)
+			}
+			got, err := capt.latest(func(tex uintptr, w, h uint32) { frame(tex, int(w), int(h)) })
 			if err != nil {
 				s.fail(err)
 				return
+			}
+			if !got && p.held != 0 && now.Sub(p.size.since) >= resizeSettle {
+				frame(p.held, p.heldW, p.heldH) // The resized source went static.
 			}
 			if got {
 				s.mu.Lock()
@@ -390,14 +410,14 @@ func (s *Session) loop(p *pipeline, capt *capturer) {
 
 func (s *Session) drain(p *pipeline) error {
 	for {
-		data, key, err := p.enc.collect()
+		data, key, ts, hasTS, err := p.enc.collect()
 		if err != nil || data == nil {
 			return err
 		}
-		captured := time.Now()
-		if len(p.inFlight) > 0 {
-			captured = p.inFlight[0].at
-			p.inFlight = p.inFlight[1:]
+		var captured time.Time
+		var ok bool
+		if p.inFlight, captured, ok = takeFlight(p.inFlight, ts, hasTS); !ok {
+			captured = time.Now()
 		}
 		s.mu.Lock()
 		s.stats.Encoded++
