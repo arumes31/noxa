@@ -8,9 +8,13 @@ package main
 // through the webview.
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"image"
+	"image/draw"
+	"image/png"
 	"log"
 	"runtime"
 	"slices"
@@ -43,7 +47,72 @@ type NativeShareRequest struct {
 	FPS       int                  `json:"fps"`
 	Bitrate   int                  `json:"bitrate"`
 	// Audio is the dialog's choice: "none", "application" or "system".
+	// A Studio share (Source.Studio) takes its audio from the scene instead.
 	Audio string `json:"audio,omitempty"`
+	// Studio is the first program scene of a Studio share.
+	Studio *NativeStudioScene `json:"studio,omitempty"`
+}
+
+// NativeStudioScene is a Studio program scene with its overlay images
+// (PNG, rendered by the webview at the program size).
+type NativeStudioScene struct {
+	nativecapture.Scene
+	Overlays [][]byte `json:"overlays"`
+}
+
+// Overlay image bounds (encoded bytes, pixels per side).
+const (
+	nativeOverlayBytes = 8 << 20
+	nativeOverlaySide  = 3840
+)
+
+// decodeOverlays decodes the webview's overlay PNGs; anything malformed or
+// oversized is refused, never half applied.
+func decodeOverlays(pngs [][]byte) ([]*image.NRGBA, error) {
+	if len(pngs) > nativecapture.MaxStudioLayers {
+		return nil, errors.New("too many overlay images")
+	}
+	out := make([]*image.NRGBA, len(pngs))
+	for i, data := range pngs {
+		if len(data) > nativeOverlayBytes {
+			return nil, errors.New("overlay image too large")
+		}
+		cfg, err := png.DecodeConfig(bytes.NewReader(data))
+		if err != nil || cfg.Width < 1 || cfg.Height < 1 || cfg.Width > nativeOverlaySide || cfg.Height > nativeOverlaySide {
+			return nil, errors.New("invalid overlay image")
+		}
+		img, err := png.Decode(bytes.NewReader(data))
+		if err != nil {
+			return nil, errors.New("invalid overlay image")
+		}
+		nrgba, ok := img.(*image.NRGBA)
+		if !ok {
+			nrgba = image.NewNRGBA(img.Bounds())
+			draw.Draw(nrgba, nrgba.Bounds(), img, img.Bounds().Min, draw.Src)
+		}
+		out[i] = nrgba
+	}
+	return out, nil
+}
+
+// studioAudio is the audio a Studio program streams: none without a visible
+// display source with audio on; that window's own audio when it is the only
+// one and a window; system audio (minus noXa) otherwise.
+func studioAudio(scene nativecapture.Scene) (string, uint64) {
+	var sources []nativecapture.Source
+	for _, l := range scene.Layers {
+		if l.Kind == nativecapture.LayerDisplay && l.Audio && !slices.Contains(sources, l.Source) {
+			sources = append(sources, l.Source)
+		}
+	}
+	switch {
+	case len(sources) == 0:
+		return string(nativecapture.AudioNone), 0
+	case len(sources) == 1 && sources[0].Window != 0:
+		return string(nativecapture.AudioApplication), sources[0].Window
+	default:
+		return string(nativecapture.AudioSystem), 0
+	}
 }
 
 // NativeShareUpdate carries the publication state owned by the webview.
@@ -77,6 +146,8 @@ type NativeShareStatus struct {
 // restored, ended (window closed / stopped), fallback (with reason) or audio
 // (reason: the audio actually captured when it differs from the request:
 // "system" or "none").
+// Studio shares also emit camera (reason "busy" or "unavailable") when a
+// scene camera cannot be opened.
 type nativeShareEventData struct {
 	Tab    string `json:"tab"`
 	Share  string `json:"share"`
@@ -111,6 +182,14 @@ func nativeShareDecision(err error, restarts int) string {
 	}
 }
 
+// nativeCameraReason is the "camera" event reason for a Studio camera failure.
+func nativeCameraReason(msg string) string {
+	if strings.Contains(msg, nativecapture.ErrCameraBusy.Error()) {
+		return "busy"
+	}
+	return "unavailable"
+}
+
 // nativeShareCodecFallback: the native encoder only produces H.264.
 func nativeShareCodecFallback(codec string) bool { return codec != "" && codec != "h264" }
 
@@ -129,12 +208,18 @@ type nativeShare struct {
 	generation uint64
 	upload     bool
 	running    bool
-	restarts   int
-	reconnects int
-	minimized  bool
-	stop       chan struct{}
-	prev       nativeSample
-	badFrames  atomic.Int32
+	// Studio: the scene on air (re-applied after a restart); the audio plan.
+	scene       nativecapture.Scene
+	overlays    []*image.NRGBA
+	audioMode   string
+	audioWindow uint64
+	cameraErr   string
+	restarts    int
+	reconnects  int
+	minimized   bool
+	stop        chan struct{}
+	prev        nativeSample
+	badFrames   atomic.Int32
 	// Server candidates that arrive while an offer is still in flight.
 	pending []netproto.ICECandidate
 }
@@ -233,7 +318,22 @@ func (a *App) StartNativeScreenShareForTab(tabID string, req NativeShareRequest)
 	if st := cm.nativeStatus(); !st.Available {
 		return fmt.Errorf("native screen capture unavailable: %s", st.Reason)
 	}
-	n := &nativeShare{cm: cm, keys: cm.nativeKeys("screen"), audioKeys: cm.nativeKeys("screenaudio"), req: req, stop: make(chan struct{})}
+	n := &nativeShare{cm: cm, keys: cm.nativeKeys("screen"), audioKeys: cm.nativeKeys("screenaudio"), req: req, stop: make(chan struct{}),
+		audioMode: req.Audio, audioWindow: req.Source.Window}
+	switch {
+	case req.Source.Studio && req.Studio == nil:
+		return errors.New("studio scene missing")
+	case req.Source.Studio:
+		overlays, err := decodeOverlays(req.Studio.Overlays)
+		if err != nil {
+			return err
+		}
+		n.scene, n.overlays = req.Studio.Scene, overlays
+		n.audioMode, n.audioWindow = studioAudio(req.Studio.Scene)
+		n.req.Studio = nil // the decoded copy is kept
+	case req.Studio != nil:
+		return errors.New("scene for a non-Studio share")
+	}
 	// One swap: concurrent starts cannot both install a share. Installed before
 	// the offer, so its answer's candidates route here; old.close() leaves a
 	// newer cm.nativeShare alone and sends its empty offer before n's offer.
@@ -262,6 +362,58 @@ func (a *App) UpdateNativeScreenShareForTab(tabID string, update NativeShareUpda
 	}
 	return n.applyUpdate(update)
 }
+
+// UpdateNativeStudioForTab puts a Studio Take (or new overlays of the live
+// Take) on air and follows its audio.
+func (a *App) UpdateNativeStudioForTab(tabID, id string, scene NativeStudioScene) error {
+	n, err := a.nativeShareFor(tabID)
+	if err != nil {
+		return err
+	}
+	if n.req.ID != id || !n.req.Source.Studio {
+		return errors.New("stale native screen share")
+	}
+	overlays, err := decodeOverlays(scene.Overlays)
+	if err != nil {
+		return err
+	}
+	n.setScene(scene.Scene, overlays)
+	return nil
+}
+
+func (n *nativeShare) setScene(scene nativecapture.Scene, overlays []*image.NRGBA) {
+	mode, window := studioAudio(scene)
+	n.mu.Lock()
+	if scene.Take < n.scene.Take {
+		n.mu.Unlock()
+		return // a delayed older Take
+	}
+	n.scene, n.overlays = scene, overlays
+	if n.session != nil {
+		n.session.SetScene(scene, overlays)
+	}
+	changed := mode != n.audioMode || window != n.audioWindow
+	n.audioMode, n.audioWindow = mode, window
+	old := n.audio
+	if changed {
+		n.audio = nil
+	}
+	running := n.running
+	n.mu.Unlock()
+	if !changed {
+		return
+	}
+	// Audio follows the Take like the picture: the old source stops first.
+	if old != nil {
+		old.Close()
+	}
+	if running {
+		n.audioStarted(n.openAudio())
+	}
+}
+
+// NativeCameras lists the cameras a native Studio can compose.
+func (a *App) NativeCameras() []nativecapture.Camera { return nativecapture.Cameras() }
 
 // applyUpdate adopts the webview's publication state. A stale update for an
 // older generation never overrides a newer one.
@@ -358,10 +510,16 @@ func (n *nativeShare) start() error {
 	n.mu.Unlock()
 	go n.watch()
 	n.emit("started", "")
+	n.audioStarted(notice)
+	return nil
+}
+
+// audioStarted reports an audio fallback, then watches the audio session:
+// only after the notice, so a later "none" stays final.
+func (n *nativeShare) audioStarted(notice string) {
 	if notice != "" {
 		n.emit("audio", notice)
 	}
-	// Watch only after the startup notice, so a later "none" stays final.
 	n.mu.Lock()
 	session := n.audio
 	n.mu.Unlock()
@@ -370,7 +528,6 @@ func (n *nativeShare) start() error {
 			go n.watchAudio(session, failed)
 		}
 	}
-	return nil
 }
 
 // startNativeAudio is nativecapture.StartAudio; tests replace it.
@@ -381,9 +538,12 @@ var startNativeAudio = nativecapture.StartAudio
 // it matches): application audio falls back to system audio minus noXa,
 // and a missing libopus or loopback leaves the share without audio.
 func (n *nativeShare) openAudio() string {
-	plan := nativecapture.AudioPlan(n.req.Audio, n.req.Source.Window != 0)
+	n.mu.Lock()
+	requested, window := n.audioMode, n.audioWindow
+	n.mu.Unlock()
+	plan := nativecapture.AudioPlan(requested, window != 0)
 	for _, mode := range plan {
-		session, err := startNativeAudio(mode, n.req.Source.Window, n.onAudio)
+		session, err := startNativeAudio(mode, window, n.onAudio)
 		if err != nil {
 			log.Printf("native share audio %s: %v", mode, err)
 			if errors.Is(err, nativecapture.ErrOpusUnavailable) {
@@ -392,9 +552,15 @@ func (n *nativeShare) openAudio() string {
 			continue
 		}
 		n.mu.Lock()
+		if n.stoppedLocked() || n.audioMode != requested || n.audioWindow != window {
+			// Stopped, or a newer Take changed the plan meanwhile.
+			n.mu.Unlock()
+			session.Close()
+			return ""
+		}
 		n.audio = session
 		n.mu.Unlock()
-		if mode != nativecapture.AudioMode(n.req.Audio) {
+		if mode != nativecapture.AudioMode(requested) {
 			return string(mode)
 		}
 		return ""
@@ -468,8 +634,13 @@ func (n *nativeShare) openCapture() error {
 	n.mu.Lock()
 	level := n.level
 	n.mu.Unlock()
+	n.mu.Lock()
+	scene, overlays := n.scene, n.overlays
+	n.mu.Unlock()
 	session, err := nativecapture.Start(nativecapture.Config{Source: n.req.Source, MaxWidth: level.MaxWidth, MaxHeight: level.MaxHeight,
-		FPS: level.FPS, Bitrate: level.Bitrate}, n.onFrame)
+		FPS: level.FPS, Bitrate: level.Bitrate, Scene: scene, Overlays: overlays,
+		// The Studio canvas keeps the requested size; the ladder only scales its output.
+		CanvasWidth: n.req.MaxWidth, CanvasHeight: n.req.MaxHeight}, n.onFrame)
 	if err != nil {
 		return err
 	}
@@ -480,6 +651,8 @@ func (n *nativeShare) openCapture() error {
 		return errNativeShareStopped
 	}
 	session.SetPaused(!n.upload)
+	// A Take or overlay refresh may have arrived while the capture opened.
+	session.SetScene(n.scene, n.overlays)
 	n.session = session
 	n.mu.Unlock()
 	return nil
@@ -499,7 +672,8 @@ func (n *nativeShare) openSender() error {
 	n.mu.Unlock()
 	n.mu.Lock()
 	var audioKeys *framecrypt.Encryptor
-	if n.audio != nil {
+	// A Studio always offers the audio track: a later Take may add audio.
+	if n.audio != nil || n.req.Source.Studio {
 		audioKeys = n.audioKeys
 	}
 	n.mu.Unlock()
@@ -678,11 +852,17 @@ func (n *nativeShare) watch() {
 			if session == nil {
 				continue
 			}
-			minimized := session.Stats().Minimized
+			stats := session.Stats()
+			minimized := stats.Minimized
 			n.mu.Lock()
 			changed := minimized != n.minimized
 			n.minimized = minimized
+			cameraChanged := stats.CameraError != n.cameraErr
+			n.cameraErr = stats.CameraError
 			n.mu.Unlock()
+			if cameraChanged && stats.CameraError != "" {
+				n.emit("camera", nativeCameraReason(stats.CameraError))
+			}
 			if changed {
 				state := "restored"
 				if minimized {
@@ -914,4 +1094,18 @@ func (a *App) NativeScreenThumbnails(values []string) map[string]string {
 		out[byValue[src]] = "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(jpg)
 	}
 	return out
+}
+
+// NativeScreenPreview renders one picker source large enough to draw a
+// Region on (a JPEG data URL; "" when it cannot be drawn).
+func (a *App) NativeScreenPreview(value string) string {
+	src, ok := nativePickerSource(value)
+	if !ok {
+		return ""
+	}
+	jpg := nativecapture.Thumbnails([]nativecapture.Source{src}, 1280, 720, 2*time.Second)[src]
+	if len(jpg) == 0 {
+		return ""
+	}
+	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(jpg)
 }

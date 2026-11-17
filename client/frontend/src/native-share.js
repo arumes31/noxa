@@ -30,6 +30,49 @@ export function nativeSource(surface, value) {
     return null;
 }
 
+/**
+ * The native source of a Region share: the picked monitor ("m:<index>")
+ * cropped to region (fractions of the monitor, from the share dialog).
+ */
+export function nativeRegionSource(value, region) {
+    const monitor = nativeSource("monitor", value);
+    const unit = v => Number.isFinite(v) && v >= 0 && v <= 1;
+    if (!monitor || !region || ![region.x, region.y, region.width, region.height].every(unit) || !(region.width > 0 && region.height > 0)) return null;
+    return { ...monitor, region: { x: region.x, y: region.y, width: region.width, height: region.height } };
+}
+
+/** A larger JPEG data URL of one picker source to draw a Region on, or "". */
+export async function nativeScreenPreview(value) {
+    if (typeof app()?.NativeScreenPreview !== "function") return "";
+    try { return await app().NativeScreenPreview(value) || ""; } catch { return ""; }
+}
+
+/** The cameras a native Studio can compose: [{ id, name }]. */
+export async function nativeCameras() {
+    if (typeof app()?.NativeCameras !== "function") return [];
+    try { return (await app().NativeCameras() || []).filter(c => c && typeof c.id === "string" && c.id); } catch { return []; }
+}
+
+/**
+ * One picker tile (radio, thumbnail, title, detail) for option o in radio
+ * group name; the caller fills title and detail.
+ */
+export function nativeTile(o, name, onChange) {
+    const tile = document.createElement("label");
+    tile.className = "sp-native-tile";
+    const input = document.createElement("input");
+    input.type = "radio"; input.name = name; input.value = o.value;
+    input.addEventListener("change", onChange);
+    const img = document.createElement("img");
+    img.alt = ""; img.dataset.value = o.value; img.decoding = "async";
+    const title = document.createElement("span");
+    title.className = "sp-native-title";
+    const detail = document.createElement("span");
+    detail.className = "sp-native-detail";
+    tile.append(input, img, title, detail);
+    return tile;
+}
+
 const SOURCE_KEY = "noxa.nativeShareSource";
 
 /** The last native source shared from this device: { surface, value, exe, title, size } or null. */

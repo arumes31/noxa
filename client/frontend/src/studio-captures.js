@@ -11,7 +11,8 @@
 // detaches it from its video element (dropping the last decoded frame) and
 // drawable() returns null, so no confidential frame can freeze on output.
 
-export function createCaptureRegistry({ createVideo = () => globalThis.document.createElement("video"), onChange = () => {}, onRelease = () => {} } = {}) {
+export function createCaptureRegistry({ createVideo = () => globalThis.document.createElement("video"),
+    createCanvas = () => globalThis.document.createElement("canvas"), onChange = () => {}, onRelease = () => {} } = {}) {
     const entries = new Map();
     const holders = new Map();
     let next = 1;
@@ -40,7 +41,7 @@ export function createCaptureRegistry({ createVideo = () => globalThis.document.
         if (state === "ended") {
             detach(entry);
             releaseOnce(entry);
-            for (const track of entry.stream.getTracks()) track.stop();
+            for (const track of entry.stream?.getTracks() || []) track.stop();
         }
         onChange(entry.id, state);
     }
@@ -53,7 +54,7 @@ export function createCaptureRegistry({ createVideo = () => globalThis.document.
         entry.listeners.clear();
         detach(entry);
         releaseOnce(entry);
-        for (const track of entry.stream.getTracks()) track.stop();
+        for (const track of entry.stream?.getTracks() || []) track.stop();
         entry.state = "released";
         onChange(entry.id, "released");
     }
@@ -100,6 +101,28 @@ export function createCaptureRegistry({ createVideo = () => globalThis.document.
             element.play?.()?.catch?.(() => {});
             return id;
         },
+        // addNative registers a capture Go makes (Native capture mode): no
+        // stream here; a display shows its picker thumbnails (paint), a
+        // camera stays neutral in the webview. native is the Go source.
+        addNative({ kind, label = "", surface = "", native, audio = false } = {}) {
+            if (disposed) throw new Error("studio stopped");
+            const id = `c${next++}`;
+            entries.set(id, { id, kind, label: String(label).slice(0, 120), surface, stream: null, native, nativeAudio: !!audio,
+                video: kind === "display" ? createCanvas() : null, drawn: false, audioTrack: null, state: "live", listeners: new Map() });
+            return id;
+        },
+        // paint shows a new thumbnail of a native display capture.
+        paint(id, image) {
+            const entry = entries.get(id);
+            const canvas = entry?.native && entry.state === "live" ? entry.video : null;
+            const width = image?.naturalWidth || image?.width || 0, height = image?.naturalHeight || image?.height || 0;
+            if (!canvas || !width || !height) return;
+            if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+            canvas.getContext("2d")?.drawImage(image, 0, 0, width, height);
+            entry.drawn = true;
+        },
+        // end neutralizes a capture whose source went away (a closed window).
+        end(id) { const entry = entries.get(id); if (entry) neutralize(entry, "ended"); },
         get(id) { return entries.get(id) || null; },
         state(id) { return entries.get(id)?.state || "missing"; },
         // drawable returns a video element only while its track is live and
@@ -107,6 +130,7 @@ export function createCaptureRegistry({ createVideo = () => globalThis.document.
         drawable(id) {
             const entry = entries.get(id);
             if (!entry || entry.state !== "live" || !entry.video) return null;
+            if (entry.native) return entry.drawn ? entry.video : null;
             const track = entry.stream.getVideoTracks()[0];
             if (!track || track.readyState !== "live" || track.muted) {
                 if (track?.readyState === "ended") neutralize(entry, "ended");

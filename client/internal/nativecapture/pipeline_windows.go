@@ -4,6 +4,7 @@ package nativecapture
 
 import (
 	"errors"
+	"image"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -35,6 +36,8 @@ type Session struct {
 	mu    sync.Mutex
 	stats Stats
 	info  EncoderInfo
+
+	studio *studioInbox // Source.Studio only
 }
 
 // Start opens the capture and a hardware encoder and begins delivering frames
@@ -44,6 +47,10 @@ func Start(cfg Config, out func(Frame)) (*Session, error) {
 		cfg.FPS = 30
 	}
 	s := &Session{cfg: cfg, out: out, done: make(chan struct{}), exited: make(chan struct{}), fatal: make(chan error, 1)}
+	if cfg.Source.Studio {
+		s.studio = &studioInbox{}
+		s.SetScene(cfg.Scene, cfg.Overlays)
+	}
 	s.fps.Store(int32(cfg.FPS))
 	s.bitrate.Store(int32(cfg.Bitrate))
 	ready := make(chan error, 1)
@@ -67,7 +74,24 @@ func (s *Session) SetMaxSize(w, h int) { s.resize.Store(&[2]int{w, h}) }
 func (s *Session) Fatal() <-chan error { return s.fatal }
 
 func (s *Session) Info() EncoderInfo { s.mu.Lock(); defer s.mu.Unlock(); return s.info }
-func (s *Session) Stats() Stats      { s.mu.Lock(); defer s.mu.Unlock(); return s.stats }
+
+func (s *Session) Stats() Stats {
+	s.mu.Lock()
+	st := s.stats
+	s.mu.Unlock()
+	if s.studio != nil {
+		st.CameraError = s.studio.cameraError()
+	}
+	return st
+}
+
+// SetScene puts a Studio scene (and its overlay images) on air; the
+// pipeline thread takes it with the next frame. No-op for other sources.
+func (s *Session) SetScene(scene Scene, overlays []*image.NRGBA) {
+	if s.studio != nil {
+		s.studio.next.Store(&studioUpdate{scene: clampScene(scene, len(overlays)), images: overlays})
+	}
+}
 
 func (s *Session) Close() {
 	s.closeOnce.Do(func() { close(s.done) })
@@ -79,6 +103,13 @@ func (s *Session) fail(err error) {
 	case s.fatal <- err:
 	default:
 	}
+}
+
+// frameSource delivers pictures to the pipeline: a WGC capturer, or the
+// Studio compositor. A texture is valid only inside use.
+type frameSource interface {
+	latest(use func(tex uintptr, w, h uint32)) (bool, error)
+	close()
 }
 
 type ringSlot struct {
@@ -109,11 +140,11 @@ type pipeline struct {
 	heldW, heldH int
 }
 
-// keep retains tex while its size differs from the pipeline's.
-func (p *pipeline) keep(tex uintptr, w, h int) {
+// keep retains the w x h tex while its cropped size r differs from the pipeline's.
+func (p *pipeline) keep(tex uintptr, w, h int, r pixelRect) {
 	release(p.held)
 	p.held = 0
-	if w != p.srcW || h != p.srcH {
+	if r.W != p.srcW || r.H != p.srcH {
 		vcall(tex, 1) // AddRef
 		p.held, p.heldW, p.heldH = tex, w, h
 	}
@@ -133,7 +164,16 @@ func (s *Session) run(ready chan<- error) {
 		return
 	}
 	defer d.close()
-	capt, err := newCapturer(d, s.cfg.Source)
+	var capt frameSource
+	if s.cfg.Source.Studio {
+		w, h := s.cfg.CanvasWidth, s.cfg.CanvasHeight
+		if w <= 0 || h <= 0 {
+			w, h = s.cfg.MaxWidth, s.cfg.MaxHeight
+		}
+		capt, err = newCompositor(d, w, h, s.studio)
+	} else {
+		capt, err = newCapturer(d, s.cfg.Source)
+	}
 	if err != nil {
 		ready <- err
 		return
@@ -147,12 +187,13 @@ func (s *Session) run(ready chan<- error) {
 	started := false
 	for !started {
 		got, err := capt.latest(func(tex uintptr, w, h uint32) {
-			if err := s.ensureSized(p, int(w), int(h)); err != nil {
+			r := cropRect(int(w), int(h), s.cfg.Source.Region)
+			if err := s.ensureSized(p, r.W, r.H); err != nil {
 				ready <- err
 				started = true
 				return
 			}
-			s.convert(p, tex, int(w), int(h))
+			s.convert(p, tex, r)
 			started = true
 			ready <- nil
 		})
@@ -260,12 +301,13 @@ func (p *pipeline) closeSized() {
 	}
 }
 
-// convert copies the w x h captured texture into the converter input and
-// scales it into the next NV12 ring slot. While a resize settles the frame may
-// differ from the pipeline size: its overlap is copied and scaled to fill.
-func (s *Session) convert(p *pipeline, tex uintptr, w, h int) {
-	w, h = min(w, p.srcW), min(h, p.srcH)
-	p.d.copyRegion(p.conv.input, tex, d3dBox{Right: uint32(w), Bottom: uint32(h), Back: 1})
+// convert copies the r part of the captured texture (the region crop, else
+// the whole frame) into the converter input and scales it into the next NV12
+// ring slot. While a resize settles the frame may differ from the pipeline
+// size: its overlap is copied and scaled to fill.
+func (s *Session) convert(p *pipeline, tex uintptr, r pixelRect) {
+	w, h := min(r.W, p.srcW), min(r.H, p.srcH)
+	p.d.copyRegion(p.conv.input, tex, d3dBox{Left: uint32(r.X), Top: uint32(r.Y), Right: uint32(r.X + w), Bottom: uint32(r.Y + h), Back: 1})
 	// The encoder may still read a submitted texture: never overwrite one.
 	slot := freeSlot(p.next, nv12Ring, p.inFlight, time.Now())
 	if slot < 0 {
@@ -282,7 +324,7 @@ func (s *Session) convert(p *pipeline, tex uintptr, w, h int) {
 	p.pending = append(p.pending[:0], slot)
 }
 
-func (s *Session) loop(p *pipeline, capt *capturer) {
+func (s *Session) loop(p *pipeline, capt frameSource) {
 	start := time.Now()
 	var lastSubmit time.Time
 	var lastTS int64
@@ -360,12 +402,13 @@ func (s *Session) loop(p *pipeline, capt *capturer) {
 				p.srcW = 0
 			}
 			frame := func(tex uintptr, w, h int) {
-				if err := s.ensureSized(p, w, h); err != nil {
+				r := cropRect(w, h, s.cfg.Source.Region)
+				if err := s.ensureSized(p, r.W, r.H); err != nil {
 					s.fail(err)
 					return
 				}
-				s.convert(p, tex, w, h)
-				p.keep(tex, w, h)
+				s.convert(p, tex, r)
+				p.keep(tex, w, h, r)
 			}
 			got, err := capt.latest(func(tex uintptr, w, h uint32) { frame(tex, int(w), int(h)) })
 			if err != nil {

@@ -10,7 +10,7 @@ globalThis.window = { __noxa: { state: { activeTabID: "t1" } }, go: { main: { Ap
     NativeScreenThumbnails: async values => Object.fromEntries(values.filter(v => v !== "w:9").map(v => [v, `data:image/jpeg;base64,${v}`])),
 } } } };
 const { screenCaptureBackend, setScreenCaptureBackend, nativeSource, nativeSourceOptions, mirrorNativeKey, nativeEventIsCurrent,
-    rememberNativeSource, rememberedNativeSource, nativeThumbnails } = await import("../src/native-share.js");
+    rememberNativeSource, rememberedNativeSource, nativeThumbnails, nativeRegionSource } = await import("../src/native-share.js");
 
 test("capture backend defaults to Browser and remembers Native", () => {
     assert.equal(screenCaptureBackend(), "browser");
@@ -115,4 +115,15 @@ test("native share events match their share and tab", () => {
     assert.equal(nativeEventIsCurrent({ tab: "t1", share: "s1", state: "ended" }, native), false);
     assert.equal(nativeEventIsCurrent({ tab: "t2", share: "s2", state: "ended" }, native), false);
     assert.equal(nativeEventIsCurrent({ tab: "t1", share: "s2", state: "ended" }, null), false);
+});
+
+test("a native Region is a monitor with a validated crop", () => {
+    const region = { x: 0.25, y: 0.1, width: 0.5, height: 0.4 };
+    assert.deepEqual(nativeRegionSource("m:1", region), { monitor: 1, window: "0", region });
+    assert.equal(nativeRegionSource("w:7", region), null, "a Region is cut from a monitor");
+    assert.equal(nativeRegionSource("m:0", null), null);
+    assert.equal(nativeRegionSource("m:0", { ...region, width: 0 }), null);
+    assert.equal(nativeRegionSource("m:0", { ...region, x: -0.1 }), null);
+    assert.equal(nativeRegionSource("m:0", { ...region, y: Number.NaN }), null);
+    assert.deepEqual(Object.keys(nativeRegionSource("m:0", { ...region, extra: 1 }).region), ["x", "y", "width", "height"]);
 });

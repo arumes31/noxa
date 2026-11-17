@@ -40,7 +40,8 @@ type animatedWindow struct {
 	stop    chan struct{}
 	stopped chan struct{}
 	paints  atomic.Uint64
-	still   atomic.Bool // stop repainting (messages are still pumped)
+	still   atomic.Bool   // stop repainting (messages are still pumped)
+	solid   atomic.Uint32 // COLORREF|1<<24: paint this colour only
 }
 
 func startAnimatedWindow(t *testing.T, fullscreen bool, w, h int) *animatedWindow {
@@ -99,10 +100,17 @@ func startAnimatedWindow(t *testing.T, fullscreen bool, w, h int) *animatedWindo
 				continue
 			}
 			dc, _, _ := procGetDC.Call(hwnd)
-			brush, _, _ := procCreateSolidBrush.Call(uintptr(i*7%256) | uintptr(i*3%256)<<8 | uintptr(255-i%256)<<16)
+			color := uintptr(i*7%256) | uintptr(i*3%256)<<8 | uintptr(255-i%256)<<16
+			solid := a.solid.Load()
+			if solid != 0 {
+				color = uintptr(solid & 0xFFFFFF)
+			}
+			brush, _, _ := procCreateSolidBrush.Call(color)
 			old, _, _ := procSelectObject.Call(dc, brush)
-			_, _, _ = procPatBlt.Call(dc, 0, 0, uintptr(w), uintptr(h), 0x00F00021)      // PATCOPY
-			_, _, _ = procPatBlt.Call(dc, uintptr(i*8%w), 0, 64, uintptr(h), 0x00550009) // DSTINVERT bar
+			_, _, _ = procPatBlt.Call(dc, 0, 0, uintptr(w), uintptr(h), 0x00F00021) // PATCOPY
+			if solid == 0 {
+				_, _, _ = procPatBlt.Call(dc, uintptr(i*8%w), 0, 64, uintptr(h), 0x00550009) // DSTINVERT bar
+			}
 			_, _, _ = procSelectObject.Call(dc, old)
 			_, _, _ = procDeleteObject.Call(brush)
 			_, _, _ = procReleaseDC.Call(hwnd, dc)

@@ -6,6 +6,7 @@ package nativecapture
 
 import (
 	"errors"
+	"image"
 	"slices"
 	"time"
 )
@@ -18,9 +19,38 @@ var (
 )
 
 // Source selects what to capture: a window when Window != 0, else a monitor.
+// Region crops the capture; Studio composes the session's scene instead.
 type Source struct {
-	Monitor int    `json:"monitor"`
-	Window  uint64 `json:"window,string"`
+	Monitor int     `json:"monitor"`
+	Window  uint64  `json:"window,string"`
+	Region  *Region `json:"region,omitempty"`
+	Studio  bool    `json:"studio,omitempty"`
+}
+
+// Region is a crop rectangle in fractions (0..1) of the captured frame.
+type Region struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
+}
+
+// pixelRect is a rectangle in pixels.
+type pixelRect struct{ X, Y, W, H int }
+
+// cropRect is region in pixels of a w x h frame, aligned to even values as
+// share-frame-geometry.js cropRect does; a nil region is the whole frame.
+func cropRect(w, h int, r *Region) pixelRect {
+	if r == nil || w < 2 || h < 2 {
+		return pixelRect{W: w, H: h}
+	}
+	unit := func(v float64) float64 { return min(1, max(0, v)) }
+	even := func(v float64) int { return max(0, int(v)/2*2) }
+	x := min(even(unit(r.X)*float64(w)), even(float64(w-2)))
+	y := min(even(unit(r.Y)*float64(h)), even(float64(h-2)))
+	cw := max(2, min(even(unit(r.Width)*float64(w)), even(float64(w-x))))
+	ch := max(2, min(even(unit(r.Height)*float64(h)), even(float64(h-y))))
+	return pixelRect{X: x, Y: y, W: cw, H: ch}
 }
 
 // Config is the requested capture/encode profile.
@@ -31,6 +61,11 @@ type Config struct {
 	Bitrate             int // bits per second
 	// AllowSoftware admits a software encoder MFT (tests only).
 	AllowSoftware bool
+	// Scene and Overlays are the first Studio scene (Source.Studio), composed
+	// on a CanvasWidth x CanvasHeight canvas (default MaxWidth x MaxHeight).
+	Scene                     Scene
+	Overlays                  []*image.NRGBA
+	CanvasWidth, CanvasHeight int
 }
 
 // Frame is one encoded H.264 access unit (Annex-B, as the encoder wrote it).
@@ -56,6 +91,8 @@ type Stats struct {
 	EncodeTime                   time.Duration // sum of submit→output latencies
 	Width, Height                int
 	Minimized                    bool
+	// CameraError: a Studio camera could not be opened (busy, unplugged).
+	CameraError string
 }
 
 // outputSize fits (w,h) into (maxW,maxH) keeping the aspect ratio, with even

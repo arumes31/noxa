@@ -264,3 +264,76 @@ func TestWindowResizeRebuildsAfterItSettles(t *testing.T) {
 	default:
 	}
 }
+
+// TestRegionCaptureEncodesTheCrop shares the middle quarter of the primary
+// monitor: the encoded size is the even-aligned crop.
+func TestRegionCaptureEncodesTheCrop(t *testing.T) {
+	if os.Getenv("NOXA_NATIVE_CAPTURE") == "" {
+		t.Skip("set NOXA_NATIVE_CAPTURE=1 on an interactive Windows desktop")
+	}
+	monitor, size := 0, Monitor{}
+	for i, m := range Monitors() {
+		if m.Primary {
+			monitor, size = i, m
+		}
+	}
+	// An animated window keeps the desktop changing, so WGC delivers frames
+	// (a locked or sleeping display delivers only the first one).
+	win := startAnimatedWindow(t, false, 900, 600)
+	defer win.close()
+	region := &Region{X: 0.25, Y: 0.25, Width: 0.5, Height: 0.5}
+	st, _, s := runCapture(t, Source{Monitor: monitor, Region: region}, 30, 2*time.Second)
+	s.Close()
+	// WGC delivers the monitor at its pixel size; the crop is fitted into 1920x1080.
+	want := cropRect(size.Width, size.Height, region)
+	ww, wh := outputSize(want.W, want.H, 1920, 1080)
+	if st.Encoded == 0 || st.Width != ww || st.Height != wh {
+		t.Fatalf("region %dx%d encoded=%d, want %dx%d (monitor %dx%d)", st.Width, st.Height, st.Encoded, ww, wh, size.Width, size.Height)
+	}
+	t.Logf("region %dx%d captured=%d encoded=%d", st.Width, st.Height, st.Captured, st.Encoded)
+}
+
+// TestStudioSessionEncodes runs the Studio compositor through the encoder:
+// a monitor beside a test window, then a crossfade to another Take.
+func TestStudioSessionEncodes(t *testing.T) {
+	if os.Getenv("NOXA_NATIVE_CAPTURE") == "" {
+		t.Skip("set NOXA_NATIVE_CAPTURE=1 on an interactive Windows desktop")
+	}
+	win := startAnimatedWindow(t, false, 640, 360)
+	defer win.close()
+	scene := Scene{Take: 1, Transition: Transition{Kind: "cut"}, Layers: []Layer{
+		{Kind: LayerDisplay, Source: Source{Monitor: 0}, W: 0.5, H: 1},
+		{Kind: LayerDisplay, Source: Source{Window: uint64(win.hwnd.Load())}, X: 0.5, W: 0.5, H: 1},
+	}}
+	var mu sync.Mutex
+	keys, frames := 0, 0
+	s, err := Start(Config{Source: Source{Studio: true}, Scene: scene, MaxWidth: 1280, MaxHeight: 720, FPS: 30, Bitrate: 4_000_000,
+		AllowSoftware: os.Getenv("NOXA_NATIVE_SOFTWARE") != ""}, func(f Frame) {
+		mu.Lock()
+		frames++
+		if f.Keyframe {
+			keys++
+		}
+		mu.Unlock()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	s.SetScene(Scene{Take: 2, Transition: Transition{Kind: "fade", MS: 500}, Layers: scene.Layers[1:]}, nil)
+	time.Sleep(1500 * time.Millisecond)
+	st := s.Stats()
+	s.Close()
+	select {
+	case err := <-s.Fatal():
+		t.Fatal(err)
+	default:
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	t.Logf("studio %dx%d captured=%d encoded=%d keyframes=%d avg latency=%v", st.Width, st.Height, st.Captured, st.Encoded, keys,
+		st.EncodeTime/time.Duration(max(st.Encoded, 1)))
+	if st.Width != 1280 || st.Height != 720 || frames < 45 || keys < 1 {
+		t.Fatalf("studio %dx%d frames=%d keyframes=%d", st.Width, st.Height, frames, keys)
+	}
+}
