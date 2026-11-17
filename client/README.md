@@ -36,6 +36,14 @@ the current user's voice controls.
 - **Voice and video:** channel and private/group calls, explicit camera and
   screen capture, microphone recovery, per-member voice/share-audio controls,
   echo tests and stream diagnostics. Camera capture starts only on request.
+  While a screen share runs, the WebView2 processes get high GPU scheduling
+  and above-normal CPU priority. On Windows the share dialog offers
+  **Screen capture: Browser / Native**. Browser is the default. Native uses
+  Windows Graphics Capture, a hardware H.264 encoder through Media Foundation
+  and a second, publish-only WebRTC peer, with the same end-to-end frame
+  encryption. The server must support `native-media-peer-v1`. If native
+  capture is unavailable or fails, the share uses Browser capture and shows a
+  notice.
 - **Tools → Roles:** named roles, hierarchy, member assignments and role icon
   uploads with displayed/enforced limits. Channel access can be synced with a
   parent or customized per role/member.
