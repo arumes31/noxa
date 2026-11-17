@@ -141,3 +141,87 @@ func TestSenderStreamsEncryptedFramesToReceiver(t *testing.T) {
 		t.Fatalf("stats: %+v", st)
 	}
 }
+
+func TestNextAudioTimestamp(t *testing.T) {
+	cases := []struct {
+		sent         bool
+		last, anchor uint32
+		want         uint32
+	}{
+		{false, 0, 5000, 5000},                     // first packet: the capture clock
+		{true, 5000, 5960, 5960},                   // contiguous
+		{true, 5000, 6200, 5960},                   // capture jitter keeps 20 ms steps
+		{true, 5000, 5100, 5960},                   // capture time behind: never backwards
+		{true, 5000, 48000, 48000},                 // a gap (nothing played): follow capture
+		{true, 0xffffff00, 0x000003c0, 0x000002c0}, // wraps with serial arithmetic
+	}
+	for _, c := range cases {
+		if got := nextAudioTimestamp(c.sent, c.last, c.anchor); got != c.want {
+			t.Errorf("nextAudioTimestamp(%v, %d, %d) = %d, want %d", c.sent, c.last, c.anchor, got, c.want)
+		}
+	}
+}
+
+// TestSenderStreamsEncryptedAudio: with AudioKeys the offer declares the
+// screenaudio slot and Opus packets arrive LiveKit-encrypted with 48 kHz
+// timestamps on the video's capture clock.
+func TestSenderStreamsEncryptedAudio(t *testing.T) {
+	server := sendertest.NewReceiver(t)
+	video, audio := framecrypt.NewEncryptor(), framecrypt.NewEncryptor()
+	material := bytes.Repeat([]byte{5}, 32)
+	sender, err := New(Config{Signaling: server, Keys: video, AudioKeys: audio, SettingEngine: sendertest.LoopbackSettings()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sender.Close() }()
+	server.SetSender(sender)
+	offer := server.Offer0()
+	if len(offer.Tracks) != 2 || offer.Tracks[1] != (netproto.TrackSlot{TrackID: AudioTrackID, Slot: "screenaudio"}) {
+		t.Fatalf("offer tracks: %+v", offer.Tracks)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for sender.ConnectionState() != webrtc.PeerConnectionStateConnected {
+		if time.Now().After(deadline) {
+			t.Fatal("native peer did not connect")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	start := time.Now()
+	if err := sender.WriteAudio([]byte{0xfc, 1, 2}, start); !errors.Is(err, ErrDropped) {
+		t.Fatalf("keyless audio: %v", err)
+	}
+	if err := audio.SetKey(1, 4, material); err != nil {
+		t.Fatal(err)
+	}
+	if err := audio.Activate(1); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 20 {
+		packet := append([]byte{0xfc, byte(i)}, bytes.Repeat([]byte{byte(i)}, 100)...)
+		if err := sender.WriteAudio(packet, start.Add(time.Duration(i)*20*time.Millisecond)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var first uint32
+	for i := range 20 {
+		select {
+		case p := <-server.Audio:
+			if p.SSRC != sender.Stats().AudioSSRC {
+				t.Fatalf("audio ssrc %d, want %d", p.SSRC, sender.Stats().AudioSSRC)
+			}
+			if i == 0 {
+				first = p.Timestamp
+			} else if p.Timestamp != first+uint32(i)*960 {
+				t.Fatalf("packet %d timestamp %d, want %d", i, p.Timestamp, first+uint32(i)*960)
+			}
+			if got := sendertest.DecryptOpus(t, material, p.Payload); got[1] != byte(i) || len(got) != 102 {
+				t.Fatalf("packet %d decrypted to % x", i, got[:4])
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("audio packet %d not received", i)
+		}
+	}
+	if st := sender.Stats(); st.AudioFramesSent != 20 || st.AudioFramesDropped != 1 {
+		t.Fatalf("audio stats: %+v", st)
+	}
+}

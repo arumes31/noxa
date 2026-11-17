@@ -1,6 +1,7 @@
 // Regenerates livekit-h264-vectors.json from the REAL pinned LiveKit e2ee
 // worker (client/frontend/node_modules/livekit-client, run from that folder):
 //   cd client/frontend && node ../../internal/framecrypt/testdata/gen-vectors.mjs
+// It writes livekit-h264-vectors.json and livekit-opus-vectors.json.
 // Math.random is stubbed per SSRC so the IV send-count seed is recorded.
 import { createRequire } from "node:module";
 import { writeFileSync } from "node:fs";
@@ -20,7 +21,7 @@ lk("init", { keyProviderOptions: { sharedKey: false, ratchetSalt: "LKFrameEncryp
 const hex = b => Buffer.from(b).toString("hex");
 const rnd = (n, s) => { let x = s >>> 0 || 1; return Array.from({ length: n }, () => { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; return x & 255; }); };
 let streamN = 0;
-async function stream(material, kid, ssrc, streamSeed, frames) {
+async function stream(material, kid, ssrc, streamSeed, frames, audio = false) {
     const id = `s${++streamN}`;
     lk("enable", { participantIdentity: id, enabled: true });
     const key = await crypto.subtle.importKey("raw", material, "HKDF", false, ["deriveBits", "deriveKey"]);
@@ -33,7 +34,10 @@ async function stream(material, kid, ssrc, streamSeed, frames) {
     seed = streamSeed;
     const vectors = [];
     for (const [i, { bytes, ts }] of frames.entries()) {
-        push.enqueue({ data: new Uint8Array(bytes).buffer, timestamp: ts, type: "key", getMetadata: () => ({ synchronizationSource: ssrc, payloadType: 102, mimeType: "video/h264" }) });
+        // Audio frames (RTCEncodedAudioFrame) have no "type": LiveKit keeps 1 clear byte (the Opus TOC).
+        push.enqueue(audio
+            ? { data: new Uint8Array(bytes).buffer, timestamp: ts, getMetadata: () => ({ synchronizationSource: ssrc, payloadType: 111, mimeType: "audio/opus" }) }
+            : { data: new Uint8Array(bytes).buffer, timestamp: ts, type: "key", getMetadata: () => ({ synchronizationSource: ssrc, payloadType: 102, mimeType: "video/h264" }) });
         for (let t = 0; out.length <= i && t < 400; t++) await new Promise(r => setTimeout(r, 5));
         if (out.length <= i) throw new Error("no encrypted output");
         vectors.push({ key: hex(material), kid, ssrc, ts, seed: streamSeed, index: i, plaintext: hex(bytes), ciphertext: hex(new Uint8Array(out[i].data)) });
@@ -71,4 +75,20 @@ const all = [
 if (!all.some(v => !v.plaintext.includes("000001") === false && v.ciphertext.length / 2 - v.plaintext.length / 2 > 30 && !/(^|[^0])000001/.test(v.plaintext.replace(/00000001/g, "")))) throw new Error("no escaped vector");
 writeFileSync(new URL("./livekit-h264-vectors.json", import.meta.url), JSON.stringify({ source: "livekit-client 2.23.0 e2ee worker", vectors: all }, null, 1) + "\n");
 console.log(`wrote ${all.length} vectors`);
+
+// Opus packets (CELT fullband stereo 20 ms TOC 0xfc, a 1-byte TOC-only
+// packet, zero runs: no emulation prevention on audio) at 48 kHz timestamps.
+const opus = [
+    ...await stream(key1, 3, 0x0a0b0c0d, 4321, [
+        { ts: 960, bytes: [0xfc, ...rnd(320, 21)] },
+        { ts: 1920, bytes: [0xfc, ...new Array(40).fill(0), 0, 0, 1, 0, 0, 3] },
+        { ts: 2880, bytes: [0xfc] },
+    ], true),
+    ...await stream(key2, 9, 0xfffffffe, 65534, [
+        { ts: 4294966336, bytes: [0x78, ...rnd(90, 22)] },
+        { ts: 0, bytes: [0x78, ...rnd(90, 23)] },
+    ], true),
+];
+writeFileSync(new URL("./livekit-opus-vectors.json", import.meta.url), JSON.stringify({ source: "livekit-client 2.23.0 e2ee worker (audio)", vectors: opus }, null, 1) + "\n");
+console.log(`wrote ${opus.length} opus vectors`);
 process.exit(0);

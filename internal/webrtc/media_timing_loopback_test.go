@@ -157,6 +157,7 @@ type timingViewerState struct {
 	packets   map[string]*atomic.Int64
 	ssrcs     map[string]uint32
 	first     map[string]rtp.Header
+	last      map[string][]byte // latest payload per track
 }
 
 func (v *timingViewerState) count(trackID string) int64 {
@@ -190,7 +191,7 @@ func attachTimingViewer(t *testing.T, engine *Engine, router *Router, id string)
 	if err := router.AttachPeer(id, server); err != nil {
 		t.Fatal(err)
 	}
-	state := &timingViewerState{pc: newTimingViewer(t), server: server, packets: make(map[string]*atomic.Int64), ssrcs: make(map[string]uint32), first: make(map[string]rtp.Header)}
+	state := &timingViewerState{pc: newTimingViewer(t), server: server, packets: make(map[string]*atomic.Int64), ssrcs: make(map[string]uint32), first: make(map[string]rtp.Header), last: make(map[string][]byte)}
 	state.pc.OnTrack(func(track *pion.TrackRemote, receiver *pion.RTPReceiver) {
 		id := track.ID()
 		counter := new(atomic.Int64)
@@ -222,6 +223,7 @@ func attachTimingViewer(t *testing.T, engine *Engine, router *Router, id string)
 			if _, ok := state.first[id]; !ok {
 				state.first[id] = packet.Header
 			}
+			state.last[id] = append([]byte(nil), packet.Payload...)
 			state.mu.Unlock()
 			counter.Add(1)
 		}

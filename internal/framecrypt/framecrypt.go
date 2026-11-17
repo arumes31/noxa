@@ -182,6 +182,31 @@ func (e *Encryptor) EncryptH264(frame []byte, ssrc, rtpTimestamp uint32) ([]byte
 	if err != nil {
 		return nil, err
 	}
+	header := normalizeAnnexBStartCodes(frame[:clearBytes])
+	sealed, err := e.seal(header, frame[clearBytes:], ssrc, rtpTimestamp)
+	if err != nil {
+		return nil, err
+	}
+	return append(append([]byte(nil), header...), writeRbsp(sealed)...), nil
+}
+
+// EncryptOpus encrypts one Opus packet like LiveKit's audio path: the TOC
+// byte stays clear (and authenticated), no NAL processing. It fails closed
+// with ErrNoKey when no epoch is active.
+func (e *Encryptor) EncryptOpus(packet []byte, ssrc, rtpTimestamp uint32) ([]byte, error) {
+	if len(packet) == 0 {
+		return nil, errors.New("framecrypt: empty Opus packet") // receivers drop empty frames
+	}
+	sealed, err := e.seal(packet[:1], packet[1:], ssrc, rtpTimestamp)
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte{packet[0]}, sealed...), nil
+}
+
+// seal returns AES-GCM(payload, AAD header) | IV | 12 | key index, with the
+// IV = SSRC | RTP timestamp | timestamp - per-SSRC send count.
+func (e *Encryptor) seal(header, payload []byte, ssrc, rtpTimestamp uint32) ([]byte, error) {
 	e.mu.Lock()
 	entry, ok := e.epochs[e.active]
 	if e.active == 0 || !ok {
@@ -199,10 +224,8 @@ func (e *Encryptor) EncryptH264(frame []byte, ssrc, rtpTimestamp uint32) ([]byte
 	binary.BigEndian.PutUint32(iv[0:], ssrc)
 	binary.BigEndian.PutUint32(iv[4:], rtpTimestamp)
 	binary.BigEndian.PutUint32(iv[8:], rtpTimestamp-uint32(count%0xffff))
-	header := normalizeAnnexBStartCodes(frame[:clearBytes])
-	sealed := entry.aead.Seal(nil, iv, frame[clearBytes:], header)
-	sealed = append(append(sealed, iv...), ivLength, entry.kid)
-	return append(append([]byte(nil), header...), writeRbsp(sealed)...), nil
+	sealed := entry.aead.Seal(nil, iv, payload, header)
+	return append(append(sealed, iv...), ivLength, entry.kid), nil
 }
 
 // unencryptedBytes is LiveKit's processNALUsForEncryption for H.264: the

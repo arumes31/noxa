@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
 
@@ -30,6 +31,8 @@ type Receiver struct {
 	Offers []netproto.WebRTCOffer
 	Frames chan []byte
 	SSRC   chan uint32
+	// Audio receives the screenaudio track's RTP packets (encrypted Opus).
+	Audio chan *rtp.Packet
 }
 
 func (f *Receiver) Offer(offer netproto.WebRTCOffer) (netproto.WebRTCAnswer, error) {
@@ -74,7 +77,7 @@ func NewReceiver(t testing.TB) *Receiver {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &Receiver{t: t, PC: pc, Frames: make(chan []byte, 256), SSRC: make(chan uint32, 1)}
+	f := &Receiver{t: t, PC: pc, Frames: make(chan []byte, 256), SSRC: make(chan uint32, 1), Audio: make(chan *rtp.Packet, 1024)}
 	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
 		if c == nil {
 			return
@@ -89,6 +92,18 @@ func NewReceiver(t testing.TB) *Receiver {
 		_ = s.AddCandidate(netproto.ICECandidate{Candidate: init.Candidate, SDPMid: *init.SDPMid, SDPMLineIndex: *init.SDPMLineIndex, Peer: netproto.PeerNative})
 	})
 	pc.OnTrack(func(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+		if track.Kind() == webrtc.RTPCodecTypeAudio {
+			for {
+				packet, _, err := track.ReadRTP()
+				if err != nil {
+					return
+				}
+				select {
+				case f.Audio <- packet:
+				default:
+				}
+			}
+		}
 		f.SSRC <- uint32(track.SSRC())
 		depacketizer := &codecs.H264Packet{}
 		var frame []byte
@@ -166,4 +181,25 @@ func (f *Receiver) Offer0() netproto.WebRTCOffer {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.Offers[0]
+}
+
+// DecryptOpus is the receiver half for audio (LiveKit decodeFunction): one
+// clear TOC byte, no emulation prevention.
+func DecryptOpus(t testing.TB, material, frame []byte) []byte {
+	t.Helper()
+	if len(frame) < 31 || frame[len(frame)-2] != 12 {
+		t.Fatalf("no encrypted audio trailer: % x", frame)
+	}
+	iv := frame[len(frame)-14 : len(frame)-2]
+	key, err := hkdf.Key(sha256.New, material, []byte("LKFrameEncryptionKey"), string(make([]byte, 128)), 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := aes.NewCipher(key)
+	aead, _ := cipher.NewGCM(block)
+	plain, err := aead.Open(nil, iv, frame[1:len(frame)-14], frame[:1])
+	if err != nil {
+		t.Fatalf("audio authentication failed: %v", err)
+	}
+	return append([]byte{frame[0]}, plain...)
 }

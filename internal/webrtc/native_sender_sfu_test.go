@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pion/rtcp"
 	pion "github.com/pion/webrtc/v4"
 
 	"noxa/internal/framecrypt"
@@ -23,10 +24,14 @@ type sfuSignaling struct {
 }
 
 func (s sfuSignaling) Offer(offer netproto.WebRTCOffer) (netproto.WebRTCAnswer, error) {
-	if offer.Peer != netproto.PeerNative || offer.MediaE2EE != netproto.MediaE2EEVersion || len(offer.Tracks) != 1 || offer.Tracks[0].Slot != SlotScreen {
+	if offer.Peer != netproto.PeerNative || offer.MediaE2EE != netproto.MediaE2EEVersion || len(offer.Tracks) != 2 || offer.Tracks[0].Slot != SlotScreen || offer.Tracks[1].Slot != SlotScreenAudio {
 		s.t.Errorf("native offer metadata: %+v", offer)
 	}
-	if _, err := s.voice.HandleNativeOffer("pub", offer.SDP, map[string]string{offer.Tracks[0].TrackID: SlotScreen}, nil); err != nil {
+	slots := map[string]string{}
+	for _, track := range offer.Tracks {
+		slots[track.TrackID] = track.Slot
+	}
+	if _, err := s.voice.HandleNativeOffer("pub", offer.SDP, slots, nil); err != nil {
 		return netproto.WebRTCAnswer{}, err
 	}
 	native := s.engine.PeerConnection(NativePeerID("pub"))
@@ -44,7 +49,9 @@ func (sfuSignaling) Candidate(netproto.ICECandidate) error { return nil }
 // native sender (canonical AU + frame E2EE + pion) into the production
 // engine/router under mandatory media E2EE: the encrypted H.264 inspector
 // admits the stream, it is attributed to the owning client's screen slot,
-// reaches a viewer, and SFU keyframe requests reach the native sender.
+// reaches a viewer, and SFU keyframe requests reach the native sender. Its
+// encrypted Opus screenaudio track (same capture clock) reaches the viewer
+// and decrypts with the publisher's "screenaudio" slot key.
 func TestNativeSenderStreamsThroughEncryptedSFU(t *testing.T) {
 	engine, err := NewWithMediaPolicy(testLogger(), nil, false, NetworkConfig{UDPAddr: "127.0.0.1:0", ExternalIPs: []string{"127.0.0.1"}}, VideoBounds{}, MediaPolicy{E2EE: true})
 	if err != nil {
@@ -72,9 +79,17 @@ func TestNativeSenderStreamsThroughEncryptedSFU(t *testing.T) {
 	if err := keys.Activate(1); err != nil {
 		t.Fatal(err)
 	}
+	audioKey := bytes.Repeat([]byte{9}, 32)
+	audioKeys := framecrypt.NewEncryptor()
+	if err := audioKeys.SetKey(1, 5, audioKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := audioKeys.Activate(1); err != nil {
+		t.Fatal(err)
+	}
 	var keyMu sync.Mutex
 	wantKey := true
-	sender, err := nativesender.New(nativesender.Config{Signaling: sfuSignaling{t: t, voice: voice, engine: engine}, Keys: keys,
+	sender, err := nativesender.New(nativesender.Config{Signaling: sfuSignaling{t: t, voice: voice, engine: engine}, Keys: keys, AudioKeys: audioKeys,
 		SettingEngine: sendertest.LoopbackSettings(), OnKeyframeRequest: func() { keyMu.Lock(); wantKey = true; keyMu.Unlock() }})
 	if err != nil {
 		t.Fatal(err)
@@ -86,6 +101,17 @@ func TestNativeSenderStreamsThroughEncryptedSFU(t *testing.T) {
 	sc := []byte{0, 0, 1}
 	stop := make(chan struct{})
 	defer close(stop)
+	go func() {
+		start := time.Now()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			case <-time.After(20 * time.Millisecond):
+			}
+			_ = sender.WriteAudio(append([]byte{0xfc}, bytes.Repeat([]byte{byte(i)}, 160)...), start.Add(time.Duration(i)*20*time.Millisecond))
+		}
+	}()
 	go func() {
 		start := time.Now()
 		for i := 0; ; i++ {
@@ -122,6 +148,31 @@ func TestNativeSenderStreamsThroughEncryptedSFU(t *testing.T) {
 	timingWait(t, "native screen at the viewer", 10*time.Second, func() bool {
 		return viewer.count(slotTrackID("pub", SlotScreen)) > 50
 	})
+	timingWait(t, "native screen audio at the viewer", 10*time.Second, func() bool {
+		return viewer.count(slotTrackID("pub", SlotScreenAudio)) > 50
+	})
+	viewer.mu.Lock()
+	payload := viewer.last[slotTrackID("pub", SlotScreenAudio)]
+	viewer.mu.Unlock()
+	if plain := sendertest.DecryptOpus(t, audioKey, payload); len(plain) != 161 || plain[0] != 0xfc {
+		t.Fatalf("screen audio at the viewer decrypted to %d bytes", len(plain))
+	}
+	// One capture clock: both sender report mappings imply the same origin.
+	timingWait(t, "sender reports for screen and screen audio", 15*time.Second, func() bool {
+		return len(viewer.srs(slotTrackID("pub", SlotScreen))) > 0 && len(viewer.srs(slotTrackID("pub", SlotScreenAudio))) > 0
+	})
+	latest := func(slot string) rtcp.SenderReport {
+		reports := viewer.srs(slotTrackID("pub", slot))
+		return reports[len(reports)-1].report
+	}
+	video, audio := latest(SlotScreen), latest(SlotScreenAudio)
+	// Capture-clock origin difference: NTP distance minus RTP media distance.
+	media := time.Duration((float64(video.RTPTime)/90000 - float64(audio.RTPTime)/48000) * float64(time.Second))
+	if skew := ntpDuration(video.NTPTime, audio.NTPTime) - media; skew > 100*time.Millisecond || skew < -100*time.Millisecond {
+		t.Errorf("screen/screen-audio sender reports disagree by %v", skew)
+	} else {
+		t.Logf("screen/screen-audio sender report skew %v", skew)
+	}
 	// transport-cc feedback from the SFU drives the send-side estimate (ladder input).
 	initial := sender.Stats().EstimateBPS
 	timingWait(t, "bandwidth estimate from transport-cc", 10*time.Second, func() bool {
