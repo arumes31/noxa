@@ -295,6 +295,10 @@ type Router struct {
 	// claiming a live slot is refused, so two sources can never be
 	// interleaved into one output track (70).
 	slotClaims map[string]map[string]slotClaim
+	// trackWake is closed (and dropped) on every slot declaration of a
+	// publisher, waking its browser track readers waiting to resume (see
+	// browserTrackLoop). Created on demand.
+	trackWake map[string]chan struct{}
 	// slotEpoch issues claim tokens; a stale read loop may only release the
 	// claim it made itself.
 	slotEpoch uint64
@@ -882,6 +886,7 @@ func (r *Router) setTrackSlots(publisherID string, slots map[string]string, nati
 		current.wake = make(chan struct{})
 		r.nativePeers[publisherID] = current
 	}
+	r.wakeTrackReadersLocked(publisherID)
 	before := r.publisherSlotsLocked(publisherID)
 	previousRecordingSlot := r.recordingVideoSlotLocked(publisherID)
 
@@ -1169,6 +1174,50 @@ func (r *Router) nativeTrackLoop(publisherID string, pc *PeerConnectionWrapper, 
 		case <-pc.Done():
 			return
 		}
+	}
+}
+
+// browserTrackLoop reads one browser-peer track. Like nativeTrackLoop it
+// survives losing its slot: the browser keeps one transceiver per source and
+// reuses it with replaceTrack, and Pion reports a reused receiver only once.
+// After its reader ends, the track waits for the publisher's next slot
+// declaration and resumes only while explicitly declared (so an undeclared
+// track cannot take a default slot later), until pc closes.
+func (r *Router) browserTrackLoop(clientID string, pc *PeerConnectionWrapper, remote *webrtc.TrackRemote, extID uint8) {
+	for first := true; ; first = false {
+		r.mu.Lock()
+		if r.trackWake == nil {
+			r.trackWake = make(map[string]chan struct{})
+		}
+		wake := r.trackWake[clientID]
+		if wake == nil {
+			wake = make(chan struct{})
+			r.trackWake[clientID] = wake
+		}
+		_, declared := r.trackSlots[clientID][remote.ID()]
+		r.mu.Unlock()
+		if declared || first {
+			slot := r.slotFor(clientID, remote.ID(), remote.Kind())
+			if remote.Kind() == webrtc.RTPCodecTypeAudio {
+				r.ReadLoop(clientID, slot, remote, extID)
+			} else {
+				r.ReadVideoLoop(clientID, slot, remote)
+			}
+		}
+		select {
+		case <-wake:
+		case <-pc.Done():
+			return
+		}
+	}
+}
+
+// wakeTrackReadersLocked wakes publisherID's waiting browser track readers.
+// Callers hold mu.
+func (r *Router) wakeTrackReadersLocked(publisherID string) {
+	if wake := r.trackWake[publisherID]; wake != nil {
+		close(wake)
+		delete(r.trackWake, publisherID)
 	}
 }
 
@@ -1466,14 +1515,11 @@ func (r *Router) AttachPeer(clientID string, pc *PeerConnectionWrapper) error {
 	}
 
 	pc.OnTrack(func(remote *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		slot := r.slotFor(clientID, remote.ID(), remote.Kind())
 		// Publisher SRs carry the capture-time mapping forwarded to receivers.
 		go r.readSourceTiming(clientID, remote, receiver)
 		switch remote.Kind() {
-		case webrtc.RTPCodecTypeAudio:
-			go r.ReadLoop(clientID, slot, remote, audioLevelExtID(receiver))
-		case webrtc.RTPCodecTypeVideo:
-			go r.ReadVideoLoop(clientID, slot, remote)
+		case webrtc.RTPCodecTypeAudio, webrtc.RTPCodecTypeVideo:
+			go r.browserTrackLoop(clientID, pc, remote, audioLevelExtID(receiver))
 		default:
 			r.logger.Debug("router: ignoring unknown track kind",
 				zap.String("client_id", clientID),
@@ -1568,6 +1614,7 @@ func (r *Router) detachPeer(clientID string, leaveChannel bool, only *PeerConnec
 		}
 	}
 	delete(r.slotClaims, clientID)
+	r.wakeTrackReadersLocked(clientID)
 	for key := range r.audioIngress {
 		if key.publisher == clientID {
 			delete(r.audioIngress, key)

@@ -387,6 +387,41 @@ func TestNativeTrackResumesAfterLosingItsSlot(t *testing.T) {
 	timingWait(t, "screen flowing again", 5*time.Second, func() bool { return viewer.count(id) > before+10 })
 }
 
+// A browser screen (or its audio) whose slot a native share took resumes
+// when the browser declares the SAME track again: it reuses its transceiver
+// (replaceTrack), so Pion emits no second OnTrack.
+func TestBrowserTrackResumesAfterNativeClaim(t *testing.T) {
+	for _, kind := range []timingKind{timingKinds[2], timingKinds[1]} {
+		t.Run(kind.name, func(t *testing.T) {
+			f := newTimingFixture(t, kind)
+			viewer := f.addViewer(t, "viewer")
+			id, key := outputTrackID(kind), kind.slot
+			if kind.video != "" {
+				key += slotSep
+			}
+			timingWait(t, "browser track at the viewer", 10*time.Second, func() bool { return viewer.count(id) > 0 })
+
+			native := &PeerConnectionWrapper{}
+			f.router.AttachNativePeer("pub", native, nil)
+			f.router.SetNativeTrackSlots("pub", native, map[string]string{"native": kind.slot})
+			if _, ok := f.router.claimSlotFrom("pub", key, "native", native); !ok {
+				t.Fatal("native claim rejected")
+			}
+			// Let the retired browser reader notice it lost its slot.
+			time.Sleep(200 * time.Millisecond)
+
+			f.router.SetTrackSlots("pub", map[string]string{kind.trackID: kind.slot})
+			timingWait(t, "browser track reclaimed", 5*time.Second, func() bool {
+				f.router.mu.RLock()
+				defer f.router.mu.RUnlock()
+				return f.router.slotClaims["pub"][key].trackID == kind.trackID
+			})
+			before := viewer.count(id)
+			timingWait(t, "browser track flowing again", 5*time.Second, func() bool { return viewer.count(id) > before+10 })
+		})
+	}
+}
+
 // The reaper of an old browser peer must spare a native peer created for its
 // replacement.
 func TestNativePeerSurvivesStaleOwnerClose(t *testing.T) {
