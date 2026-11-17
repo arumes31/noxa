@@ -433,6 +433,25 @@ func TestBrowserTrackResumesAfterNativeClaim(t *testing.T) {
 	}
 }
 
+// A resumed browser track needs an explicit declaration: once a native share
+// dropped its screenaudio declaration it must not fall back to the mic slot.
+func TestResumedBrowserTrackNeedsDeclaration(t *testing.T) {
+	r := NewRouter(nil)
+	r.SetTrackSlots("pub", map[string]string{"share-audio": SlotScreenAudio})
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if slot, ok := r.browserSlotLocked("pub", "share-audio", pion.RTPCodecTypeAudio, false); !ok || slot != SlotScreenAudio {
+		t.Fatalf("declared track resolved to %q, %v", slot, ok)
+	}
+	delete(r.trackSlots, "pub")
+	if slot, ok := r.browserSlotLocked("pub", "share-audio", pion.RTPCodecTypeAudio, false); ok {
+		t.Fatalf("undeclared resumed track admitted into %q", slot)
+	}
+	if slot, ok := r.browserSlotLocked("pub", "mic", pion.RTPCodecTypeAudio, true); !ok || slot != SlotMic {
+		t.Fatalf("first read of an undeclared track resolved to %q, %v", slot, ok)
+	}
+}
+
 // The reaper of an old browser peer must spare a native peer created for its
 // replacement.
 func TestNativePeerSurvivesStaleOwnerClose(t *testing.T) {

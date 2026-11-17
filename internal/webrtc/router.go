@@ -1186,7 +1186,11 @@ func (r *Router) nativeTrackLoop(publisherID string, pc *PeerConnectionWrapper, 
 func (r *Router) browserTrackLoop(clientID string, pc *PeerConnectionWrapper, remote *webrtc.TrackRemote, extID uint8) {
 	for first := true; ; first = false {
 		r.mu.Lock()
-		if r.pubPeers[clientID] != pc { // detached or rebuilt: the new peer reads
+		if r.pubPeers[clientID] != pc {
+			// Detached or rebuilt: the new peer reads. A claim this stale
+			// reader made after the peer check has been released now, so wake
+			// the replacement's readers it may have refused.
+			r.wakeTrackReadersLocked(clientID)
 			r.mu.Unlock()
 			return
 		}
@@ -1198,10 +1202,9 @@ func (r *Router) browserTrackLoop(clientID string, pc *PeerConnectionWrapper, re
 			wake = make(chan struct{})
 			r.trackWake[clientID] = wake
 		}
-		_, declared := r.trackSlots[clientID][remote.ID()]
+		slot, ok := r.browserSlotLocked(clientID, remote.ID(), remote.Kind(), first)
 		r.mu.Unlock()
-		if declared || first {
-			slot := r.slotFor(clientID, remote.ID(), remote.Kind())
+		if ok {
 			if remote.Kind() == webrtc.RTPCodecTypeAudio {
 				r.ReadLoop(clientID, slot, remote, extID)
 			} else {
@@ -1214,6 +1217,18 @@ func (r *Router) browserTrackLoop(clientID string, pc *PeerConnectionWrapper, re
 			return
 		}
 	}
+}
+
+// browserSlotLocked resolves the slot a browser track reads into. Only its
+// first read may fall back to the kind's default slot: a resumed track needs
+// an explicit declaration, or a screen-audio track whose declaration a native
+// share dropped would land in the mic slot. Callers hold mu.
+func (r *Router) browserSlotLocked(clientID, trackID string, kind webrtc.RTPCodecType, first bool) (string, bool) {
+	slot := r.trackSlots[clientID][trackID]
+	if k, ok := slotKinds[slot]; ok && k == kind {
+		return slot, true
+	}
+	return defaultSlot(kind), first
 }
 
 // wakeTrackReadersLocked wakes publisherID's waiting browser track readers.
