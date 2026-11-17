@@ -14,6 +14,8 @@ import (
 	"log"
 	"runtime"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -40,6 +42,8 @@ type NativeShareRequest struct {
 	MaxHeight int                  `json:"max_height"`
 	FPS       int                  `json:"fps"`
 	Bitrate   int                  `json:"bitrate"`
+	// Audio is the dialog's choice: "none", "application" or "system".
+	Audio string `json:"audio,omitempty"`
 }
 
 // NativeShareUpdate carries the publication state owned by the webview.
@@ -50,8 +54,10 @@ type NativeShareUpdate struct {
 	Codec        string `json:"codec"`
 }
 
-// NativeKeyOp mirrors one media-key engine operation for pid "self|screen".
+// NativeKeyOp mirrors one media-key engine operation for pid "self|screen"
+// (Slot "" or "screen") or "self|screenaudio" (Slot "screenaudio").
 type NativeKeyOp struct {
+	Slot  string `json:"slot,omitempty"`
 	Op    string `json:"op"` // key, activate, retire, retireOne, forget
 	Epoch uint64 `json:"epoch"`
 	Kid   uint8  `json:"kid"`
@@ -68,7 +74,9 @@ type NativeShareStatus struct {
 }
 
 // nativeShareEventData is emitted as "native_share": started, minimized,
-// restored, ended (window closed / stopped) or fallback (with reason).
+// restored, ended (window closed / stopped), fallback (with reason) or audio
+// (reason: the audio actually captured when it differs from the request:
+// "system" or "none").
 type nativeShareEventData struct {
 	Tab    string `json:"tab"`
 	Share  string `json:"share"`
@@ -107,12 +115,14 @@ func nativeShareDecision(err error, restarts int) string {
 func nativeShareCodecFallback(codec string) bool { return codec != "" && codec != "h264" }
 
 type nativeShare struct {
-	cm   *connManager
-	keys *framecrypt.Encryptor
+	cm        *connManager
+	keys      *framecrypt.Encryptor
+	audioKeys *framecrypt.Encryptor
 
 	mu         sync.Mutex
 	req        NativeShareRequest
 	session    *nativecapture.Session
+	audio      *nativecapture.AudioSession
 	sender     *nativesender.Sender
 	ladder     *nativesender.Ladder
 	level      nativesender.Level
@@ -137,14 +147,19 @@ type nativeSample struct {
 	encodeTime                         time.Duration
 }
 
-// nativeKeys returns this connection's mirrored screen-slot keys.
-func (m *connManager) nativeKeys() *framecrypt.Encryptor {
+// nativeKeys returns this connection's mirrored keys of slot "screen" (or
+// "") or "screenaudio".
+func (m *connManager) nativeKeys(slot string) *framecrypt.Encryptor {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.nativeKeyring == nil {
-		m.nativeKeyring = framecrypt.NewEncryptor()
+	ring := &m.nativeKeyring
+	if slot == "screenaudio" {
+		ring = &m.nativeAudioKeyring
 	}
-	return m.nativeKeyring
+	if *ring == nil {
+		*ring = framecrypt.NewEncryptor()
+	}
+	return *ring
 }
 
 func (m *connManager) nativeStatus() NativeShareStatus {
@@ -174,13 +189,16 @@ func (a *App) NativeScreenShareStatusForTab(tabID string) (NativeShareStatus, er
 	return cm.nativeStatus(), nil
 }
 
-// NativeScreenKeyForTab mirrors one "self|screen" key operation.
+// NativeScreenKeyForTab mirrors one "self|screen" or "self|screenaudio" key operation.
 func (a *App) NativeScreenKeyForTab(tabID string, op NativeKeyOp) error {
 	cm, err := a.requireTabCM(tabID)
 	if err != nil {
 		return err
 	}
-	return applyNativeKeyOp(cm.nativeKeys(), op)
+	if op.Slot != "" && op.Slot != "screen" && op.Slot != "screenaudio" {
+		return errors.New("unknown media key slot")
+	}
+	return applyNativeKeyOp(cm.nativeKeys(op.Slot), op)
 }
 
 func applyNativeKeyOp(keys *framecrypt.Encryptor, op NativeKeyOp) error {
@@ -215,7 +233,7 @@ func (a *App) StartNativeScreenShareForTab(tabID string, req NativeShareRequest)
 	if st := cm.nativeStatus(); !st.Available {
 		return fmt.Errorf("native screen capture unavailable: %s", st.Reason)
 	}
-	n := &nativeShare{cm: cm, keys: cm.nativeKeys(), req: req, stop: make(chan struct{})}
+	n := &nativeShare{cm: cm, keys: cm.nativeKeys("screen"), audioKeys: cm.nativeKeys("screenaudio"), req: req, stop: make(chan struct{})}
 	// One swap: concurrent starts cannot both install a share. Installed before
 	// the offer, so its answer's candidates route here; old.close() leaves a
 	// newer cm.nativeShare alone and sends its empty offer before n's offer.
@@ -326,6 +344,8 @@ func (n *nativeShare) start() error {
 	n.ladder = nativesender.NewLadder(top, min(top.Bitrate, 2_500_000))
 	n.level = n.ladder.Current()
 	n.mu.Unlock()
+	// Audio first: whether the native offer carries a screenaudio track.
+	notice := n.openAudio()
 	if err := n.openSender(); err != nil {
 		return err
 	}
@@ -338,7 +358,51 @@ func (n *nativeShare) start() error {
 	n.mu.Unlock()
 	go n.watch()
 	n.emit("started", "")
+	if notice != "" {
+		n.emit("audio", notice)
+	}
 	return nil
+}
+
+// startNativeAudio is nativecapture.StartAudio; tests replace it.
+var startNativeAudio = nativecapture.StartAudio
+
+// openAudio starts the first source of the request's audio plan that works
+// and returns the captured mode when it differs from the request ("" when
+// it matches): application audio falls back to system audio minus noXa,
+// and a missing libopus or loopback leaves the share without audio.
+func (n *nativeShare) openAudio() string {
+	plan := nativecapture.AudioPlan(n.req.Audio, n.req.Source.Window != 0)
+	for _, mode := range plan {
+		session, err := startNativeAudio(mode, n.req.Source.Window, n.onAudio)
+		if err != nil {
+			log.Printf("native share audio %s: %v", mode, err)
+			if errors.Is(err, nativecapture.ErrOpusUnavailable) {
+				break // no encoder: no other source helps
+			}
+			continue
+		}
+		n.mu.Lock()
+		n.audio = session
+		n.mu.Unlock()
+		if mode != nativecapture.AudioMode(n.req.Audio) {
+			return string(mode)
+		}
+		return ""
+	}
+	if len(plan) == 0 {
+		return ""
+	}
+	return string(nativecapture.AudioNone)
+}
+
+func (n *nativeShare) onAudio(p nativecapture.AudioPacket) {
+	n.mu.Lock()
+	sender, upload := n.sender, n.upload
+	n.mu.Unlock()
+	if sender != nil && upload {
+		_ = sender.WriteAudio(p.Data, p.Captured) // a keyless packet is dropped, never sent
+	}
 }
 
 func (n *nativeShare) emit(state, reason string) {
@@ -402,7 +466,13 @@ func (n *nativeShare) openSender() error {
 	initial := n.level.Bitrate
 	maxBitrate := n.ladder.Top.Bitrate
 	n.mu.Unlock()
-	sender, err := nativesender.New(nativesender.Config{ICEServers: ice, Signaling: nativeSignaling{n.cm, n}, Keys: n.keys,
+	n.mu.Lock()
+	var audioKeys *framecrypt.Encryptor
+	if n.audio != nil {
+		audioKeys = n.audioKeys
+	}
+	n.mu.Unlock()
+	sender, err := nativesender.New(nativesender.Config{ICEServers: ice, Signaling: nativeSignaling{n.cm, n}, Keys: n.keys, AudioKeys: audioKeys,
 		InitialBitrate: initial, MaxBitrate: maxBitrate,
 		OnKeyframeRequest: n.requestKeyframe, OnEstimate: n.onEstimate})
 	if err != nil {
@@ -609,8 +679,8 @@ func (n *nativeShare) close() {
 	n.mu.Lock()
 	wasRunning := n.running
 	n.running = false
-	session, sender := n.session, n.sender
-	n.session, n.sender = nil, nil
+	session, sender, audio := n.session, n.sender, n.audio
+	n.session, n.sender, n.audio = nil, nil, nil
 	select {
 	case <-n.stop:
 	default:
@@ -619,6 +689,9 @@ func (n *nativeShare) close() {
 	n.mu.Unlock()
 	if session != nil {
 		session.Close()
+	}
+	if audio != nil {
+		audio.Close()
 	}
 	if sender != nil {
 		_ = sender.Close()
@@ -768,4 +841,45 @@ func (m *connManager) routeNativeCandidate(c netproto.ICECandidate) bool {
 		}
 	}
 	return true
+}
+
+// nativeThumbnailLimit bounds one picker refresh.
+const nativeThumbnailLimit = 32
+
+// nativePickerSource parses a picker value: "m:<monitor index>" or "w:<window handle>".
+func nativePickerSource(value string) (nativecapture.Source, bool) {
+	kind, id, ok := strings.Cut(value, ":")
+	if !ok {
+		return nativecapture.Source{}, false
+	}
+	n, err := strconv.ParseUint(id, 10, 64)
+	switch {
+	case err != nil:
+		return nativecapture.Source{}, false
+	case kind == "m" && n < 64:
+		return nativecapture.Source{Monitor: int(n)}, true
+	case kind == "w" && n != 0:
+		return nativecapture.Source{Window: n}, true
+	}
+	return nativecapture.Source{}, false
+}
+
+// NativeScreenThumbnails renders picker thumbnails (JPEG data URLs) for
+// picker values; sources that cannot be drawn (minimized, hung) are absent.
+func (a *App) NativeScreenThumbnails(values []string) map[string]string {
+	var sources []nativecapture.Source
+	byValue := map[nativecapture.Source]string{}
+	for _, value := range values {
+		if src, ok := nativePickerSource(value); ok && len(sources) < nativeThumbnailLimit {
+			if _, dup := byValue[src]; !dup {
+				sources = append(sources, src)
+				byValue[src] = value
+			}
+		}
+	}
+	out := map[string]string{}
+	for src, jpg := range nativecapture.Thumbnails(sources, 320, 180, time.Second) {
+		out[byValue[src]] = "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(jpg)
+	}
+	return out
 }

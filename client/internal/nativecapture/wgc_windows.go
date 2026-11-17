@@ -4,6 +4,9 @@ package nativecapture
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"unsafe"
 
@@ -26,6 +29,10 @@ var (
 	procGetWindowTextW               = user32.NewProc("GetWindowTextW")
 	procGetWindowLongPtrW            = user32.NewProc("GetWindowLongPtrW")
 	procGetForegroundWindow          = user32.NewProc("GetForegroundWindow")
+	procGetWindowRect                = user32.NewProc("GetWindowRect")
+	procMonitorFromWindow            = user32.NewProc("MonitorFromWindow")
+	procWindowThreadProcessID        = user32.NewProc("GetWindowThreadProcessId")
+	procDwmGetWindowAttribute        = windows.NewLazySystemDLL("dwmapi.dll").NewProc("DwmGetWindowAttribute")
 	enumMu                           sync.Mutex
 	enumMonitors                     []monitorInfo
 	enumWindowsOut                   []Window
@@ -56,12 +63,58 @@ func onWindow(hwnd, _ uintptr) uintptr {
 	if style, _, _ := procGetWindowLongPtrW.Call(hwnd, ^uintptr(19)); style&0x80 != 0 { // GWL_EXSTYLE (-20), WS_EX_TOOLWINDOW
 		return 1
 	}
+	var cloaked uint32                                                                                                     // suspended UWP apps and other virtual-desktop windows render nothing
+	if r, _, _ := procDwmGetWindowAttribute.Call(hwnd, 14, uintptr(unsafe.Pointer(&cloaked)), 4); r == 0 && cloaked != 0 { // #nosec G103 -- DWMWA_CLOAKED
+		return 1
+	}
+	var pid uint32
+	_, _, _ = procWindowThreadProcessID.Call(hwnd, uintptr(unsafe.Pointer(&pid))) // #nosec G103
+	if pid == uint32(os.Getpid()) {                                               // #nosec G115 -- noXa itself is never a share source
+		return 1
+	}
 	buf := make([]uint16, 256)
 	n, _, _ := procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf))) // #nosec G103
 	if n > 0 && len(enumWindowsOut) < 256 {
-		enumWindowsOut = append(enumWindowsOut, Window{Handle: uint64(hwnd), Title: windows.UTF16ToString(buf[:n])})
+		exe := processExe(pid)
+		// The desktop (Program Manager) covers every monitor but is no game.
+		enumWindowsOut = append(enumWindowsOut, Window{Handle: uint64(hwnd), Title: windows.UTF16ToString(buf[:n]),
+			Exe: exe, Fullscreen: !strings.EqualFold(exe, "explorer.exe") && coversMonitor(hwnd)})
 	}
 	return 1
+}
+
+// processExe is the executable file name of pid, or "".
+func processExe(pid uint32) string {
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = windows.CloseHandle(h) }()
+	buf := make([]uint16, windows.MAX_PATH)
+	size := uint32(len(buf))
+	if err := windows.QueryFullProcessImageName(h, 0, &buf[0], &size); err != nil {
+		return ""
+	}
+	return filepath.Base(windows.UTF16ToString(buf[:size]))
+}
+
+// coversMonitor reports whether hwnd covers its whole monitor.
+func coversMonitor(hwnd uintptr) bool {
+	var r rect
+	if ok, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ok == 0 { // #nosec G103
+		return false
+	}
+	monitor, _, _ := procMonitorFromWindow.Call(hwnd, 2) // MONITOR_DEFAULTTONEAREST
+	info := struct {
+		Size          uint32
+		Monitor, Work rect
+		Flags         uint32
+	}{Size: 40}
+	if ok, _, _ := procGetMonitorInfoW.Call(monitor, uintptr(unsafe.Pointer(&info))); ok == 0 { // #nosec G103
+		return false
+	}
+	m := info.Monitor
+	return r.Left <= m.Left && r.Top <= m.Top && r.Right >= m.Right && r.Bottom >= m.Bottom
 }
 
 func monitors() []monitorInfo {

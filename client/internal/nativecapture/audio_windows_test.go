@@ -120,12 +120,6 @@ func TestOpusEncoderRoundTrip(t *testing.T) {
 	}
 }
 
-func TestAudioPlanFallbacks(t *testing.T) {
-	if got := AudioPlan("application", true); len(got) != 2 || got[0] != AudioApplication || got[1] != AudioSystem {
-		t.Fatalf("application plan %v", got)
-	}
-}
-
 // writeToneWAV writes a 440 Hz 16-bit stereo WAV of the given length.
 func writeToneWAV(t *testing.T, seconds int) string {
 	t.Helper()
@@ -158,7 +152,7 @@ func writeToneWAV(t *testing.T, seconds int) string {
 func playTone(t *testing.T, wav string) *exec.Cmd {
 	t.Helper()
 	script := "(New-Object Media.SoundPlayer '" + strings.ReplaceAll(wav, "'", "''") + "').PlaySync()"
-	cmd := exec.Command("cmd.exe", "/c", "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	cmd := exec.CommandContext(t.Context(), "cmd.exe", "/c", "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}

@@ -43,7 +43,19 @@ the current user's voice controls.
   and a second, publish-only WebRTC peer, with the same end-to-end frame
   encryption. The server must support `native-media-peer-v1`. If native
   capture is unavailable or fails, the share uses Browser capture and shows a
-  notice.
+  notice. Native mode has its own picker: live thumbnails of every monitor or
+  window (refreshed about every 1.5 s while the dialog is open), a running
+  game (a window covering its monitor) listed first, and the last shared
+  source preselected (matched by executable and title, then by executable).
+  Share audio follows the dialog's audio choice: a window share sends only
+  that application's audio, a monitor share sends system audio without
+  noXa's own voices (WASAPI process loopback, Windows 10 2004 or later). If
+  application audio cannot be captured, system audio is shared instead, with
+  a notice. Audio is 48 kHz stereo Opus (about 128 kbps), encoded by the
+  reference libopus bundled in the exe (`tools/libopus/build.sh` builds it
+  reproducibly from the pinned release; BSD license in
+  `client/internal/nativecapture/libopus`), encrypted like the browser's share
+  audio and timed on the video's capture clock.
 - **Tools → Roles:** named roles, hierarchy, member assignments and role icon
   uploads with displayed/enforced limits. Channel access can be synced with a
   parent or customized per role/member.
