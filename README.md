@@ -450,8 +450,9 @@ only.
   layer order. The preview shows thumbnails; a native camera appears in the
   program only. Audio follows the program: one window with audio enabled
   sends that application's audio, anything else with audio sends system
-  audio without noXa. Windows usually shares a camera that the call also
-  uses; when it cannot, Studio shows a notice and an empty box. If native
+  audio without noXa. A camera that another process (also the call camera)
+  holds cannot be opened on every machine: Studio then shows a notice and an
+  empty box and retries every few seconds. If native
   capture is unavailable, Studio uses Browser capture with a notice; if it
   fails while live (after one restart), Studio ends and later sessions use
   Browser capture until noXa restarts.

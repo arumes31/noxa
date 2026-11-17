@@ -14,9 +14,9 @@ import (
 
 // Studio cameras: Media Foundation source reader with its video processor
 // converting to RGB32 (BGRA) on the CPU; the compositor uploads each new
-// frame. Windows' camera frame server shares a camera between apps when
-// they can agree on a format; otherwise opening fails and the Studio shows a
-// notice instead of the camera.
+// frame. A camera another process streams may refuse a second process
+// (seen as MF_E_HW_MFT_FAILED_START_STREAMING from ReadSample): the Studio
+// then shows a notice and the compositor retries.
 
 var (
 	mfdll                          = windows.NewLazySystemDLL("mf.dll")
@@ -46,6 +46,18 @@ type cameraFrames interface {
 // openCamera starts camera id; tests replace it with a synthetic feed.
 var openCamera = func(id string) cameraFrames { return startMFCamera(id) }
 
+// cameraProcs reports a missing Media Foundation DLL (Windows N editions)
+// as an error instead of a panic on the first call.
+func cameraProcs() error {
+	for _, p := range []*windows.LazyProc{procMFStartup, procMFCreateAttributes, procMFCreateMediaType, procMFEnumDeviceSources,
+		procMFCreateDeviceSource, procMFCreateSourceReaderFromMS} {
+		if err := p.Find(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func newAttributes(n uint32) (uintptr, error) {
 	var a uintptr
 	if r, _, _ := procMFCreateAttributes.Call(uintptr(unsafe.Pointer(&a)), uintptr(n)); hresult(r).failed() { // #nosec G103
@@ -56,6 +68,9 @@ func newAttributes(n uint32) (uintptr, error) {
 
 // enumCameras calls use with each video capture device's activation object.
 func enumCameras(use func(activate uintptr)) error {
+	if err := cameraProcs(); err != nil {
+		return err
+	}
 	if err := mfStartup(); err != nil {
 		return err
 	}
@@ -166,7 +181,7 @@ func (c *mfCamera) run(id string) {
 		// #nosec G103 -- out pointers (blocks until a frame arrives).
 		if hr := vcall(reader, 9, readerFirstVideoStream, 0, uintptr(unsafe.Pointer(&index)), uintptr(unsafe.Pointer(&flags)),
 			uintptr(unsafe.Pointer(&ts)), uintptr(unsafe.Pointer(&sample))); hr.failed() {
-			c.fail(hr.err("camera ReadSample"))
+			c.fail(cameraErr(hr, "camera ReadSample"))
 			<-c.done
 			return
 		}
@@ -193,6 +208,9 @@ func (c *mfCamera) run(id string) {
 // openReader opens camera id with a source reader delivering RGB32 in the
 // camera's largest format up to 1280 wide.
 func openReader(id string) (reader, source uintptr, err error) {
+	if err := cameraProcs(); err != nil {
+		return 0, 0, err
+	}
 	if err := mfStartup(); err != nil {
 		return 0, 0, err
 	}
@@ -266,7 +284,7 @@ func openReader(id string) (reader, source uintptr, err error) {
 	vcall(out, 24, uintptr(unsafe.Pointer(&mfMTMajorType)), uintptr(unsafe.Pointer(&mfMediaTypeVideo))) // #nosec G103 -- SetGUID
 	vcall(out, 24, uintptr(unsafe.Pointer(&mfMTSubtype)), uintptr(unsafe.Pointer(&mfVideoFormatRGB32))) // #nosec G103
 	if hr := vcall(reader, 7, readerFirstVideoStream, 0, out); hr.failed() {
-		return fail(hr.err("camera SetCurrentMediaType(RGB32)"))
+		return fail(cameraErr(hr, "camera SetCurrentMediaType(RGB32)"))
 	}
 	return reader, source, nil
 }
@@ -282,7 +300,10 @@ func newAttributesType() (uintptr, error) {
 // cameraErr maps "in use" failures to ErrCameraBusy.
 func cameraErr(hr hresult, op string) error {
 	switch uint32(hr) {
-	case 0x80070005, 0xC00D3EA2, 0xC00D3704, 0x800700AA: // E_ACCESSDENIED, MF_E_VIDEO_RECORDING_DEVICE_LOCKED, MF_E_HW_MFT_FAILED_START_STREAMING, ERROR_BUSY
+	// MF_E_VIDEO_RECORDING_DEVICE_PREEMPTED, MF_E_HW_MFT_FAILED_START_STREAMING,
+	// ERROR_SHARING_VIOLATION, ERROR_BUSY (as HRESULTs). E_ACCESSDENIED is the
+	// camera privacy setting, not a busy camera.
+	case 0xC00D3EA3, 0xC00D3704, 0x80070020, 0x800700AA:
 		return fmt.Errorf("%w: %v", ErrCameraBusy, hr.err(op))
 	}
 	return hr.err(op)

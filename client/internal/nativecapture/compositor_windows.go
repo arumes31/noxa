@@ -110,10 +110,15 @@ type displayFeed struct {
 }
 
 type cameraFeed struct {
-	cam cameraFrames
-	pic gpuTexture
-	seq uint64
+	id      string
+	cam     cameraFrames
+	pic     gpuTexture
+	seq     uint64
+	retryAt time.Time // a failed camera is reopened from then on
 }
+
+// cameraRetry is how often a failed camera (busy, unplugged) is reopened.
+const cameraRetry = 3 * time.Second
 
 // compositor renders the Studio program into a fixed-size BGRA canvas: each
 // scene's layers bottom-up, a fade as two scene targets blended. It is a
@@ -158,6 +163,9 @@ func blobBytes(blob uintptr) (uintptr, uintptr) {
 func newCompositor(d *device, w, h int, inbox *studioInbox) (*compositor, error) {
 	if inbox == nil {
 		return nil, errors.New("studio scene missing")
+	}
+	if err := procD3DCompile.Find(); err != nil {
+		return nil, err // no d3dcompiler_47.dll: Browser capture instead
 	}
 	w, h = max(2, w&^1), max(2, h&^1)
 	c := &compositor{d: d, w: w, h: h, inbox: inbox, displays: map[Source]*displayFeed{}, cameras: map[string]*cameraFeed{}}
@@ -369,7 +377,7 @@ func (c *compositor) syncSources() {
 	for _, id := range cameras {
 		wantCam[id] = true
 		if c.cameras[id] == nil {
-			c.cameras[id] = &cameraFeed{cam: openCamera(id)}
+			c.cameras[id] = &cameraFeed{id: id, cam: openCamera(id)}
 		}
 	}
 	for id, feed := range c.cameras {
@@ -425,6 +433,13 @@ func (c *compositor) poll(now time.Time) {
 		if err != nil {
 			cameraErr = err.Error()
 			feed.pic.close()
+			// The other user may let go of the camera: try again now and then.
+			if feed.retryAt.IsZero() {
+				feed.retryAt = now.Add(cameraRetry)
+			} else if now.After(feed.retryAt) {
+				feed.cam.close()
+				feed.cam, feed.seq, feed.retryAt = openCamera(feed.id), 0, time.Time{}
+			}
 			continue
 		}
 		if pix == nil {

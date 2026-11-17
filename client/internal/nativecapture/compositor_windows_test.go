@@ -172,3 +172,58 @@ func TestCompositorComposesSceneOverlayAndFade(t *testing.T) {
 		t.Fatalf("sources left open after the fade: %d displays, %d cameras", len(c.displays), len(c.cameras))
 	}
 }
+
+// TestRegionConvertCopiesTheCroppedArea feeds a four-colour texture through
+// the pipeline's convert with a bottom-right Region: the converter input
+// holds only that quadrant. NOXA_NATIVE_CAPTURE=1 enables it.
+func TestRegionConvertCopiesTheCroppedArea(t *testing.T) {
+	if os.Getenv("NOXA_NATIVE_CAPTURE") == "" {
+		t.Skip("set NOXA_NATIVE_CAPTURE=1 on an interactive Windows desktop")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	initThread()
+	d, err := newDevice()
+	if err != nil {
+		t.Skipf("no D3D11 device: %v", err)
+	}
+	defer d.close()
+	const n = 128
+	pix := make([]byte, n*n*4)
+	for y := range n {
+		for x := range n {
+			i := (y*n + x) * 4
+			// BGRA quadrants: red, green / blue, white.
+			switch {
+			case x < n/2 && y < n/2:
+				pix[i+2] = 255
+			case y < n/2:
+				pix[i+1] = 255
+			case x < n/2:
+				pix[i] = 255
+			default:
+				pix[i], pix[i+1], pix[i+2] = 255, 255, 255
+			}
+			pix[i+3] = 255
+		}
+	}
+	src, err := d.uploadTexture(pix, n, n, n*4, dxgiFormatB8G8R8A8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.close()
+	s := &Session{cfg: Config{MaxWidth: n, MaxHeight: n, FPS: 30, Bitrate: 1_000_000, Source: Source{Region: &Region{X: 0.5, Y: 0.5, Width: 0.5, Height: 0.5}}}}
+	p := &pipeline{d: d, last: -1}
+	defer p.closeSized()
+	r := cropRect(n, n, s.cfg.Source.Region)
+	if err := s.ensureSized(p, r.W, r.H); err != nil {
+		t.Fatal(err)
+	}
+	s.convert(p, src.tex, r)
+	got := readBack(t, d, p.conv.input, r.W, r.H)
+	for _, xy := range [][2]int{{0, 0}, {r.W - 1, 0}, {0, r.H - 1}, {r.W - 1, r.H - 1}, {r.W / 2, r.H / 2}} {
+		if c := pixel(got, r.W, xy[0], xy[1]); c != [3]int{255, 255, 255} {
+			t.Fatalf("pixel %v = %v, want the white bottom-right quadrant", xy, c)
+		}
+	}
+}

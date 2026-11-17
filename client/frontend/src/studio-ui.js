@@ -114,6 +114,7 @@ function startNative(owner) {
         if (!owner.registry.ids().some(id => owner.registry.get(id)?.native)) {
             owner.native = false;
             clearInterval(owner.nativeTimer);
+            owner.nativeSync = null;
             showError(t("studio.nativeUnavailable"));
         }
     });
@@ -459,9 +460,9 @@ async function goLiveNative(owner) {
             return;
         }
         owner.live = !!started;
-        if (!started) showError(t("studio.liveFailed", { error: t("share.startFailed") }));
         // A Take made while the share started.
-        else owner.nativeSync.send(true);
+        if (started) owner.nativeSync.send(true);
+        else nativeStartFailed(owner);
     } catch (error) {
         if (session === owner) showError(t("studio.liveFailed", { error: error.message || String(error) }));
     } finally {
@@ -470,6 +471,20 @@ async function goLiveNative(owner) {
             if (!panel && !owner.live) disposeSession(); else schedule();
         }
     }
+}
+
+// nativeStartFailed: Go could not start (e.g. no hardware encoder). Native
+// captures are useless to Browser capture, so a fresh Browser session
+// replaces this one and says why.
+function nativeStartFailed(owner) {
+    nativeStudioFailed = true;
+    if (session !== owner) return;
+    owner.starting = false;
+    disposeSession();
+    if (!panel) return;
+    createSession();
+    render();
+    showError(t("studio.nativeStartFailed"));
 }
 
 // studioEnded: the publication stopped (Stop anywhere). The whole session
