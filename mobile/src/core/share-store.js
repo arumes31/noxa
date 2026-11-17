@@ -6,6 +6,9 @@ import { fencedWrite, identityFence, openDB, run, seal, Stores, unseal } from ".
 
 const KEY = "pending";
 export const MAX_SHARED_FILES = 10;
+// Any site can auto-submit a share POST, so the files it may push into memory
+// and storage are capped; larger shares keep only their text.
+export const MAX_SHARED_BYTES = 100 * 1024 * 1024;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -19,8 +22,11 @@ export function shareText({ title = "", text = "", url = "" } = {}) {
     return parts.join("\n");
 }
 
-/** Stores a share: {text, files: File[]} (files beyond the limit are dropped). */
-export async function putShare({ text = "", files = [] }) {
+/**
+ * Stores a share: {text, files: File[], tooLarge}. Files beyond the count
+ * limit are dropped; tooLarge records that the files were dropped for size.
+ */
+export async function putShare({ text = "", files = [], tooLarge = false }) {
     const db = await openDB();
     try {
         // The identity generation before the files are read and sealed: a
@@ -33,14 +39,14 @@ export async function putShare({ text = "", files = [] }) {
             const record = await seal(db, new Uint8Array(await file.arrayBuffer()));
             sealedFiles.push({ name: file.name || "shared", type: file.type || "", record });
         }
-        const value = { at: Date.now(), text: await seal(db, encoder.encode(text)), files: sealedFiles };
+        const value = { at: Date.now(), text: await seal(db, encoder.encode(text)), files: sealedFiles, tooLarge: Boolean(tooLarge) };
         await fencedWrite(db, [Stores.share], fence, tx => tx.objectStore(Stores.share).put(value, KEY), { onboarding: true });
     } finally {
         db.close();
     }
 }
 
-/** The waiting share as {at, text, files: File[]}, or null. */
+/** The waiting share as {at, text, files: File[], tooLarge}, or null. */
 export async function getShare() {
     const db = await openDB();
     try {
@@ -48,7 +54,7 @@ export async function getShare() {
         if (!value) return null;
         const files = [];
         for (const file of value.files || []) files.push(new File([await unseal(db, file.record)], file.name, { type: file.type }));
-        return { at: value.at, text: decoder.decode(await unseal(db, value.text)), files };
+        return { at: value.at, text: decoder.decode(await unseal(db, value.text)), files, tooLarge: Boolean(value.tooLarge) };
     } finally {
         db.close();
     }

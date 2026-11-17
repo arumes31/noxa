@@ -36,7 +36,7 @@ globalThis.addEventListener = (type, listener) => listeners.set(type, listener);
 
 await import("../src/sw.js");
 const { pending, remove } = await import("../src/core/outbox.js");
-const { getShare, clearShare } = await import("../src/core/share-store.js");
+const { getShare, clearShare, MAX_SHARED_BYTES } = await import("../src/core/share-store.js");
 
 async function dispatch(type, event) {
     const waits = [];
@@ -63,6 +63,30 @@ test("a Web Share Target post is kept for the share screen and redirected", asyn
     assert.match(share.text, /Look[\s\S]*at this[\s\S]*https:\/\/example\.org\/x/);
     assert.equal(share.files.length, 1);
     assert.equal(share.files[0].name, "note.txt");
+    assert.equal(share.tooLarge, false);
+});
+
+test("a share post whose files exceed the size cap keeps only the text and flags it", async () => {
+    await clearShare();
+    const form = new FormData();
+    form.set("text", "big one");
+    // Sized without allocating: only file.size is checked before dropping.
+    const huge = new File(["x"], "huge.bin");
+    Object.defineProperty(huge, "size", { value: MAX_SHARED_BYTES });
+    form.append("files", huge);
+    form.append("files", new File(["abc"], "small.txt"));
+    const original = Request.prototype.formData;
+    Request.prototype.formData = async () => form;
+    try {
+        const [response] = await dispatch("fetch", { request: new Request("https://chat.example/app/share", { method: "POST", body: "x" }) });
+        assert.equal(response.status, 303);
+    } finally {
+        Request.prototype.formData = original;
+    }
+    const share = await getShare();
+    assert.equal(share.text, "big one");
+    assert.equal(share.files.length, 0);
+    assert.equal(share.tooLarge, true);
 });
 
 test("message pushes carry Reply and Mark-as-read on Android, calls carry Answer and Decline, iOS gets none", async () => {

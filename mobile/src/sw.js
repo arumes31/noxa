@@ -12,7 +12,7 @@ import { SYNC_TAG, enqueue, flush, pending } from "./core/outbox.js";
 import { Msg } from "./core/frame.js";
 import { INTENT_CACHE, announceRead, registerSubscription, saveAnswerIntent } from "./core/push.js";
 import { currentFence } from "./core/db.js";
-import { putShare, shareText } from "./core/share-store.js";
+import { MAX_SHARED_BYTES, MAX_SHARED_FILES, putShare, shareText } from "./core/share-store.js";
 
 // One cache per build (vite.sw.config.js), so activate drops the previous
 // build's content-hashed assets instead of piling them up forever.
@@ -54,8 +54,10 @@ async function mutedTags() {
 async function receiveShare(request) {
     try {
         const form = await request.formData();
-        const files = form.getAll("files").filter(file => typeof file === "object" && file.size > 0);
-        await putShare({ text: shareText({ title: form.get("title"), text: form.get("text"), url: form.get("url") }), files });
+        const files = form.getAll("files").filter(file => typeof file === "object" && file.size > 0).slice(0, MAX_SHARED_FILES);
+        const tooLarge = files.reduce((sum, file) => sum + file.size, 0) > MAX_SHARED_BYTES;
+        const text = shareText({ title: form.get("title"), text: form.get("text"), url: form.get("url") });
+        await putShare({ text, files: tooLarge ? [] : files, tooLarge });
     } catch {
         // The share screen reports that nothing arrived.
     }

@@ -5,7 +5,7 @@ import { uploadAttachment } from "../core/files.js";
 import { formatSize } from "../core/message-format.js";
 import { clearShare, getShare, putShare } from "../core/share-store.js";
 import { t } from "../i18n.js";
-import { avatar, h, toast } from "./dom.js";
+import { avatar, h, replaceContent, toast } from "./dom.js";
 import { dmHref, header, lastMessage, scopeName } from "./common.js";
 import "./rich-strings.js";
 import "./rich-text.css";
@@ -63,8 +63,10 @@ export function renderShare(root) {
     let cancelled = false;
     getShare().catch(() => null).then(share => {
         if (cancelled) return;
+        const tooLarge = share?.tooLarge ? h("p", { class: "hint", role: "alert" }, t("rich.share.tooLarge")) : null;
         if (!share || (!share.text && !share.files.length)) {
-            body.replaceChildren(h("p", { class: "hint" }, t("rich.share.empty")), h("a", { class: "btn", href: "#/home" }, t("nav.home")));
+            body.replaceChildren(tooLarge || h("p", { class: "hint" }, t("rich.share.empty")), h("a", { class: "btn", href: "#/home" }, t("nav.home")));
+            if (tooLarge) clearShare().catch(() => {}); // the notice shows once
             return;
         }
         const text = h("textarea", { class: "share-text", rows: "3", "aria-label": t("rich.share.text") });
@@ -117,7 +119,8 @@ export function renderShare(root) {
                 target.kind === "dm" ? avatar(target.name, "md") : h("span", { class: "hash", "aria-hidden": "true" }, target.mark),
                 h("span", { class: "row-main" }, h("span", { class: "row-title" }, target.name),
                     h("span", { class: "row-sub" }, t(`rich.share.kind.${target.kind}`)))))));
-        body.replaceChildren(
+        replaceContent(body,
+            tooLarge,
             h("div", { class: "card share-preview" },
                 text,
                 share.files.length ? files : null,
