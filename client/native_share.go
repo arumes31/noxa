@@ -545,7 +545,7 @@ func nativeDiagnosticsRow(prev, cur nativeSample, cs nativecapture.Stats, ss nat
 		RequestedFPS: f(float64(level.FPS)), SettingsFPS: f(float64(level.FPS)),
 		Width: f(float64(cs.Width)), Height: f(float64(cs.Height)),
 		TargetBitrateBPS: f(float64(level.Bitrate)),
-		FramesEncoded: f(float64(cs.Encoded)), FramesSent: f(float64(ss.FramesSent)), KeyFrames: f(float64(min(cs.Keyframes, cs.Encoded))),
+		FramesEncoded:    f(float64(cs.Encoded)), FramesSent: f(float64(ss.FramesSent)), KeyFrames: f(float64(min(cs.Keyframes, cs.Encoded))),
 		PacketsSent: f(float64(ss.PacketsSent)), BytesSent: f(float64(ss.BytesSent)),
 		RetransmittedPackets: f(float64(min(ss.RetransmittedPackets, ss.PacketsSent))), RetransmittedBytes: f(float64(min(ss.RetransmittedBytes, ss.BytesSent)))}
 	if cs.Width > 0 {
