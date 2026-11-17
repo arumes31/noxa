@@ -55,8 +55,6 @@ body.compact .topbar-tools { display: none; }
 #sidebar-scroll > #channel-tree { order: 1; }
 #sidebar-scroll > #text-section { order: 2; }
 #sidebar-scroll > #direct-section { order: -1; }
-#sidebar-scroll > .group-divider { order: 4; }
-#sidebar-scroll > .group-sidebar { order: 5; }
 .side-head { display: flex; align-items: center; gap: 6px; }
 .side-label { flex: 1; min-width: 0; margin: 0; font: inherit; letter-spacing: inherit; color: inherit; }
 .side-row {
