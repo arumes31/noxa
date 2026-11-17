@@ -1522,9 +1522,10 @@ operated. Update these local procedures when architecture, telemetry or recovery
 steps change. The `docs/` directory and `docker/secrets/` are local-only and ignored
 by Git; keep operator notes and credentials out of the public repository.
 
-The image sets `GOMEMLIMIT=850MiB`, a soft Go heap limit sized for a 1 GiB
-container. Raise it with the container's memory limit (or set
-`GOMEMLIMIT=off`). At most three 64 MiB password checks run at once; logins
+The image sets `GOMEMLIMIT=700MiB`, a soft Go heap limit sized for a 1 GiB
+container that leaves room for one spoken-name synthesis (about 250 MB in its
+own process, outside the Go heap). Raise it with the container's memory limit
+(or set `GOMEMLIMIT=off`). At most three 64 MiB password checks run at once; logins
 past that get `server is busy, try again in a moment` and are counted as
 `noxa_auth_failures_total{reason="busy"}`.
 

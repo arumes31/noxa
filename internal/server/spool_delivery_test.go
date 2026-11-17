@@ -16,16 +16,17 @@ import (
 // then fails, like a peer whose connection broke mid-backlog.
 type frameCountingConn struct {
 	net.Conn
-	limit  int
-	frames int
+	limit  int64
+	frames atomic.Int64
 	closed atomic.Bool
 }
 
 func (c *frameCountingConn) Write(p []byte) (int, error) {
-	if len(p) == 6 { // frame header
-		c.frames++
+	frames := c.frames.Load()
+	if len(p) == 6 { // frame header; spooled chat payloads are far longer
+		frames = c.frames.Add(1)
 	}
-	if c.frames > c.limit {
+	if frames > c.limit {
 		return 0, errors.New("broken pipe")
 	}
 	return len(p), nil
@@ -34,14 +35,21 @@ func (c *frameCountingConn) SetWriteDeadline(time.Time) error { return nil }
 func (c *frameCountingConn) Close() error                     { c.closed.Store(true); return nil }
 
 // A backlog far beyond the 16-slot broadcast queue is delivered in budgeted
-// passes without closing the client, and only written rows are marked.
+// passes without closing the client, and only written rows are marked. A
+// login replays at most spoolDeliveryPasses passes.
 func TestDeliverSpooledWritesBacklogDirectly(t *testing.T) {
-	const backlog = spoolDeliveryBudget + 88
+	const capped = spoolDeliveryPasses * spoolDeliveryBudget
 	for _, tc := range []struct {
-		name  string
-		limit int
-	}{{"healthy", backlog}, {"breaks", 20}} {
+		name             string
+		backlog, written int
+		limit            int64
+	}{
+		{"healthy", spoolDeliveryBudget + 88, spoolDeliveryBudget + 88, 1 << 30},
+		{"breaks", spoolDeliveryBudget + 88, 20, 20},
+		{"bounded", capped + 10, capped, 1 << 30},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
+			backlog := tc.backlog
 			spool := &fakeSpool{}
 			for range backlog {
 				if err := spool.SpoolMessage(t.Context(), 1, 2, "admin-uid", "sealed"); err != nil {
@@ -51,11 +59,10 @@ func TestDeliverSpooledWritesBacklogDirectly(t *testing.T) {
 			s := New(&config.Config{}, zap.NewNop(), &Deps{Spool: spool})
 			conn := &frameCountingConn{limit: tc.limit}
 			s.deliverSpooled(t.Context(), &Client{ID: "c", Conn: conn}, 2)
-			written := min(tc.limit, backlog)
-			if got := spool.pendingCount(); got != backlog-written {
-				t.Fatalf("pending = %d, want %d (written %d)", got, backlog-written, written)
+			if got := spool.pendingCount(); got != backlog-tc.written {
+				t.Fatalf("pending = %d, want %d", got, backlog-tc.written)
 			}
-			if conn.closed.Load() != (tc.limit < backlog) {
+			if conn.closed.Load() != (tc.limit < int64(backlog)) {
 				t.Fatalf("client closed = %v", conn.closed.Load())
 			}
 		})

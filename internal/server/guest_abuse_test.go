@@ -173,3 +173,38 @@ func TestGuestHandoverKeepsItsSlotAgainstARacingGuest(t *testing.T) {
 		t.Fatalf("racing guest = %+v, want refused at the cap", r)
 	}
 }
+
+// An IPv6 guest ban stores the /64, and login checks of the raw peer address
+// reject the original address and its neighbours, but not another prefix.
+func TestGuestBanIPv6PrefixRejectsTheSubnet(t *testing.T) {
+	dbURL := os.Getenv("NOXA_TEST_DATABASE_URL")
+	if dbURL == "" {
+		dbURL = "postgres://noxa:noxa@localhost:5432/noxa?sslmode=disable"
+	}
+	st, err := store.New(dbURL, zap.NewNop(), 5, 1, time.Minute)
+	if err != nil {
+		if os.Getenv("NOXA_TEST_DATABASE_URL") != "" {
+			t.Fatalf("configured database unavailable: %v", err)
+		}
+		t.Skipf("database unavailable, skipping: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := st.Migrate(); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	const guest, prefix = "guest:ban-v6", "2001:db8:77:2::/64"
+	t.Cleanup(func() {
+		_, _ = st.DB().ExecContext(ctx, `DELETE FROM bans WHERE value IN ($1, $2)`, prefix, guest)
+	})
+	s := New(&config.Config{}, zap.NewNop(), &Deps{Bans: st, BanAdmin: st, Auth: auth.New(st, zap.NewNop())})
+	if err := s.insertBan(ctx, guest, s.guestBanIP(guestOn("2001:db8:77:2::7", false)), "spam", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	for ip, banned := range map[string]bool{"2001:db8:77:2::7": true, "2001:db8:77:2::8": true, "2001:db8:77:3::7": false} {
+		reason, err := s.banRejectReason(ctx, guestOn(ip, false), "guest:fresh-v6", ip)
+		if err != nil || (reason != "") != banned {
+			t.Errorf("%s: reason %q err %v, want banned %v", ip, reason, err, banned)
+		}
+	}
+}

@@ -360,10 +360,13 @@ func (s *TCPServer) pushDirect(client *Client, toUniqueID string) {
 }
 
 // spoolPageSize and spoolDeliveryBudget bound the database and heap work of
-// one delivery pass; deliverSpooled runs passes until the backlog is drained.
+// one delivery pass; deliverSpooled runs up to spoolDeliveryPasses passes, so
+// messages arriving during replay cannot hold login completion forever. The
+// rest is delivered on the next login or key publish.
 const (
 	spoolPageSize       = 256
 	spoolDeliveryBudget = 512
+	spoolDeliveryPasses = 8
 )
 
 // sessionPendingSpool is implemented by spools that can select, in the
@@ -407,7 +410,7 @@ func (s *TCPServer) deliverSpooled(ctx context.Context, client *Client, userID i
 	if userID <= 0 || s.deps.Spool == nil {
 		return
 	}
-	for ctx.Err() == nil && s.deliverSpooledPass(ctx, client, userID) {
+	for pass := 0; pass < spoolDeliveryPasses && ctx.Err() == nil && s.deliverSpooledPass(ctx, client, userID); pass++ {
 	}
 }
 
@@ -432,7 +435,6 @@ func (s *TCPServer) deliverSpooledPass(ctx context.Context, client *Client, user
 		return false
 	}
 	more := len(msgs) >= spoolDeliveryBudget
-	msgs = msgs[:min(len(msgs), spoolDeliveryBudget)] // the fallback PendingMessages is unpaged
 
 	device := client.currentDeviceID()
 	ids := make([]int64, 0, len(msgs))
@@ -492,6 +494,10 @@ func (s *TCPServer) deliverSpooledPass(ctx context.Context, client *Client, user
 			break
 		}
 		ids = append(ids, m.ID)
+		if len(ids) >= spoolDeliveryBudget { // the fallback PendingMessages is unpaged
+			more = true
+			break
+		}
 	}
 	if len(ids) == 0 {
 		return false

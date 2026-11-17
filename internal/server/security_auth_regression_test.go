@@ -198,16 +198,23 @@ func TestPasswordLoginWithSaturatedKDFSlotsIsBusy(t *testing.T) {
 	}
 	defer held.Cancel()
 	// Clients without the busy feature get the lockout text they already retry.
-	for features, want := range map[string]string{netproto.ClientFeatureBusy: netproto.ReasonServerBusy, "": "too many failed logins, try again later"} {
+	for _, tc := range []struct {
+		features []string
+		want     string
+	}{
+		{[]string{netproto.ClientFeatureBusy}, netproto.ReasonServerBusy},
+		{nil, "too many failed logins, try again later"},
+	} {
+		features, want := tc.features, tc.want
 		conn := dialRetry(t, env.addr)
-		send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw", ClientFeatures: []string{features}})
+		send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw", ClientFeatures: features})
 		var resp netproto.AuthResponse
 		if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthResponse), &resp); err != nil {
 			t.Fatal(err)
 		}
 		_ = conn.Close()
 		if resp.OK || resp.Reason != want {
-			t.Fatalf("features %q: response = %+v, want %q", features, resp, want)
+			t.Fatalf("features %v: response = %+v, want %q", features, resp, want)
 		}
 	}
 }
