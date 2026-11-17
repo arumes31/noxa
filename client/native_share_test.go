@@ -151,3 +151,19 @@ func TestStopNativeShareIgnoresAnOlderShare(t *testing.T) {
 		t.Fatal("the current share was not stopped")
 	}
 }
+
+func TestDetachClosesEveryDetachedNativeShare(t *testing.T) {
+	m := &connManager{}
+	a := &nativeShare{cm: m, stop: make(chan struct{})}
+	b := &nativeShare{cm: m, stop: make(chan struct{})}
+	m.nativeShare = a
+	m.mu.Lock()
+	m.detachLocked()
+	m.nativeShare = b // a second detach before the first finishDetach
+	m.detachLocked()
+	m.mu.Unlock()
+	m.finishDetach(nil, nil, nil, false)
+	if !a.stoppedLocked() || !b.stoppedLocked() || m.nativeShare != nil {
+		t.Fatal("a detached native share was not closed")
+	}
+}

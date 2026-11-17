@@ -124,7 +124,7 @@ type connManager struct {
 	supportsNativeMediaPeer bool
 	nativeShare             *nativeShare
 	nativeKeyring           *framecrypt.Encryptor
-	detachedNative          *nativeShare // detached with its connection, closed by finishDetach
+	detachedNative          []*nativeShare // detached with their connection, closed by finishDetach
 	// ratchetWake: the server's olm_pending doorbell wakes the drain loop.
 	ratchetWake        chan struct{}
 	authorizationModel string
@@ -970,7 +970,7 @@ func (m *connManager) detachLocked() (net.Conn, []chan requestResult, []net.Conn
 	m.mediaRoster, m.mediaRosterLast = nil, nil
 	// So does a native share: finishDetach stops its capture and peer.
 	if m.nativeShare != nil {
-		m.detachedNative, m.nativeShare = m.nativeShare, nil
+		m.detachedNative, m.nativeShare = append(m.detachedNative, m.nativeShare), nil
 	}
 	// The consumer is fenced by the epoch change; stopping awaits its
 	// in-flight operation (which takes m.mu), so it runs after unlocking.
@@ -1030,10 +1030,10 @@ func (m *connManager) sendGoodbye(conn net.Conn) {
 
 func (m *connManager) finishDetach(conn net.Conn, waiters []chan requestResult, transferConns []net.Conn, emitDisconnected bool) {
 	m.mu.Lock()
-	native := m.detachedNative
+	detached := m.detachedNative
 	m.detachedNative = nil
 	m.mu.Unlock()
-	if native != nil {
+	for _, native := range detached {
 		native.close() // conn is detached: no native offer reaches a later session
 	}
 	if m.pubKeys != nil {

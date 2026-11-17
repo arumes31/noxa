@@ -752,8 +752,11 @@ export function createVideoPublication({ policy }) {
                     transferDisplayCapture(display, cropped.stream);
                     display = cropped.stream;
                 }
+                const scope = captureMediaScope();
                 let started = native ? await startNativeShare({ surface, source: native, ...selected, replacing }) : false;
                 if (started) { stopDisplayCapture(display); display = null; }
+                // An obsolete native attempt (session or tab changed) is no browser fallback.
+                else if (native && !mediaScopeIsCurrent(scope)) { stopDisplayCapture(display); display = null; return; }
                 // Native unavailable or failed: the browser path, with a notice.
                 if (native && !started) V().toast(tLabel("share.nativeFallback"), "warn");
                 if (!started && !(native && V().state.screenSharing)) started = await startShare({ surface, ...selected, audioMode: view.audio(), replacing: replacing && !!V().state.screenSharing, selectedDisplay: display });
@@ -1058,6 +1061,7 @@ export function createVideoPublication({ policy }) {
         return true;
     }
 
+    let nativePending = null; // the native share whose Start is in flight
     // startNativeShare captures, encodes, encrypts and sends in Go on the
     // publish-only native peer. The webview owns the publication (a still
     // stand-in track is its identity, never sent) and forwards generation,
@@ -1089,6 +1093,9 @@ export function createVideoPublication({ policy }) {
             state.nativeShare = null;
             stopNative();
         });
+        // Go may end the share before Start resolves: the event handler marks it here.
+        const pending = { id, tabID, ended: false };
+        nativePending = pending;
         try {
             await window.go.main.App.StartNativeScreenShareForTab(tabID, { id, source, max_width: bound(width, limits?.video_max_width),
                 max_height: bound(height, limits?.video_max_height), fps: p.fps, bitrate });
@@ -1096,9 +1103,9 @@ export function createVideoPublication({ policy }) {
             stopDisplayCapture(stream);
             if (current()) V().sysMsg(tLabel("share.nativeFailed") + (error?.message || error));
             return false;
-        }
-        // The session, peer or share state changed while Go started: discard this capture untouched.
-        if (!current() || state.nativeShare || state.screenSharing || track.readyState !== "live") {
+        } finally { if (nativePending === pending) nativePending = null; }
+        // The session, peer or share state changed while Go started (or Go already ended it): discard this capture.
+        if (pending.ended || !current() || state.nativeShare || state.screenSharing || track.readyState !== "live") {
             stopDisplayCapture(stream);
             stopNative();
             return false;
@@ -1143,6 +1150,7 @@ export function createVideoPublication({ policy }) {
         let event = payload;
         if (typeof payload === "string") { try { event = JSON.parse(payload); } catch { event = null; } }
         const { state } = V();
+        if ((event?.state === "ended" || event?.state === "fallback") && nativeEventIsCurrent(event, nativePending)) { nativePending.ended = true; return; }
         // A delayed event of an older share or another tab never touches this one.
         if (!event || !nativeEventIsCurrent(event, state.nativeShare)) return;
         if (event.state === "minimized") V().toast(tLabel("share.nativeMinimized"), "warn");
@@ -1152,8 +1160,9 @@ export function createVideoPublication({ policy }) {
             // Another startup owns the share slot: only end this one.
             if (state.shareStarting || state.shareStopping) { void doStopShare(); return; }
             const request = {}; state.shareStarting = request; syncShareButton();
+            const scope = captureMediaScope();
             void doStopShare().then(() => {
-                if (state.shareStarting !== request || state.screenSharing) return;
+                if (state.shareStarting !== request || state.screenSharing || !mediaScopeIsCurrent(scope)) return;
                 V().toast(tLabel("share.nativeFallback"), "warn");
                 // Some runtimes need a user gesture for the browser picker; a refusal leaves the share off.
                 return startShare({ surface, preset: "custom", custom: { width: preset.width, height: preset.height, fps: preset.fps },
