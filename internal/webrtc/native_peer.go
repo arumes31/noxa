@@ -31,14 +31,16 @@ func (v *Voice) HandleNativeOffer(clientID, offerSDP string, slots map[string]st
 	if err != nil {
 		return "", err
 	}
-	if v.engine.PeerConnection(clientID) == nil {
+	owner := v.engine.PeerConnection(clientID)
+	if owner == nil {
 		return "", ErrNoPeer
 	}
 	key := NativePeerID(clientID)
 	if existing := v.engine.PeerConnection(key); existing != nil {
 		if remote := existing.pc.RemoteDescription(); remote != nil {
 			if previous, err := remoteFingerprint(remote.SDP); err == nil && previous == fingerprint {
-				v.router.SetNativeTrackSlots(clientID, slots)
+				// Waking the readers also resumes a track that lost its slot.
+				v.router.SetNativeTrackSlots(clientID, existing, slots)
 				v.engine.mu.RLock()
 				bounds := v.engine.videoBounds
 				v.engine.mu.RUnlock()
@@ -51,17 +53,17 @@ func (v *Voice) HandleNativeOffer(clientID, offerSDP string, slots map[string]st
 	if err != nil {
 		return "", err
 	}
-	// ClosePeer removes the browser peer before closing the native one, so
-	// this recheck cannot leave a native peer behind a finished session.
-	if v.engine.PeerConnection(clientID) == nil {
-		_ = v.CloseNativePeer(clientID)
+	v.router.AttachNativePeer(clientID, wrapper, owner)
+	// ClosePeer and rebuilds replace the browser peer before closing the
+	// native one, so this recheck cannot leave a native peer behind its owner.
+	if v.engine.PeerConnection(clientID) != owner {
+		v.closeNative(clientID, wrapper)
 		return "", ErrNoPeer
 	}
-	v.router.SetNativeTrackSlots(clientID, slots)
-	v.router.AttachNativePeer(clientID, wrapper)
+	v.router.SetNativeTrackSlots(clientID, wrapper, slots)
 	answer, err := wrapper.HandleOffer(offerSDP)
 	if err != nil {
-		_ = v.CloseNativePeer(clientID)
+		v.closeNative(clientID, wrapper)
 		return "", err
 	}
 	forwardLocalCandidates(wrapper, onLocalCandidate)
@@ -72,14 +74,27 @@ func (v *Voice) HandleNativeOffer(clientID, offerSDP string, slots map[string]st
 // CloseNativePeer closes clientID's native media peer, if any. Its tracks
 // stop; the client's publications are left to MsgVideoStreamControl.
 func (v *Voice) CloseNativePeer(clientID string) error {
-	key := NativePeerID(clientID)
-	wrapper := v.engine.PeerConnection(key)
-	if wrapper == nil {
-		return nil
+	if wrapper := v.engine.PeerConnection(NativePeerID(clientID)); wrapper != nil {
+		v.closeNative(clientID, wrapper)
 	}
-	v.router.DetachNativePeer(clientID, wrapper)
-	v.engine.closePeerIf(key, wrapper)
 	return nil
+}
+
+// closeNativeOwnedBy closes clientID's native media peer only if it was
+// created for the browser peer owner, sparing a replacement session's peer.
+func (v *Voice) closeNativeOwnedBy(clientID string, owner *PeerConnectionWrapper) {
+	if native := v.router.nativePeerOf(clientID); native.pc != nil && native.owner == owner {
+		v.closeNative(clientID, native.pc)
+	}
+}
+
+// closeNative closes exactly wrapper; a stale wrapper leaves its
+// replacement's registration and declarations alone.
+func (v *Voice) closeNative(clientID string, wrapper *PeerConnectionWrapper) {
+	v.router.DetachNativePeer(clientID, wrapper)
+	if !v.engine.closePeerIf(NativePeerID(clientID), wrapper) {
+		_ = wrapper.Close()
+	}
 }
 
 // checkNativeOffer admits only screen and screenaudio declarations, and only

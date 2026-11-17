@@ -248,6 +248,7 @@ func TestNativeOfferAdmitsOnlyDeclaredScreenTracks(t *testing.T) {
 func TestNativeAndBrowserScreenClaims(t *testing.T) {
 	r := NewRouter(nil)
 	native := &PeerConnectionWrapper{}
+	r.AttachNativePeer("pub", native, nil)
 	key := SlotScreen + slotSep
 	r.SetTrackSlots("pub", map[string]string{"browser-screen": SlotScreen})
 	browser, ok := r.claimSlotFrom("pub", key, "browser-screen", nil)
@@ -257,7 +258,7 @@ func TestNativeAndBrowserScreenClaims(t *testing.T) {
 	if _, ok := r.claimSlotFrom("pub", key, "native-screen", native); ok {
 		t.Fatal("undeclared native track stole the screen")
 	}
-	r.SetNativeTrackSlots("pub", map[string]string{"native-screen": SlotScreen})
+	r.SetNativeTrackSlots("pub", native, map[string]string{"native-screen": SlotScreen})
 	nativeToken, ok := r.claimSlotFrom("pub", key, "native-screen", native)
 	if !ok || r.ownsSlot("pub", key, browser) {
 		t.Fatal("native declaration did not replace the browser screen")
@@ -276,5 +277,127 @@ func TestNativeAndBrowserScreenClaims(t *testing.T) {
 	defer r.mu.RUnlock()
 	if len(r.nativeSlots["pub"]) != 0 {
 		t.Fatalf("superseded native declaration kept: %v", r.nativeSlots["pub"])
+	}
+}
+
+// A stale native peer (replaced by w2) can neither detach nor redeclare.
+func TestStaleNativePeerCannotTouchItsReplacement(t *testing.T) {
+	r := NewRouter(nil)
+	w1, w2 := &PeerConnectionWrapper{}, &PeerConnectionWrapper{}
+	r.AttachNativePeer("pub", w1, nil)
+	r.SetNativeTrackSlots("pub", w1, map[string]string{"old": SlotScreen})
+	r.AttachNativePeer("pub", w2, nil)
+	r.SetNativeTrackSlots("pub", w2, map[string]string{"new": SlotScreen})
+	r.DetachNativePeer("pub", w1)
+	r.SetNativeTrackSlots("pub", w1, map[string]string{"old": SlotScreen})
+	r.mu.RLock()
+	slots, current := r.nativeSlots["pub"], r.nativePeers["pub"].pc
+	r.mu.RUnlock()
+	if current != w2 || len(slots) != 1 || slots["new"] != SlotScreen {
+		t.Fatalf("stale native peer changed its replacement: current %p, slots %v", current, slots)
+	}
+	r.DetachNativePeer("pub", w2)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if len(r.nativePeers) != 0 || len(r.nativeSlots) != 0 {
+		t.Fatal("current native peer not detached")
+	}
+}
+
+// A native "" layer taking over a browser simulcast screen retires every
+// browser layer: claims, live flags and source registrations.
+func TestNativeScreenRetiresBrowserSimulcastLayers(t *testing.T) {
+	r := NewRouter(nil)
+	r.SetTrackSlots("pub", map[string]string{"browser-screen": SlotScreen})
+	var browserLive []*slotClaim
+	for i, rid := range []string{"f", "h", "q"} {
+		if _, ok := r.claimSlotFrom("pub", SlotScreen+slotSep+rid, "browser-screen", nil); !ok {
+			t.Fatal("browser layer rejected")
+		}
+		r.mu.Lock()
+		claim := r.slotClaims["pub"][SlotScreen+slotSep+rid]
+		browserLive = append(browserLive, &claim)
+		if r.videoSources["pub"] == nil {
+			r.videoSources["pub"] = map[string]map[string]uint32{SlotScreen: {}}
+		}
+		r.videoSources["pub"][SlotScreen][rid] = uint32(i + 1)
+		r.mu.Unlock()
+	}
+	native := &PeerConnectionWrapper{}
+	r.AttachNativePeer("pub", native, nil)
+	r.SetNativeTrackSlots("pub", native, map[string]string{"native-screen": SlotScreen})
+	if _, ok := r.claimSlotFrom("pub", SlotScreen+slotSep, "native-screen", native); !ok {
+		t.Fatal("native screen rejected")
+	}
+	for _, claim := range browserLive {
+		if claim.live.Load() {
+			t.Fatal("superseded browser layer still live")
+		}
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if len(r.slotClaims["pub"]) != 1 || len(r.videoSources["pub"][SlotScreen]) != 0 {
+		t.Fatalf("browser layers survived: claims %v sources %v", r.slotClaims["pub"], r.videoSources["pub"])
+	}
+	if r.publisherPeerLocked("pub", SlotScreen) != native {
+		t.Fatal("screen not attributed to the native peer")
+	}
+}
+
+// A native track that lost its slot resumes on the same receiver after a
+// renegotiation with an unchanged transport (Pion emits no second OnTrack).
+func TestNativeTrackResumesAfterLosingItsSlot(t *testing.T) {
+	f := newNativeFixture(t)
+	viewer := f.addViewer(t, "viewer")
+	id := slotTrackID("pub", SlotScreen)
+	timingWait(t, "screen at the viewer", 10*time.Second, func() bool { return viewer.count(id) > 0 })
+
+	// A newer browser screen takes the slot.
+	f.router.SetTrackSlots("pub", map[string]string{"browser-screen": SlotScreen})
+	if _, ok := f.router.claimSlotFrom("pub", SlotScreen+slotSep, "browser-screen", nil); !ok {
+		t.Fatal("browser screen rejected")
+	}
+	timingWait(t, "native source retired", 5*time.Second, func() bool {
+		f.router.mu.RLock()
+		defer f.router.mu.RUnlock()
+		return f.router.slotClaims["pub"][SlotScreen+slotSep].native == nil
+	})
+
+	// The native peer re-offers on the same transport and declares screen again.
+	offer, err := f.publisher.CreateOffer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.publisher.SetLocalDescription(offer); err != nil {
+		t.Fatal(err)
+	}
+	answer, err := f.voice.HandleNativeOffer("pub", offer.SDP, map[string]string{nativeScreenKind.trackID: SlotScreen}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.publisher.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answer}); err != nil {
+		t.Fatal(err)
+	}
+	timingWait(t, "native screen reclaimed", 5*time.Second, func() bool {
+		f.router.mu.RLock()
+		defer f.router.mu.RUnlock()
+		return f.router.videoSources["pub"][SlotScreen][""] == f.source.ssrc() && f.router.slotClaims["pub"][SlotScreen+slotSep].native != nil
+	})
+	before := viewer.count(id)
+	timingWait(t, "screen flowing again", 5*time.Second, func() bool { return viewer.count(id) > before+10 })
+}
+
+// The reaper of an old browser peer must spare a native peer created for its
+// replacement.
+func TestNativePeerSurvivesStaleOwnerClose(t *testing.T) {
+	f := newNativeFixture(t)
+	stale := &PeerConnectionWrapper{}
+	f.voice.closeNativeOwnedBy("pub", stale)
+	if f.engine.PeerConnection(NativePeerID("pub")) == nil {
+		t.Fatal("a stale owner closed the native peer")
+	}
+	f.voice.closeNativeOwnedBy("pub", f.engine.PeerConnection("pub"))
+	if f.engine.PeerConnection(NativePeerID("pub")) != nil {
+		t.Fatal("the owner could not close its native peer")
 	}
 }

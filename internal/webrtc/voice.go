@@ -490,7 +490,7 @@ func (v *Voice) redeliverOffer(clientID string, st *renegState, seq uint64, wrap
 		if v.engine.closePeerIf(clientID, wrapper) {
 			v.stopRenegIf(clientID, st)
 			v.router.detachPeerKeepChannelIf(clientID, wrapper)
-			_ = v.CloseNativePeer(clientID)
+			v.closeNativeOwnedBy(clientID, wrapper)
 		}
 		return
 	}
