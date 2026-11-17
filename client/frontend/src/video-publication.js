@@ -756,7 +756,7 @@ export function createVideoPublication({ policy }) {
                 if (started) { stopDisplayCapture(display); display = null; }
                 // Native unavailable or failed: the browser path, with a notice.
                 if (native && !started) V().toast(tLabel("share.nativeFallback"), "warn");
-                if (!started && !V().state.screenSharing) started = await startShare({ surface, ...selected, audioMode: view.audio(), replacing: replacing && !!V().state.screenSharing, selectedDisplay: display });
+                if (!started && !(native && V().state.screenSharing)) started = await startShare({ surface, ...selected, audioMode: view.audio(), replacing: replacing && !!V().state.screenSharing, selectedDisplay: display });
                 if (started) closeDialog(overlay, "started");
                 else if (isCurrentServerDialog(overlay)) { view.clearPreview(); error.textContent = tLabel("share.startFailed"); }
             } catch (failure) {

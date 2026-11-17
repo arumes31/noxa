@@ -2,6 +2,8 @@
 // encryption and the publish-only "native" peer run in Go. The webview keeps
 // the publication lifecycle and mirrors its "self|screen" media keys here.
 // Frames never pass through the webview.
+import { observeMediaKeys } from "./media-e2ee.js";
+
 const STORAGE_KEY = "noxa.screenCaptureBackend";
 const app = () => window.go?.main?.App;
 
@@ -63,3 +65,5 @@ export function nativeStandInStream(label) {
     g.fillText(label, 160, 95);
     return canvas.captureStream(1);
 }
+
+observeMediaKeys(mirrorNativeKey);
