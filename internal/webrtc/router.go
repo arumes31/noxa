@@ -287,6 +287,9 @@ type Router struct {
 	// (screen and screenaudio only). The latest declaration of a slot wins:
 	// declaring it on one peer drops it from the other peer's map.
 	nativeSlots map[string]map[string]string
+	// nativePeers is each publisher's attached native media peer. Native
+	// declaration and detach calls act only for the current one.
+	nativePeers map[string]nativePeer
 	// slotClaims records which inbound track currently owns each of a
 	// publisher's slots (publisherID -> claim key -> token). A second track
 	// claiming a live slot is refused, so two sources can never be
@@ -853,19 +856,32 @@ func (r *Router) removePublisherLocked(subscriberID, publisherID string) bool {
 // renegotiated. Unknown slot names are rejected: an inbound track the router
 // cannot place is dropped rather than merged into another slot (70).
 func (r *Router) SetTrackSlots(publisherID string, slots map[string]string) {
-	r.setTrackSlots(publisherID, slots, false)
+	r.setTrackSlots(publisherID, slots, nil)
 }
 
-// SetNativeTrackSlots is SetTrackSlots for the publisher's native media peer,
-// limited to the screen and screenaudio slots. Declaring a slot on either peer
-// drops the other peer's declaration of it, so the newest declared track
-// takes over the slot (see claimSlotFrom) and the publication is unchanged.
-func (r *Router) SetNativeTrackSlots(publisherID string, slots map[string]string) {
-	r.setTrackSlots(publisherID, slots, true)
+// SetNativeTrackSlots is SetTrackSlots for the publisher's native media peer
+// pc, limited to the screen and screenaudio slots, and a no-op unless pc is
+// the attached native peer. Declaring a slot on either peer drops the other
+// peer's declaration of it, so the newest declared track takes over the slot
+// (see claimSlotFrom) and the publication is unchanged. It wakes pc's track
+// readers, so a track that lost its slot resumes without a new OnTrack.
+func (r *Router) SetNativeTrackSlots(publisherID string, pc *PeerConnectionWrapper, slots map[string]string) {
+	r.setTrackSlots(publisherID, slots, pc)
 }
 
-func (r *Router) setTrackSlots(publisherID string, slots map[string]string, native bool) {
+func (r *Router) setTrackSlots(publisherID string, slots map[string]string, nativePC *PeerConnectionWrapper) {
+	native := nativePC != nil
 	r.mu.Lock()
+	if native {
+		current := r.nativePeers[publisherID]
+		if current.pc != nativePC {
+			r.mu.Unlock()
+			return
+		}
+		close(current.wake)
+		current.wake = make(chan struct{})
+		r.nativePeers[publisherID] = current
+	}
 	before := r.publisherSlotsLocked(publisherID)
 	previousRecordingSlot := r.recordingVideoSlotLocked(publisherID)
 
@@ -1030,7 +1046,50 @@ func (r *Router) claimSlotFrom(clientID, key, trackID string, native *PeerConnec
 	live := new(atomic.Bool)
 	live.Store(true)
 	claims[key] = slotClaim{token: r.slotEpoch, trackID: trackID, live: live, native: native}
+	r.retireOtherPeerSlotLocked(clientID, key, native)
 	return r.slotEpoch, true
+}
+
+// retireOtherPeerSlotLocked ends every claim of the OTHER peer on the slot
+// of keep (any simulcast layer) whose track its peer no longer declares, and
+// drops those layers' source registrations: a native "" layer otherwise
+// leaves superseded browser f/h/q layers dispatching. Callers hold mu.
+func (r *Router) retireOtherPeerSlotLocked(publisherID, keep string, native *PeerConnectionWrapper) {
+	slot, _, _ := strings.Cut(keep, slotSep)
+	for key, claim := range r.slotClaims[publisherID] {
+		claimSlot, rid, video := strings.Cut(key, slotSep)
+		if key == keep || claimSlot != slot || (claim.native == nil) == (native == nil) {
+			continue
+		}
+		declared := r.trackSlots[publisherID]
+		if claim.native != nil {
+			declared = r.nativeSlots[publisherID]
+		}
+		if declared[claim.trackID] != "" {
+			continue
+		}
+		if claim.live != nil {
+			claim.live.Store(false)
+		}
+		delete(r.slotClaims[publisherID], key)
+		if !video {
+			continue
+		}
+		if sources := r.videoSources[publisherID][slot]; sources != nil {
+			r.forgetKeyframeSourceLocked(sources[rid])
+			delete(sources, rid)
+			if len(sources) == 0 {
+				delete(r.videoSources[publisherID], slot)
+			}
+		}
+		delete(r.videoSeen[videoSourceRef{publisherID, slot}], rid)
+		ingress := videoIngressKey{publisherID, slot, rid}
+		delete(r.videoIngress, ingress)
+		if cache := r.gopCaches[ingress]; cache != nil {
+			cache.invalidate()
+			delete(r.gopCaches, ingress)
+		}
+	}
 }
 
 // nativeSlot reports whether the native media peer may publish slot.
@@ -1060,41 +1119,91 @@ func (r *Router) publisherPeerLocked(publisherID, slot string) *PeerConnectionWr
 // AttachNativePeer routes the tracks of publisherID's native media peer as
 // the publisher's own: same slots, publications, permissions and media
 // validation as browser-peer tracks. Only tracks declared through
-// SetNativeTrackSlots (screen, screenaudio) are read; others are dropped. pc
-// is never a subscriber: it gets no output tracks and no renegotiation.
-func (r *Router) AttachNativePeer(publisherID string, pc *PeerConnectionWrapper) {
+// SetNativeTrackSlots (screen, screenaudio) are read. pc is never a
+// subscriber: it gets no output tracks and no renegotiation. owner is the
+// browser peer pc belongs to (see Voice.closeNativeOwnedBy).
+func (r *Router) AttachNativePeer(publisherID string, pc, owner *PeerConnectionWrapper) {
+	r.mu.Lock()
+	if previous := r.nativePeers[publisherID]; previous.wake != nil {
+		close(previous.wake)
+	}
+	if r.nativePeers == nil {
+		r.nativePeers = make(map[string]nativePeer)
+	}
+	r.nativePeers[publisherID] = nativePeer{pc: pc, owner: owner, wake: make(chan struct{})}
+	delete(r.nativeSlots, publisherID)
+	r.mu.Unlock()
 	pc.OnTrack(func(remote *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+		go r.readSourceTiming(publisherID, remote, receiver)
+		go r.nativeTrackLoop(publisherID, pc, remote)
+	})
+}
+
+// nativeTrackLoop reads one native track whenever it is declared and holds
+// its slot. Pion reports a reused receiver only once, so a track that loses
+// its slot (or is not declared yet) waits for the next native declaration
+// instead of ending, and resumes on the same receiver.
+func (r *Router) nativeTrackLoop(publisherID string, pc *PeerConnectionWrapper, remote *webrtc.TrackRemote) {
+	for {
 		r.mu.RLock()
+		current := r.nativePeers[publisherID]
 		slot := r.nativeSlots[publisherID][remote.ID()]
 		r.mu.RUnlock()
-		if !nativeSlot(slot) || slotKinds[slot] != remote.Kind() {
-			r.logger.Warn("router: dropping undeclared native track",
+		if current.pc != pc {
+			return
+		}
+		switch {
+		case !nativeSlot(slot) || slotKinds[slot] != remote.Kind():
+			r.logger.Warn("router: native track not declared as screen or screenaudio",
 				zap.String("client_id", publisherID),
 				zap.String("track_id", remote.ID()),
 				zap.String("kind", remote.Kind().String()),
 			)
+		case remote.Kind() == webrtc.RTPCodecTypeAudio:
+			r.readLoop(publisherID, slot, remote, 0, pc)
+		default:
+			r.readVideoLoop(publisherID, slot, remote, pc)
+		}
+		select {
+		case <-current.wake:
+		case <-pc.Done():
 			return
 		}
-		go r.readSourceTiming(publisherID, remote, receiver)
-		if remote.Kind() == webrtc.RTPCodecTypeAudio {
-			go r.readLoop(publisherID, slot, remote, 0, pc)
-		} else {
-			go r.readVideoLoop(publisherID, slot, remote, pc)
-		}
-	})
+	}
 }
 
 // DetachNativePeer forgets pc as publisherID's native media peer: its slot
-// declarations end and its readers stop. The caller closes pc.
+// declarations end and its readers stop. A stale pc is a no-op, so it cannot
+// detach a replacement. The caller closes pc.
 func (r *Router) DetachNativePeer(publisherID string, pc *PeerConnectionWrapper) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	current := r.nativePeers[publisherID]
+	if current.pc != pc {
+		return
+	}
+	close(current.wake)
+	delete(r.nativePeers, publisherID)
 	delete(r.nativeSlots, publisherID)
 	for _, claim := range r.slotClaims[publisherID] {
 		if claim.native == pc && claim.live != nil {
 			claim.live.Store(false)
 		}
 	}
+}
+
+// nativePeerOf returns publisherID's attached native media peer, if any.
+func (r *Router) nativePeerOf(publisherID string) nativePeer {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.nativePeers[publisherID]
+}
+
+type nativePeer struct {
+	pc, owner *PeerConnectionWrapper
+	// wake is closed (and replaced) on every native declaration and on
+	// detach, waking track readers waiting to resume.
+	wake chan struct{}
 }
 
 func (r *Router) ownsSlot(clientID, key string, token uint64) bool {
