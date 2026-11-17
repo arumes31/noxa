@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -152,12 +153,24 @@ func writeToneWAV(t *testing.T, seconds int) string {
 func playTone(t *testing.T, wav string) *exec.Cmd {
 	t.Helper()
 	script := "(New-Object Media.SoundPlayer '" + strings.ReplaceAll(wav, "'", "''") + "').PlaySync()"
-	cmd := exec.CommandContext(t.Context(), "cmd.exe", "/c", "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	cmd := exec.Command("cmd.exe", "/c", "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script) //nolint:noctx // the tree is killed in Cleanup, after t.Context ends
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	// Kill the whole tree: killing cmd.exe alone leaves PowerShell playing.
+	t.Cleanup(func() {
+		_ = exec.Command("taskkill.exe", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run() //nolint:noctx // cleanup outlives t.Context
+		_ = cmd.Wait()
+	})
 	return cmd
+}
+
+// requireLoopback skips where process loopback is unavailable.
+func requireLoopback(t *testing.T) {
+	t.Helper()
+	if !processLoopbackSupported() {
+		t.Skip("process loopback needs Windows build 20348+")
+	}
 }
 
 // captureRMS records ~2 s of loopback audio and returns the decoded RMS of
@@ -207,7 +220,7 @@ func TestProcessLoopbackTreeDepth(t *testing.T) {
 	}
 	requireOpus(t)
 	if !processLoopbackSupported() {
-		t.Skip("process loopback needs Windows 10 2004+")
+		t.Skip("process loopback needs Windows build 20348+")
 	}
 	cmd := playTone(t, writeToneWAV(t, 40))
 	time.Sleep(1500 * time.Millisecond) // powershell start-up
@@ -243,6 +256,7 @@ func TestProcessLoopbackExcludesChromiumAudioService(t *testing.T) {
 		t.Skip("set NOXA_NATIVE_CAPTURE=1 on an interactive Windows desktop with audio output")
 	}
 	requireOpus(t)
+	requireLoopback(t)
 	edge := filepath.Join(os.Getenv("ProgramFiles(x86)"), "Microsoft", "Edge", "Application", "msedge.exe")
 	if _, err := os.Stat(edge); err != nil {
 		t.Skip("Microsoft Edge not installed")
@@ -253,12 +267,16 @@ func TestProcessLoopbackExcludesChromiumAudioService(t *testing.T) {
 	if err := os.WriteFile(page, []byte(html), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.CommandContext(t.Context(), edge, "--user-data-dir="+filepath.Join(dir, "profile"), "--no-first-run", "--no-default-browser-check",
+	cmd := exec.Command(edge, //nolint:noctx // the tree is killed in Cleanup, after t.Context ends
+		"--user-data-dir="+filepath.Join(dir, "profile"), "--no-first-run", "--no-default-browser-check",
 		"--autoplay-policy=no-user-gesture-required", "--new-window", "file:///"+filepath.ToSlash(page))
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	t.Cleanup(func() {
+		_ = exec.Command("taskkill.exe", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run() //nolint:noctx // cleanup outlives t.Context
+		_ = cmd.Wait()
+	})
 	time.Sleep(5 * time.Second)
 	browser := uint32(cmd.Process.Pid) // #nosec G115
 	system, _ := captureRMS(t, 4, processLoopbackExclude)

@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Native share audio: WASAPI process loopback (Windows 10 2004+) captured as
+// Native share audio: WASAPI process loopback (build 20348+) captured as
 // 48 kHz stereo 16-bit PCM and encoded to 20 ms Opus packets by the pinned
 // libopus DLL (see opus_windows.go).
 
@@ -29,7 +29,7 @@ const (
 )
 
 var (
-	// ErrAudioUnsupported: process loopback needs Windows 10 2004 or later.
+	// ErrAudioUnsupported: process loopback needs Windows build 20348 (Windows 11 / Server 2022) or later.
 	ErrAudioUnsupported = errors.New("process loopback audio is not supported here")
 	// ErrOpusUnavailable: the bundled libopus DLL is missing or failed its check.
 	ErrOpusUnavailable = errors.New("opus encoder unavailable")

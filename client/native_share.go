@@ -385,6 +385,9 @@ func (n *nativeShare) openAudio() string {
 		n.mu.Lock()
 		n.audio = session
 		n.mu.Unlock()
+		if failed := session.Failed(); failed != nil {
+			go n.watchAudio(session, failed)
+		}
 		if mode != nativecapture.AudioMode(n.req.Audio) {
 			return string(mode)
 		}
@@ -394,6 +397,28 @@ func (n *nativeShare) openAudio() string {
 		return ""
 	}
 	return string(nativecapture.AudioNone)
+}
+
+// watchAudio ends a share's audio whose capture broke for good (capture
+// already retried once): the share continues silent and the webview shows
+// the "audio unavailable" notice.
+func (n *nativeShare) watchAudio(session *nativecapture.AudioSession, failed <-chan error) {
+	select {
+	case <-n.stop:
+	case err := <-failed:
+		n.mu.Lock()
+		current := n.audio == session
+		if current {
+			n.audio = nil
+		}
+		n.mu.Unlock()
+		if !current {
+			return
+		}
+		log.Printf("native share audio stopped: %v", err)
+		session.Close()
+		n.emit("audio", string(nativecapture.AudioNone))
+	}
 }
 
 func (n *nativeShare) onAudio(p nativecapture.AudioPacket) {

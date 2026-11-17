@@ -12,3 +12,6 @@ func StartAudio(AudioMode, uint64, func(AudioPacket)) (*AudioSession, error) {
 
 // Close does nothing off Windows.
 func (*AudioSession) Close() {}
+
+// Failed never fires off Windows.
+func (*AudioSession) Failed() <-chan error { return nil }

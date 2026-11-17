@@ -130,6 +130,7 @@ func TestNativeAudioStreamsToReceiver(t *testing.T) {
 		t.Skip("set NOXA_NATIVE_CAPTURE=1 on an interactive Windows desktop with audio output")
 	}
 	requireOpus(t)
+	requireLoopback(t)
 	cmd := playTone(t, writeToneWAV(t, 30))
 	time.Sleep(1500 * time.Millisecond)
 	server := sendertest.NewReceiver(t)

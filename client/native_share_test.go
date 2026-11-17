@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -272,5 +273,31 @@ func TestNativePickerSource(t *testing.T) {
 	}
 	if got := (&App{}).NativeScreenThumbnails([]string{"bogus"}); len(got) != 0 {
 		t.Fatalf("thumbnails for an invalid value: %v", got)
+	}
+}
+
+// TestNativeShareAudioFailureEndsAudio: a capture that broke for good drops
+// the share's audio and tells the webview (notice "none"); a failure of an
+// already replaced session does nothing.
+func TestNativeShareAudioFailureEndsAudio(t *testing.T) {
+	events := &eventRecorder{}
+	session := &nativecapture.AudioSession{Mode: nativecapture.AudioSystem}
+	n := &nativeShare{cm: &connManager{sink: events, tabID: "a"}, stop: make(chan struct{}), audio: session, req: NativeShareRequest{ID: "s1"}}
+	failed := make(chan error, 1)
+	failed <- errors.New("audio service restarted")
+	n.watchAudio(session, failed)
+	if n.audio != nil {
+		t.Fatal("a failed audio session stayed installed")
+	}
+	payload := events.waitFor(t, nativeShareEvent, nil, time.Second, "audio notice")
+	if !strings.Contains(payload, "audio") || !strings.Contains(payload, "none") {
+		t.Fatalf("audio notice payload %s", payload)
+	}
+	other := &nativecapture.AudioSession{}
+	n.audio = other
+	failed <- errors.New("stale")
+	n.watchAudio(session, failed)
+	if n.audio != other {
+		t.Fatal("a stale failure removed the current audio session")
 	}
 }

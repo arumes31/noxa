@@ -727,30 +727,39 @@ export function createVideoPublication({ policy }) {
             // A refresh keeps the user's pick while that source still exists.
             if (surface !== nativeSurface || !options.some(o => o.value === nativeValue)) nativeValue = options.find(o => o.selected)?.value || "";
             nativeSurface = surface;
-            const same = options.length === nativeOptions.length && options.every((o, i) => o.value === nativeOptions[i].value && o.label === nativeOptions[i].label);
             nativeOptions = options;
-            if (!same) {
-                const thumbs = new Map([...nativeGrid.querySelectorAll("img[data-value]")].map(img => [img.dataset.value, img.src]));
-                nativeGrid.replaceChildren(...options.map(o => {
-                    const tile = document.createElement("label");
+            // Tiles are reused by source value: a refresh never replaces the tile
+            // (or the radio) that has keyboard focus, and it keeps thumbnails.
+            const tiles = new Map([...nativeGrid.querySelectorAll(".sp-native-tile")].map(tile => [tile.querySelector("input").value, tile]));
+            const wanted = options.map(o => {
+                let tile = tiles.get(o.value);
+                if (!tile) {
+                    tile = document.createElement("label");
                     tile.className = "sp-native-tile";
                     const input = document.createElement("input");
                     input.type = "radio"; input.name = `sp-native-${dialogID}`; input.value = o.value;
                     input.addEventListener("change", () => { nativeValue = o.value; update(); });
                     const img = document.createElement("img");
                     img.alt = ""; img.dataset.value = o.value; img.decoding = "async";
-                    if (thumbs.get(o.value)) img.src = thumbs.get(o.value);
                     const title = document.createElement("span");
-                    title.className = "sp-native-title"; title.textContent = o.label;
-                    tile.append(input, img, title);
-                    if (o.exe || o.game) {
-                        const detail = document.createElement("span");
-                        detail.className = "sp-native-detail";
-                        detail.textContent = [o.game ? tLabel("share.nativeGame") : "", o.exe].filter(Boolean).join(" · ");
-                        tile.appendChild(detail);
-                    }
-                    return tile;
-                }));
+                    title.className = "sp-native-title";
+                    const detail = document.createElement("span");
+                    detail.className = "sp-native-detail";
+                    tile.append(input, img, title, detail);
+                }
+                const title = tile.querySelector(".sp-native-title"), detail = tile.querySelector(".sp-native-detail");
+                if (title.textContent !== o.label) title.textContent = o.label;
+                const info = [o.game ? tLabel("share.nativeGame") : "", o.exe].filter(Boolean).join(" · ");
+                if (detail.textContent !== info) detail.textContent = info;
+                detail.hidden = !info;
+                return tile;
+            });
+            const current = [...nativeGrid.children];
+            if (wanted.length !== current.length || wanted.some((tile, i) => tile !== current[i])) {
+                const focused = nativeGrid.contains(document.activeElement) ? document.activeElement : null;
+                nativeGrid.replaceChildren(...wanted);
+                // Reordering detaches nodes: put focus back on the same source.
+                if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
             }
             for (const input of nativeGrid.querySelectorAll("input")) input.checked = input.value === nativeValue;
             nativeNote.textContent = backend.value !== "native" ? "" : !nativeStatus?.available ? tLabel("share.nativeUnavailable")

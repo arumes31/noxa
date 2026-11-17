@@ -48,17 +48,22 @@ const (
 	audclntSrcDefault      = 0x08000000
 	audclntSilent          = 0x2
 	audclntDiscontinuity   = 0x1
+	audclntBufferEmpty     = hresult(0x08890001) // AUDCLNT_S_BUFFER_EMPTY: success, no data
 )
 
-// The completion handler is one static Go COM object (activations are
-// serialized): IUnknown + IAgileObject + IActivateAudioInterfaceCompletionHandler.
-type comObject struct{ vtbl *[4]uintptr }
+// Each activation gets its own Go COM completion handler (IUnknown +
+// IAgileObject + IActivateAudioInterfaceCompletionHandler) with its own
+// signal: a late completion of a timed-out activation can never wake the
+// next one. A handler stays registered (alive for the GC) until Windows has
+// called it.
+type comObject struct {
+	vtbl *[4]uintptr
+	done chan struct{}
+}
 
 var (
-	activateMu      sync.Mutex
-	activateDone    = make(chan struct{}, 1)
-	activateVtbl    = [4]uintptr{windows.NewCallback(handlerQI), windows.NewCallback(handlerRef), windows.NewCallback(handlerRef), windows.NewCallback(handlerCompleted)}
-	activateHandler = &comObject{vtbl: &activateVtbl}
+	activateVtbl     = [4]uintptr{windows.NewCallback(handlerQI), windows.NewCallback(handlerRef), windows.NewCallback(handlerRef), windows.NewCallback(handlerCompleted)}
+	activateHandlers sync.Map // uintptr(handler) -> *comObject
 )
 
 func handlerQI(this, riid, out uintptr) uintptr {
@@ -71,19 +76,19 @@ func handlerQI(this, riid, out uintptr) uintptr {
 	return 0x80004002                    // E_NOINTERFACE
 }
 
-func handlerRef(uintptr) uintptr { return 1 } // static object
+func handlerRef(uintptr) uintptr { return 1 } // lifetime is the registry's, not COM's
 
-func handlerCompleted(_, _ uintptr) uintptr {
-	select {
-	case activateDone <- struct{}{}:
-	default:
+func handlerCompleted(this, _ uintptr) uintptr {
+	if h, ok := activateHandlers.LoadAndDelete(this); ok {
+		close(h.(*comObject).done)
 	}
 	return 0
 }
 
-// processLoopbackSupported: the activation type exists from Windows 10 2004 (build 19041).
+// processLoopbackSupported: process-loopback activation works from build
+// 20348 (Windows Server 2022 / Windows 11); older builds reject it.
 func processLoopbackSupported() bool {
-	return windows.RtlGetVersion().BuildNumber >= 19041 && procActivateAudioInterfaceAsync.Find() == nil
+	return windows.RtlGetVersion().BuildNumber >= 20348 && procActivateAudioInterfaceAsync.Find() == nil
 }
 
 // activateProcessLoopback returns an IAudioClient for pid's tree (include or exclude).
@@ -91,12 +96,9 @@ func activateProcessLoopback(pid uint32, mode int32) (uintptr, error) {
 	if !processLoopbackSupported() {
 		return 0, ErrAudioUnsupported
 	}
-	activateMu.Lock()
-	defer activateMu.Unlock()
-	select {
-	case <-activateDone:
-	default:
-	}
+	handler := &comObject{vtbl: &activateVtbl, done: make(chan struct{})}
+	key := uintptr(unsafe.Pointer(handler)) // #nosec G103 -- the registry keeps handler alive
+	activateHandlers.Store(key, handler)
 	params := struct {
 		ActivationType int32 // AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK
 		TargetPID      uint32
@@ -113,14 +115,15 @@ func activateProcessLoopback(pid uint32, mode int32) (uintptr, error) {
 	var op uintptr
 	// #nosec G103 -- arguments live until the completion below.
 	r, _, _ := procActivateAudioInterfaceAsync.Call(uintptr(unsafe.Pointer(path)), uintptr(unsafe.Pointer(&iidIAudioClient)),
-		uintptr(unsafe.Pointer(&prop)), uintptr(unsafe.Pointer(activateHandler)), uintptr(unsafe.Pointer(&op)))
+		uintptr(unsafe.Pointer(&prop)), key, uintptr(unsafe.Pointer(&op)))
 	runtime.KeepAlive(&params)
 	if hresult(r).failed() {
+		activateHandlers.Delete(key) // no callback follows a failed call
 		return 0, hresult(r).err("ActivateAudioInterfaceAsync")
 	}
 	defer release(op)
 	select {
-	case <-activateDone:
+	case <-handler.done:
 	case <-time.After(5 * time.Second):
 		return 0, errors.New("process loopback activation timed out")
 	}
@@ -143,8 +146,13 @@ type AudioSession struct {
 	Mode AudioMode
 	stop chan struct{}
 	done chan struct{}
+	fail chan error
 	once sync.Once
 }
+
+// Failed reports a capture that broke for good (e.g. the audio service
+// restarted and reopening failed); the session is then silent.
+func (s *AudioSession) Failed() <-chan error { return s.fail }
 
 // StartAudio opens the loopback for mode (window = the shared window for
 // AudioApplication) and the Opus encoder, then runs until Close.
@@ -199,7 +207,7 @@ func startLoopback(mode AudioMode, pid uint32, loopback int32, out func(AudioPac
 	if err != nil {
 		return nil, err
 	}
-	s := &AudioSession{Mode: mode, stop: make(chan struct{}), done: make(chan struct{})}
+	s := &AudioSession{Mode: mode, stop: make(chan struct{}), done: make(chan struct{}), fail: make(chan error, 1)}
 	ready := make(chan error, 1)
 	go s.run(pid, loopback, enc, out, ready)
 	if err := <-ready; err != nil {
@@ -210,9 +218,16 @@ func startLoopback(mode AudioMode, pid uint32, loopback int32, out func(AudioPac
 
 // Close stops capture and waits for the capture thread.
 func (s *AudioSession) Close() {
+	if s.stop == nil {
+		return // never started
+	}
 	s.once.Do(func() { close(s.stop) })
 	<-s.done
 }
+
+// audioReopenAfter: a capture that ran at least this long is reopened once
+// after a terminal error; one that fails sooner is given up.
+const audioReopenAfter = 5 * time.Second
 
 func (s *AudioSession) run(pid uint32, loopback int32, enc *opusEncoder, out func(AudioPacket), ready chan<- error) {
 	runtime.LockOSThread()
@@ -220,10 +235,49 @@ func (s *AudioSession) run(pid uint32, loopback int32, enc *opusEncoder, out fun
 	defer close(s.done)
 	defer enc.close()
 	initThread()
+	emit := func(pcm []int16, at time.Time) {
+		packet, err := enc.encode(pcm)
+		if err != nil {
+			return
+		}
+		out(AudioPacket{Data: append([]byte(nil), packet...), Captured: at})
+	}
+	started, running := time.Now(), false
+	err := s.capture(pid, loopback, emit, func() { running = true; ready <- nil })
+	if !running {
+		ready <- err // setup failed: StartAudio returns it
+		return
+	}
+	for err != nil && !s.stopped() {
+		if time.Since(started) < audioReopenAfter {
+			s.fail <- err
+			return
+		}
+		select {
+		case <-s.stop:
+			return
+		case <-time.After(500 * time.Millisecond):
+		}
+		started = time.Now()
+		err = s.capture(pid, loopback, emit, func() {})
+	}
+}
+
+func (s *AudioSession) stopped() bool {
+	select {
+	case <-s.stop:
+		return true
+	default:
+		return false
+	}
+}
+
+// capture opens one loopback client and runs it until Close (nil) or a
+// terminal WASAPI error; running is called once capture has started.
+func (s *AudioSession) capture(pid uint32, loopback int32, emit func([]int16, time.Time), running func()) error {
 	client, err := activateProcessLoopback(pid, loopback)
 	if err != nil {
-		ready <- err
-		return
+		return err
 	}
 	defer release(client)
 	format := struct {
@@ -236,59 +290,56 @@ func (s *AudioSession) run(pid uint32, loopback int32, enc *opusEncoder, out fun
 	// no mix format, so the engine converts to this PCM format.
 	if hr := vcall(client, 3, 0, audclntStreamLoopback|audclntStreamEvent|audclntAutoConvertPCM|audclntSrcDefault,
 		1_000_000, 0, uintptr(unsafe.Pointer(&format)), 0); hr.failed() { // #nosec G103
-		ready <- hr.err("IAudioClient.Initialize")
-		return
+		return hr.err("IAudioClient.Initialize")
 	}
 	event, err := windows.CreateEvent(nil, 0, 0, nil)
 	if err != nil {
-		ready <- err
-		return
+		return err
 	}
 	defer func() { _ = windows.CloseHandle(event) }()
 	if hr := vcall(client, 13, uintptr(event)); hr.failed() {
-		ready <- hr.err("IAudioClient.SetEventHandle")
-		return
+		return hr.err("IAudioClient.SetEventHandle")
 	}
 	var capture uintptr
 	if hr := vcall(client, 14, uintptr(unsafe.Pointer(&iidIAudioCaptureClient)), uintptr(unsafe.Pointer(&capture))); hr.failed() { // #nosec G103
-		ready <- hr.err("IAudioClient.GetService")
-		return
+		return hr.err("IAudioClient.GetService")
 	}
 	defer release(capture)
 	if hr := vcall(client, 10); hr.failed() {
-		ready <- hr.err("IAudioClient.Start")
-		return
+		return hr.err("IAudioClient.Start")
 	}
 	defer vcall(client, 11)
-	ready <- nil
+	running()
 	clock := newQPCClock()
 	var framer audioFramer
 	silence := make([]int16, 0, AudioRate/10*AudioChannels)
-	emit := func(pcm []int16, at time.Time) {
-		packet, err := enc.encode(pcm)
-		if err != nil {
-			return
-		}
-		out(AudioPacket{Data: append([]byte(nil), packet...), Captured: at})
-	}
 	for {
 		select {
 		case <-s.stop:
-			return
+			return nil
 		default:
 		}
 		_, _ = windows.WaitForSingleObject(event, 100)
 		for {
 			var frames uint32
-			if hr := vcall(capture, 5, uintptr(unsafe.Pointer(&frames))); hr.failed() || frames == 0 { // #nosec G103 -- GetNextPacketSize
+			// An empty buffer is success with 0 frames; a failed call (device
+			// invalidated, audio service restarted) ends this client.
+			if hr := vcall(capture, 5, uintptr(unsafe.Pointer(&frames))); hr.failed() { // #nosec G103 -- GetNextPacketSize
+				return hr.err("IAudioCaptureClient.GetNextPacketSize")
+			}
+			if frames == 0 {
 				break
 			}
 			var data uintptr
 			var flags uint32
 			var devPos, qpcPos uint64
 			// #nosec G103 -- GetBuffer out pointers.
-			if hr := vcall(capture, 3, uintptr(unsafe.Pointer(&data)), uintptr(unsafe.Pointer(&frames)), uintptr(unsafe.Pointer(&flags)),
-				uintptr(unsafe.Pointer(&devPos)), uintptr(unsafe.Pointer(&qpcPos))); hr.failed() {
+			hr := vcall(capture, 3, uintptr(unsafe.Pointer(&data)), uintptr(unsafe.Pointer(&frames)), uintptr(unsafe.Pointer(&flags)),
+				uintptr(unsafe.Pointer(&devPos)), uintptr(unsafe.Pointer(&qpcPos)))
+			if hr.failed() {
+				return hr.err("IAudioCaptureClient.GetBuffer")
+			}
+			if hr == audclntBufferEmpty || frames == 0 {
 				break
 			}
 			var pcm []int16
@@ -299,7 +350,9 @@ func (s *AudioSession) run(pid uint32, loopback int32, enc *opusEncoder, out fun
 				pcm = unsafe.Slice((*int16)(unsafe.Pointer(data)), int(frames)*AudioChannels) //nolint:govet // #nosec G103 -- WASAPI buffer valid until ReleaseBuffer
 			}
 			framer.push(pcm, clock.at(qpcPos), flags&audclntDiscontinuity != 0, emit)
-			vcall(capture, 4, uintptr(frames))
+			if hr := vcall(capture, 4, uintptr(frames)); hr.failed() {
+				return hr.err("IAudioCaptureClient.ReleaseBuffer")
+			}
 		}
 	}
 }

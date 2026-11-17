@@ -7,6 +7,7 @@ import (
 	"errors"
 	"image"
 	"image/jpeg"
+	"runtime"
 	"time"
 	"unsafe"
 
@@ -50,6 +51,10 @@ func call(p *windows.LazyProc, args ...uintptr) uintptr {
 // Thumbnail renders src scaled into maxW x maxH as a JPEG. A minimized or
 // hung window has no thumbnail.
 func Thumbnail(src Source, maxW, maxH int) ([]byte, error) {
+	// GDI device contexts belong to the thread that got them: stay on one
+	// OS thread until every DC is released (the deferred unlock runs last).
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	var r rect
 	var srcDC uintptr
 	var release func()
@@ -137,36 +142,51 @@ func stretchJPEG(dc uintptr, src rect, w, h int) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-// Thumbnails renders sources on a few goroutines and returns what is done
-// by the budget: a window stuck in PrintWindow delays only its own worker,
-// never the picker refresh.
+// thumbSlots bounds GDI thumbnail work process-wide: a slot is held until
+// the native call returns, so windows stuck in PrintWindow can never pile up
+// workers across refreshes.
+var thumbSlots = make(chan struct{}, 4)
+
+// Thumbnails renders sources on at most four process-wide workers and
+// returns what is done by the budget; sources that get no free slot in time
+// are skipped, and a window stuck in PrintWindow delays only its own slot.
 func Thumbnails(sources []Source, maxW, maxH int, budget time.Duration) map[Source][]byte {
 	type result struct {
 		src Source
 		jpg []byte
 	}
 	results := make(chan result, len(sources)) // late workers never block
-	next := make(chan Source, len(sources))
-	for _, src := range sources {
-		next <- src
+	timeout := time.After(budget)
+	out := make(map[Source][]byte, len(sources))
+	launched, received := 0, 0
+	collect := func(r result) {
+		received++
+		if len(r.jpg) > 0 {
+			out[r.src] = r.jpg
+		}
 	}
-	close(next)
-	for range min(4, len(sources)) {
-		go func() {
-			for src := range next {
-				jpg, _ := Thumbnail(src, maxW, maxH)
-				results <- result{src, jpg}
+	for _, src := range sources {
+		for acquired := false; !acquired; {
+			select {
+			case thumbSlots <- struct{}{}:
+				acquired = true
+			case r := <-results:
+				collect(r)
+			case <-timeout:
+				return out
 			}
+		}
+		launched++
+		go func() {
+			defer func() { <-thumbSlots }()
+			jpg, _ := Thumbnail(src, maxW, maxH)
+			results <- result{src, jpg}
 		}()
 	}
-	out := make(map[Source][]byte, len(sources))
-	timeout := time.After(budget)
-	for range sources {
+	for received < launched {
 		select {
 		case r := <-results:
-			if len(r.jpg) > 0 {
-				out[r.src] = r.jpg
-			}
+			collect(r)
 		case <-timeout:
 			return out
 		}

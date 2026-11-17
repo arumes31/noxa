@@ -49,7 +49,7 @@ the current user's voice controls.
   source preselected (matched by executable and title, then by executable).
   Share audio follows the dialog's audio choice: a window share sends only
   that application's audio, a monitor share sends system audio without
-  noXa's own voices (WASAPI process loopback, Windows 10 2004 or later). If
+  noXa's own voices (WASAPI process loopback, Windows build 20348 or later, i.e. Windows 11). If
   application audio cannot be captured, system audio is shared instead, with
   a notice. Audio is 48 kHz stereo Opus (about 128 kbps), encoded by the
   reference libopus bundled in the exe (`tools/libopus/build.sh` builds it
