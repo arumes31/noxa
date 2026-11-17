@@ -133,7 +133,7 @@ func activateString(activate uintptr, key *guid) string {
 	if hr := vcall(activate, 13, uintptr(unsafe.Pointer(key)), uintptr(unsafe.Pointer(&p)), uintptr(unsafe.Pointer(&n))); hr.failed() || p == nil { // #nosec G103
 		return ""
 	}
-	defer procCoTaskMemFree.Call(uintptr(unsafe.Pointer(p))) // #nosec G103
+	defer func() { _, _, _ = procCoTaskMemFree.Call(uintptr(unsafe.Pointer(p))) }() // #nosec G103
 	return windows.UTF16PtrToString(p)
 }
 
@@ -162,7 +162,7 @@ func newEncoder(d *device, width, height, fps, bitrate uint32, allowSoftware boo
 	if allowSoftware {
 		flags = append(flags, mftEnumSyncMFT|mftEnumSortAndFilter)
 	}
-	var lastErr error = ErrNoHardwareEncoder
+	lastErr := ErrNoHardwareEncoder
 	for _, flag := range flags {
 		var list uintptr
 		var count uint32
@@ -172,7 +172,7 @@ func newEncoder(d *device, width, height, fps, bitrate uint32, allowSoftware boo
 		if hresult(r).failed() || count == 0 {
 			continue
 		}
-		activates := unsafe.Slice((*uintptr)(unsafe.Pointer(list)), count) // #nosec G103
+		activates := unsafe.Slice((*uintptr)(unsafe.Pointer(list)), count) //nolint:govet // #nosec G103 -- CoTaskMem array from MFTEnumEx
 		var opened *encoder
 		for _, activate := range activates {
 			if opened == nil {
@@ -187,7 +187,7 @@ func newEncoder(d *device, width, height, fps, bitrate uint32, allowSoftware boo
 			}
 			release(activate)
 		}
-		procCoTaskMemFree.Call(list)
+		_, _, _ = procCoTaskMemFree.Call(list)
 		if opened != nil {
 			return opened, nil
 		}
@@ -282,10 +282,11 @@ func mediaType(subtype guid, width, height, fps uint32) (uintptr, error) {
 	return t, nil
 }
 
-// waitEvent blocks for the next async MFT event type.
-func (e *encoder) waitEvent() (uint32, error) {
+// waitEvent blocks on generator (an IMFMediaEventGenerator the caller holds
+// its own reference to, so close() cannot free it under a blocked GetEvent).
+func waitEvent(generator uintptr) (uint32, error) {
 	var ev uintptr
-	if hr := vcall(e.events, 3, 0, uintptr(unsafe.Pointer(&ev))); hr.failed() { // #nosec G103 -- GetEvent (blocking)
+	if hr := vcall(generator, 3, 0, uintptr(unsafe.Pointer(&ev))); hr.failed() { // #nosec G103 -- GetEvent (blocking)
 		return 0, hr.err("GetEvent")
 	}
 	defer release(ev)
@@ -332,7 +333,7 @@ func (e *encoder) collect() ([]byte, bool, error) {
 		if r, _, _ := procMFCreateMemoryBuffer.Call(uintptr(max(info.size, 4<<20)), uintptr(unsafe.Pointer(&buf))); hresult(r).failed() { // #nosec G103
 			return nil, false, hresult(r).err("MFCreateMemoryBuffer")
 		}
-		procMFCreateSample.Call(uintptr(unsafe.Pointer(&out.sample))) // #nosec G103
+		_, _, _ = procMFCreateSample.Call(uintptr(unsafe.Pointer(&out.sample))) // #nosec G103
 		vcall(out.sample, 42, buf)
 		release(buf)
 	}
@@ -395,8 +396,8 @@ func (e *encoder) sequenceHeader() []byte {
 	if hr := vcall(t, 16, uintptr(unsafe.Pointer(&mfMTSequenceHeader)), uintptr(unsafe.Pointer(&p)), uintptr(unsafe.Pointer(&n))); hr.failed() || p == nil { // #nosec G103 -- GetAllocatedBlob
 		return []byte{}
 	}
-	defer procCoTaskMemFree.Call(uintptr(unsafe.Pointer(p))) // #nosec G103
-	return append([]byte(nil), unsafe.Slice(p, n)...)        // #nosec G103
+	defer func() { _, _, _ = procCoTaskMemFree.Call(uintptr(unsafe.Pointer(p))) }() // #nosec G103
+	return append([]byte(nil), unsafe.Slice(p, n)...)                               // #nosec G103
 }
 
 func (e *encoder) setBitrateIfChanged(bps int) {

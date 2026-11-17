@@ -35,7 +35,7 @@ func webViewProcesses() ([]uint32, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer windows.CloseHandle(snapshot)
+	defer func() { _ = windows.CloseHandle(snapshot) }()
 	children := map[uint32][]uint32{}
 	names := map[uint32]string{}
 	entry := windows.ProcessEntry32{Size: uint32(unsafe.Sizeof(windows.ProcessEntry32{}))}
@@ -95,7 +95,7 @@ func boostProcess(pid uint32) (boostedProcess, error) {
 	if err != nil {
 		return boostedProcess{}, err
 	}
-	defer windows.CloseHandle(handle)
+	defer func() { _ = windows.CloseHandle(handle) }()
 	cpu, err := windows.GetPriorityClass(handle)
 	if err != nil {
 		return boostedProcess{}, err
@@ -121,7 +121,7 @@ func setProcessPriorities(pid, cpu uint32, gpu int32) error {
 	if err != nil {
 		return nil // The process ended; nothing to restore.
 	}
-	defer windows.CloseHandle(handle)
+	defer func() { _ = windows.CloseHandle(handle) }()
 	return setHandlePriorities(handle, cpu, gpu)
 }
 

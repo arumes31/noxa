@@ -36,7 +36,7 @@ func TestMonitorCaptureEncodes(t *testing.T) {
 		if dump, err = os.Create(path); err != nil {
 			t.Fatal(err)
 		}
-		defer dump.Close()
+		defer func() { _ = dump.Close() }()
 	}
 	s, err := Start(Config{Source: Source{Monitor: monitor}, MaxWidth: 1920, MaxHeight: 1080, FPS: fps, Bitrate: 8_000_000,
 		AllowSoftware: os.Getenv("NOXA_NATIVE_SOFTWARE") != ""}, func(f Frame) {

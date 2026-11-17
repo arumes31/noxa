@@ -43,8 +43,8 @@ func vcall(obj uintptr, idx int, args ...uintptr) hresult {
 	if obj == 0 {
 		return hresult(0x80004003) // E_POINTER
 	}
-	vtbl := *(*uintptr)(unsafe.Pointer(obj))                                         // #nosec G103 -- COM ABI
-	fn := *(*uintptr)(unsafe.Pointer(vtbl + uintptr(idx)*unsafe.Sizeof(uintptr(0)))) // #nosec G103 -- COM ABI
+	vtbl := *(*uintptr)(unsafe.Pointer(obj))                                         //nolint:govet // #nosec G103 -- COM interface pointer owned by the callee
+	fn := *(*uintptr)(unsafe.Pointer(vtbl + uintptr(idx)*unsafe.Sizeof(uintptr(0)))) //nolint:govet // #nosec G103 -- COM vtable slot
 	r, _, _ := syscall.SyscallN(fn, append([]uintptr{obj}, args...)...)
 	return hresult(r)
 }
@@ -73,7 +73,7 @@ var (
 
 // initThread joins the multithreaded apartment on the current (locked) OS thread.
 func initThread() {
-	procRoInitialize.Call(1) // RO_INIT_MULTITHREADED; S_FALSE/RPC_E_CHANGED_MODE are fine.
+	_, _, _ = procRoInitialize.Call(1) // RO_INIT_MULTITHREADED; S_FALSE/RPC_E_CHANGED_MODE are fine.
 }
 
 func activationFactory(class string, iid *guid) (uintptr, error) {
@@ -86,7 +86,7 @@ func activationFactory(class string, iid *guid) (uintptr, error) {
 	if r, _, _ := procWindowsCreateString.Call(uintptr(unsafe.Pointer(&name[0])), uintptr(len(name)-1), uintptr(unsafe.Pointer(&hs))); hresult(r).failed() {
 		return 0, hresult(r).err("WindowsCreateString")
 	}
-	defer procWindowsDeleteString.Call(hs)
+	defer func() { _, _, _ = procWindowsDeleteString.Call(hs) }()
 	var factory uintptr
 	// #nosec G103 -- out pointer for the activation factory.
 	if r, _, _ := procRoGetActivationFactory.Call(hs, uintptr(unsafe.Pointer(iid)), uintptr(unsafe.Pointer(&factory))); hresult(r).failed() {

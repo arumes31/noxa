@@ -65,7 +65,7 @@ func startAnimatedWindow(t *testing.T, fullscreen bool, w, h int) *animatedWindo
 				iconSm                        uintptr
 			}{proc: testWndProc, class: class}
 			wc.size = uint32(unsafe.Sizeof(wc))
-			procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc))) // #nosec G103
+			_, _, _ = procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc))) // #nosec G103
 		}
 		style, exStyle, x, y := uintptr(0x10CF0000), uintptr(0), uintptr(100), uintptr(100) // WS_OVERLAPPEDWINDOW|WS_VISIBLE
 		if fullscreen {
@@ -75,8 +75,8 @@ func startAnimatedWindow(t *testing.T, fullscreen bool, w, h int) *animatedWindo
 		hwnd, _, _ := procCreateWindowExW.Call(exStyle, uintptr(unsafe.Pointer(class)), uintptr(unsafe.Pointer(title)), style, // #nosec G103
 			x, y, uintptr(w), uintptr(h), 0, 0, 0, 0)
 		a.hwnd.Store(hwnd)
-		procShowWindow.Call(hwnd, 5)
-		procSetForeground.Call(hwnd)
+		_, _, _ = procShowWindow.Call(hwnd, 5)
+		_, _, _ = procSetForeground.Call(hwnd)
 		close(ready)
 		if hwnd == 0 {
 			return
@@ -85,7 +85,7 @@ func startAnimatedWindow(t *testing.T, fullscreen bool, w, h int) *animatedWindo
 		for i := 0; ; i++ {
 			select {
 			case <-a.stop:
-				procDestroyWindow.Call(hwnd)
+				_, _, _ = procDestroyWindow.Call(hwnd)
 				return
 			default:
 			}
@@ -94,17 +94,17 @@ func startAnimatedWindow(t *testing.T, fullscreen bool, w, h int) *animatedWindo
 				if ok == 0 {
 					break
 				}
-				procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg))) // #nosec G103
-				procDispatchMessageW.Call(uintptr(unsafe.Pointer(&msg))) // #nosec G103
+				_, _, _ = procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg))) // #nosec G103
+				_, _, _ = procDispatchMessageW.Call(uintptr(unsafe.Pointer(&msg))) // #nosec G103
 			}
 			dc, _, _ := procGetDC.Call(hwnd)
 			brush, _, _ := procCreateSolidBrush.Call(uintptr(i*7%256) | uintptr(i*3%256)<<8 | uintptr(255-i%256)<<16)
 			old, _, _ := procSelectObject.Call(dc, brush)
-			procPatBlt.Call(dc, 0, 0, uintptr(w), uintptr(h), 0x00F00021)      // PATCOPY
-			procPatBlt.Call(dc, uintptr(i*8%w), 0, 64, uintptr(h), 0x00550009) // DSTINVERT bar
-			procSelectObject.Call(dc, old)
-			procDeleteObject.Call(brush)
-			procReleaseDC.Call(hwnd, dc)
+			_, _, _ = procPatBlt.Call(dc, 0, 0, uintptr(w), uintptr(h), 0x00F00021)      // PATCOPY
+			_, _, _ = procPatBlt.Call(dc, uintptr(i*8%w), 0, 64, uintptr(h), 0x00550009) // DSTINVERT bar
+			_, _, _ = procSelectObject.Call(dc, old)
+			_, _, _ = procDeleteObject.Call(brush)
+			_, _, _ = procReleaseDC.Call(hwnd, dc)
 			a.paints.Add(1)
 			time.Sleep(4 * time.Millisecond)
 		}

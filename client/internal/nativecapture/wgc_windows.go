@@ -44,7 +44,7 @@ func onMonitor(handle, _, _, _ uintptr) uintptr {
 		Monitor, Work rect
 		Flags         uint32
 	}{Size: 40}
-	procGetMonitorInfoW.Call(handle, uintptr(unsafe.Pointer(&info))) // #nosec G103
+	_, _, _ = procGetMonitorInfoW.Call(handle, uintptr(unsafe.Pointer(&info))) // #nosec G103
 	enumMonitors = append(enumMonitors, monitorInfo{handle: handle, rect: info.Monitor, primary: info.Flags&1 != 0})
 	return 1
 }
@@ -68,7 +68,7 @@ func monitors() []monitorInfo {
 	enumMu.Lock()
 	defer enumMu.Unlock()
 	enumMonitors = nil
-	procEnumDisplayMonitors.Call(0, 0, monitorCallback, 0)
+	_, _, _ = procEnumDisplayMonitors.Call(0, 0, monitorCallback, 0)
 	return append([]monitorInfo(nil), enumMonitors...)
 }
 
@@ -86,7 +86,7 @@ func Windows() []Window {
 	enumMu.Lock()
 	defer enumMu.Unlock()
 	enumWindowsOut = nil
-	procEnumWindows.Call(windowsCallback, 0)
+	_, _, _ = procEnumWindows.Call(windowsCallback, 0)
 	return append([]Window(nil), enumWindowsOut...)
 }
 

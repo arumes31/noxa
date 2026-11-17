@@ -113,12 +113,6 @@ func (d *device) copyRegion(dst, src uintptr, box d3dBox) {
 	vcall(d.ctx, 46, dst, 0, 0, 0, 0, src, 0, uintptr(unsafe.Pointer(&box))) // #nosec G103
 }
 
-func textureSize(tex uintptr) (uint32, uint32) {
-	var desc texture2DDesc
-	vcall(tex, 10, uintptr(unsafe.Pointer(&desc))) // #nosec G103 -- ID3D11Texture2D::GetDesc
-	return desc.Width, desc.Height
-}
-
 // converter scales a BGRA texture into NV12 with the D3D11 video processor:
 // colour conversion (BT.709 limited range) and scaling stay on the GPU.
 type converter struct {

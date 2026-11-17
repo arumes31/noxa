@@ -101,7 +101,6 @@ type pipeline struct {
 	pending    []int // ring slots converted but not yet submitted
 	inFlight   []time.Time
 	last       int // ring slot of the newest converted frame, -1 none
-	frameTime  int64
 }
 
 func (s *Session) run(ready chan<- error) {
@@ -110,7 +109,7 @@ func (s *Session) run(ready chan<- error) {
 	defer close(s.exited)
 	initThread()
 	// Capture is latency critical: keep its thread ahead of the game's.
-	procSetThreadPriority.Call(uintptr(windows.CurrentThread()), 2) // THREAD_PRIORITY_HIGHEST
+	_, _, _ = procSetThreadPriority.Call(uintptr(windows.CurrentThread()), 2) // THREAD_PRIORITY_HIGHEST
 	d, err := newDevice()
 	if err != nil {
 		ready <- err
@@ -198,7 +197,8 @@ func (s *Session) ensureSized(p *pipeline, w, h int) error {
 		p.needInput = 1 << 30 // Synchronous MFT: input is always accepted.
 	} else {
 		p.events, p.eventErr = make(chan uint32, 64), make(chan error, 1)
-		go waitEvents(p.enc, p.events, p.eventErr)
+		vcall(p.enc.events, 1) // AddRef: waitEvents owns this reference.
+		go waitEvents(p.enc.events, p.events, p.eventErr)
 	}
 	s.mu.Lock()
 	s.info = EncoderInfo{Name: p.enc.info.name, Vendor: p.enc.info.vendor, Hardware: p.enc.info.hardware}
@@ -209,12 +209,13 @@ func (s *Session) ensureSized(p *pipeline, w, h int) error {
 }
 
 // waitEvents forwards async MFT events; it ends when the MFT shuts down.
-func waitEvents(enc *encoder, events chan<- uint32, errs chan<- error) {
+func waitEvents(generator uintptr, events chan<- uint32, errs chan<- error) {
+	defer release(generator)
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	initThread()
 	for {
-		kind, err := enc.waitEvent()
+		kind, err := waitEvent(generator)
 		if err != nil {
 			errs <- err
 			close(events)

@@ -13,6 +13,7 @@ import (
 	"github.com/pion/interceptor"
 	"github.com/pion/interceptor/pkg/cc"
 	"github.com/pion/interceptor/pkg/gcc"
+	"github.com/pion/interceptor/pkg/stats"
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
@@ -85,6 +86,8 @@ type Sender struct {
 	keyGap      bool // frames were dropped for lack of a key: resume on a keyframe
 	stats       Stats
 	estimator   cc.BandwidthEstimator
+	statsGetter stats.Getter
+	rtxSSRC     uint32
 	estimatorCh chan cc.BandwidthEstimator
 	closed      bool
 }
@@ -121,10 +124,17 @@ func New(cfg Config) (*Sender, error) {
 	}
 	congestion.OnNewPeerConnection(func(_ string, estimator cc.BandwidthEstimator) { s.estimatorCh <- estimator })
 	registry.Add(congestion)
+	// pion's PeerConnection.GetStats has no outbound RTP stats: read the
+	// stats interceptor directly (media SSRC, RTX SSRC for retransmissions).
+	statsFactory, err := stats.NewInterceptor()
+	if err != nil {
+		return nil, err
+	}
+	statsFactory.OnNewPeerConnection(func(_ string, getter stats.Getter) { s.statsGetter = getter })
+	registry.Add(statsFactory)
 	for _, configure := range []func() error{
 		func() error { return webrtc.ConfigureNack(media, registry) },
 		func() error { return webrtc.ConfigureRTCPReports(registry) },
-		func() error { return webrtc.ConfigureStatsInterceptor(registry) },
 		func() error { return webrtc.ConfigureTWCCHeaderExtensionSender(media, registry) },
 	} {
 		if err := configure(); err != nil {
@@ -160,7 +170,7 @@ func New(cfg Config) (*Sender, error) {
 	}
 	s.rtp = transceiver.Sender()
 	if encodings := s.rtp.GetParameters().Encodings; len(encodings) > 0 {
-		s.ssrc = uint32(encodings[0].SSRC)
+		s.ssrc, s.rtxSSRC = uint32(encodings[0].SSRC), uint32(encodings[0].RTX.SSRC)
 	}
 	s.stats.SSRC = s.ssrc
 	go s.readRTCP()
@@ -313,19 +323,21 @@ func (s *Sender) Stats() Stats {
 	if estimator != nil {
 		out.EstimateBPS = estimator.GetTargetBitrate()
 	}
-	for _, stat := range s.pc.GetStats() {
-		switch v := stat.(type) {
-		case webrtc.OutboundRTPStreamStats:
-			if uint32(v.SSRC) == s.ssrc {
-				out.PacketsSent, out.BytesSent = uint64(v.PacketsSent), v.BytesSent
-				out.RetransmittedPackets, out.RetransmittedBytes = v.RetransmittedPacketsSent, v.RetransmittedBytesSent
-			}
-		case webrtc.RemoteInboundRTPStreamStats:
-			if uint32(v.SSRC) == s.ssrc {
-				out.HasRemote = true
-				out.RTT = time.Duration(v.RoundTripTime * float64(time.Second))
-				out.FractionLost = v.FractionLost
-			}
+	if s.statsGetter == nil {
+		return out
+	}
+	if st := s.statsGetter.Get(s.ssrc); st != nil {
+		out.PacketsSent, out.BytesSent = st.OutboundRTPStreamStats.PacketsSent, st.OutboundRTPStreamStats.BytesSent
+		if st.RemoteInboundRTPStreamStats.PacketsReceived > 0 || st.RemoteInboundRTPStreamStats.RoundTripTime > 0 {
+			out.HasRemote = true
+			out.RTT, out.FractionLost = st.RemoteInboundRTPStreamStats.RoundTripTime, st.RemoteInboundRTPStreamStats.FractionLost
+		}
+	}
+	if s.rtxSSRC != 0 {
+		if st := s.statsGetter.Get(s.rtxSSRC); st != nil {
+			out.RetransmittedPackets, out.RetransmittedBytes = st.OutboundRTPStreamStats.PacketsSent, st.OutboundRTPStreamStats.BytesSent
+			out.PacketsSent += out.RetransmittedPackets
+			out.BytesSent += out.RetransmittedBytes
 		}
 	}
 	return out

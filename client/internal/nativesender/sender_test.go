@@ -188,7 +188,7 @@ func TestSenderStreamsEncryptedFramesToReceiver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sender.Close()
+	defer func() { _ = sender.Close() }()
 	server.mu.Lock()
 	server.sender = sender
 	offer := server.offers[0]
@@ -275,7 +275,7 @@ func TestSenderStreamsEncryptedFramesToReceiver(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("PLI did not request a keyframe")
 	}
-	if st := sender.Stats(); st.FramesSent != 30 || st.KeyframesSent != 3 || st.FramesDropped != 2 {
+	if st := sender.Stats(); st.FramesSent != 30 || st.KeyframesSent != 3 || st.FramesDropped != 2 || st.PacketsSent < 30 || st.BytesSent == 0 {
 		t.Fatalf("stats: %+v", st)
 	}
 }
