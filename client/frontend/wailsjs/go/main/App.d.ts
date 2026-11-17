@@ -347,6 +347,8 @@ export function NativeScreenKeyForTab(arg1:string,arg2:any):Promise<void>;
 
 export function NativeScreenShareStatusForTab(arg1:string):Promise<any>;
 
+export function NativeScreenThumbnails(arg1:Array<string>):Promise<Record<string, string>>;
+
 export function NativeToastsAvailable():Promise<boolean>;
 
 export function Notify(arg1:string,arg2:string):Promise<string>;

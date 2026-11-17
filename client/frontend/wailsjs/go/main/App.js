@@ -686,6 +686,10 @@ export function NativeScreenShareStatusForTab(arg1) {
   return window['go']['main']['App']['NativeScreenShareStatusForTab'](arg1);
 }
 
+export function NativeScreenThumbnails(arg1) {
+  return window['go']['main']['App']['NativeScreenThumbnails'](arg1);
+}
+
 export function NativeToastsAvailable() {
   return window['go']['main']['App']['NativeToastsAvailable']();
 }

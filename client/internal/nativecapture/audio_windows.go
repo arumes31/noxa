@@ -107,8 +107,8 @@ func activateProcessLoopback(pid uint32, mode int32) (uintptr, error) {
 		_        [3]uint16
 		cbSize   uint32
 		_        uint32
-		blobData uintptr
-	}{vt: 65, cbSize: uint32(unsafe.Sizeof(params)), blobData: uintptr(unsafe.Pointer(&params))} // #nosec G103
+		blobData unsafe.Pointer // a tracked pointer: params may not move before Windows reads it
+	}{vt: 65, cbSize: uint32(unsafe.Sizeof(params)), blobData: unsafe.Pointer(&params)} // #nosec G103
 	path, _ := windows.UTF16PtrFromString(`VAD\Process_Loopback`)
 	var op uintptr
 	// #nosec G103 -- arguments live until the completion below.

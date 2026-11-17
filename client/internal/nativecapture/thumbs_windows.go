@@ -7,7 +7,6 @@ import (
 	"errors"
 	"image"
 	"image/jpeg"
-	"sync"
 	"time"
 	"unsafe"
 
@@ -138,32 +137,39 @@ func stretchJPEG(dc uintptr, src rect, w, h int) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-// Thumbnails renders sources on a few goroutines within budget; sources
-// that fail or do not fit get none.
+// Thumbnails renders sources on a few goroutines and returns what is done
+// by the budget: a window stuck in PrintWindow delays only its own worker,
+// never the picker refresh.
 func Thumbnails(sources []Source, maxW, maxH int, budget time.Duration) map[Source][]byte {
-	out := make(map[Source][]byte, len(sources))
-	deadline := time.Now().Add(budget)
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	next := make(chan Source)
-	for range min(4, len(sources)) {
-		wg.Go(func() {
-			for src := range next {
-				if jpg, err := Thumbnail(src, maxW, maxH); err == nil {
-					mu.Lock()
-					out[src] = jpg
-					mu.Unlock()
-				}
-			}
-		})
+	type result struct {
+		src Source
+		jpg []byte
 	}
+	results := make(chan result, len(sources)) // late workers never block
+	next := make(chan Source, len(sources))
 	for _, src := range sources {
-		if time.Now().After(deadline) {
-			break
-		}
 		next <- src
 	}
 	close(next)
-	wg.Wait()
+	for range min(4, len(sources)) {
+		go func() {
+			for src := range next {
+				jpg, _ := Thumbnail(src, maxW, maxH)
+				results <- result{src, jpg}
+			}
+		}()
+	}
+	out := make(map[Source][]byte, len(sources))
+	timeout := time.After(budget)
+	for range sources {
+		select {
+		case r := <-results:
+			if len(r.jpg) > 0 {
+				out[r.src] = r.jpg
+			}
+		case <-timeout:
+			return out
+		}
+	}
 	return out
 }

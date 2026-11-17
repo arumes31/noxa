@@ -232,3 +232,43 @@ func TestProcessLoopbackTreeDepth(t *testing.T) {
 		t.Fatalf("excluded tree still audible: rms %.0f vs tone %.0f", exclude, include)
 	}
 }
+
+// TestProcessLoopbackExcludesChromiumAudioService plays a WebAudio tone in a
+// fresh Microsoft Edge (Chromium, like WebView2) started as a direct child:
+// its audio renders in Chromium's audio-service process, a child of the
+// browser process. EXCLUDE of the browser PID (what selfAudioRoot picks for
+// noXa's WebView2) must silence it while system capture still hears it.
+func TestProcessLoopbackExcludesChromiumAudioService(t *testing.T) {
+	if os.Getenv("NOXA_NATIVE_CAPTURE") == "" {
+		t.Skip("set NOXA_NATIVE_CAPTURE=1 on an interactive Windows desktop with audio output")
+	}
+	requireOpus(t)
+	edge := filepath.Join(os.Getenv("ProgramFiles(x86)"), "Microsoft", "Edge", "Application", "msedge.exe")
+	if _, err := os.Stat(edge); err != nil {
+		t.Skip("Microsoft Edge not installed")
+	}
+	dir := t.TempDir()
+	page := filepath.Join(dir, "tone.html")
+	html := `<!doctype html><script>const c=new AudioContext();const o=c.createOscillator();const g=c.createGain();g.gain.value=0.3;o.frequency.value=440;o.connect(g).connect(c.destination);o.start();</script>`
+	if err := os.WriteFile(page, []byte(html), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(t.Context(), edge, "--user-data-dir="+filepath.Join(dir, "profile"), "--no-first-run", "--no-default-browser-check",
+		"--autoplay-policy=no-user-gesture-required", "--new-window", "file:///"+filepath.ToSlash(page))
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	time.Sleep(5 * time.Second)
+	browser := uint32(cmd.Process.Pid) // #nosec G115
+	system, _ := captureRMS(t, 4, processLoopbackExclude)
+	excluded, _ := captureRMS(t, browser, processLoopbackExclude)
+	included, _ := captureRMS(t, browser, processLoopbackInclude)
+	t.Logf("Edge tone: system %.0f, exclude browser %.0f, include browser %.0f", system, excluded, included)
+	if system < 500 || included < 500 {
+		t.Fatalf("Edge tone not captured: system %.0f, include %.0f", system, included)
+	}
+	if excluded > system/20 {
+		t.Fatalf("Chromium audio service not excluded with its browser process: %.0f vs %.0f", excluded, system)
+	}
+}

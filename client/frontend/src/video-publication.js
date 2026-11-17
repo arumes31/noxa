@@ -1166,6 +1166,8 @@ export function createVideoPublication({ policy }) {
             return false;
         }
         const native = { id, tabID, track, generation: "0", surface, audioMode, preset: { ...p, width, height } };
+        // Go reports an audio fallback while Start is still running.
+        if (pending.audio) applyNativeAudioNotice(native, pending.audio);
         // Bound calls run concurrently in Go: keep updates in order (a pause and
         // its resume share a generation).
         let updates = Promise.resolve();
@@ -1199,6 +1201,13 @@ export function createVideoPublication({ policy }) {
         return true;
     }
 
+    // Go captured other audio than requested: application audio fell back to
+    // system audio (minus noXa), or no audio could be captured at all.
+    function applyNativeAudioNotice(native, reason) {
+        native.audioMode = reason === "system" ? "system" : "none";
+        V().toast(tLabel(reason === "system" ? "share.nativeAudioSystem" : "share.nativeAudioUnavailable"), "warn");
+    }
+
     // Go reports the native pipeline's own lifecycle: window closed, failure
     // after one restart, minimized source (the last frame is held).
     window.runtime?.EventsOn?.("native_share", payload => {
@@ -1206,15 +1215,11 @@ export function createVideoPublication({ policy }) {
         if (typeof payload === "string") { try { event = JSON.parse(payload); } catch { event = null; } }
         const { state } = V();
         if ((event?.state === "ended" || event?.state === "fallback") && nativeEventIsCurrent(event, nativePending)) { nativePending.ended = true; return; }
+        if (event?.state === "audio" && nativeEventIsCurrent(event, nativePending)) { nativePending.audio = event.reason || "none"; return; }
         // A delayed event of an older share or another tab never touches this one.
         if (!event || !nativeEventIsCurrent(event, state.nativeShare)) return;
         if (event.state === "minimized") V().toast(tLabel("share.nativeMinimized"), "warn");
-        else if (event.state === "audio") {
-            // Go captured other audio than requested: application audio fell back to
-            // system audio (minus noXa), or no audio could be captured at all.
-            state.nativeShare.audioMode = event.reason === "system" ? "system" : "none";
-            V().toast(tLabel(event.reason === "system" ? "share.nativeAudioSystem" : "share.nativeAudioUnavailable"), "warn");
-        }
+        else if (event.state === "audio") applyNativeAudioNotice(state.nativeShare, event.reason);
         else if (event.state === "ended") void doStopShare();
         else if (event.state === "fallback") {
             const { surface, preset, audioMode } = state.nativeShare;
