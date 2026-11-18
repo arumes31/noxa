@@ -82,7 +82,7 @@ export function createCaptureRegistry({ createVideo = () => globalThis.document.
             element.muted = true;
             element.playsInline = true;
             element.autoplay = true;
-            // Video only: audio is routed explicitly by studio-audio.js.
+            // Video only: the element never plays capture audio.
             element.srcObject = new MediaStream([video]);
             const audioTrack = audio ? stream.getAudioTracks().find(track => track.readyState === "live") || null : null;
             // Audio that was not explicitly requested never stays alive.

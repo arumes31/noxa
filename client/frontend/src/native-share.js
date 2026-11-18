@@ -31,8 +31,11 @@ export function nativeFailureKey(reason) {
 
 export async function nativeShareStatus(tabID) {
     if (typeof app()?.NativeScreenShareStatusForTab !== "function") return { available: false, reason: "unsupported_platform", monitors: [], windows: [] };
-    try { return await app().NativeScreenShareStatusForTab(tabID); }
-    catch { return { available: false, reason: "unavailable", monitors: [], windows: [] }; }
+    try {
+        const status = await app().NativeScreenShareStatusForTab(tabID);
+        if (status && typeof status === "object") return status;
+    } catch { /* reported as unavailable below */ }
+    return { available: false, reason: "unavailable", monitors: [], windows: [] };
 }
 
 /** The native source for a picker surface and option value ("m:<index>" / "w:<handle>"). */

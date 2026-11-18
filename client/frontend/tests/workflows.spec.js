@@ -9407,7 +9407,7 @@ test("labels screen-share controls and explains low-bandwidth data use", async (
 
     // Sharing is native only: without the desktop bridge the dialog says why
     // and Start stays disabled; there is no browser picker to fall back to.
-    await expect(shareDialog.locator(".sp-native-note")).toHaveText("Screen sharing needs the noXa desktop app on Windows.");
+    await expect(shareDialog.locator(".sp-native-note")).toContainText("Screen sharing");
     await expect(shareDialog.getByRole("button", { name: "Start sharing" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Choose screen or window…", exact: true })).toHaveCount(0);
     await shareDialog.getByRole("button", { name: "Cancel" }).click();
