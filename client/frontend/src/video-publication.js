@@ -422,7 +422,8 @@ export function createVideoPublication({ policy }) {
         const { quality, $ } = view;
         const initialKind = (initialSurface || rememberedNativeSource()?.surface) === "window" ? "window" : "monitor";
         const sources = () => overlay.querySelectorAll(`input[name="${view.sourceName}"]`);
-        const audioChoices = new Map([[initialSurface || "monitor", initialAudio]]);
+        // The given audio belongs to the surface opened with; a fresh open's "none" is no choice (a window still defaults to its application).
+        const audioChoices = new Map(initialSurface || initialAudio !== "none" ? [[initialSurface || initialKind, initialAudio]] : []);
         // Keep explicit choices per source so toggling sources cannot undo an override.
         $(".sh-audio").addEventListener("change", () => { audioChoices.set(view.surface(), view.audio()); refreshNative(); });
         const syncAudioSource = () => {
