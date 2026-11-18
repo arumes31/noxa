@@ -64,7 +64,9 @@ func (m *connManager) callKeys(callID, slot string) *framecrypt.Encryptor {
 
 // nativeCallAvailable: a call share needs no server peer, only Windows
 // capture and the session's encrypted media.
-func nativeCallAvailable(e2ee bool) bool { return runtime.GOOS == "windows" && nativecapture.Supported() && e2ee }
+func nativeCallAvailable(e2ee bool) bool {
+	return runtime.GOOS == "windows" && nativecapture.Supported() && e2ee
+}
 
 // callRelayServers is the relay-only ICE configuration of a call's screen
 // sub-connection, the webview's privateCallRTCConfiguration: TURN entries

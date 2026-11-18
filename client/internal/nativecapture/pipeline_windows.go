@@ -19,6 +19,9 @@ const nv12Ring = 4
 
 var procSetThreadPriority = windows.NewLazySystemDLL("kernel32.dll").NewProc("SetThreadPriority")
 
+// keyframeSlices counts a keyframe's slices for the multi-slice check (a test seam).
+var keyframeSlices = sliceCount
+
 // Session is one running capture → convert → encode pipeline. Its OS thread
 // owns all D3D11/WGC/MF calls except the blocking MFT event wait.
 type Session struct {
