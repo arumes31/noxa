@@ -6,6 +6,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"unsafe"
@@ -293,8 +294,14 @@ func openEncoder(d *device, activate uintptr, info *encoderInfo, width, height, 
 			return nil, err
 		}
 	}
-	vcall(e.mft, 23, msgBeginStreaming, 0)
-	vcall(e.mft, 23, msgStartOfStream, 0)
+	for _, m := range []struct {
+		name string
+		msg  uintptr
+	}{{"BEGIN_STREAMING", msgBeginStreaming}, {"START_OF_STREAM", msgStartOfStream}} {
+		if err := vcall(e.mft, 23, m.msg, 0).err(m.name); err != nil {
+			e.notes += "; " + err.Error()
+		}
+	}
 	return e, nil
 }
 
@@ -342,7 +349,12 @@ func waitEvent(generator uintptr) (uint32, error) {
 // submit hands one NV12 texture to the encoder (time in 100 ns units).
 func (e *encoder) submit(nv12 uintptr, time, duration int64, keyframe bool) error {
 	if keyframe {
-		_ = e.setCodec(&codecForceKeyFrame, 1, false)
+		if err := e.setCodec(&codecForceKeyFrame, 1, false); err != nil {
+			// Once per encoder and process: late joiners then wait for the 300 s GOP.
+			if _, seen := keyframeRefusals.LoadOrStore(e.info.name, true); !seen {
+				log.Printf("native encoder %q: force keyframe refused: %v", e.info.name, err)
+			}
+		}
 	}
 	var buf, sample uintptr
 	// #nosec G103 -- out pointers.
@@ -426,6 +438,9 @@ func (e *encoder) collect() ([]byte, bool, int64, bool, error) {
 }
 
 var procMFCreateMemoryBuffer = mfplat.NewProc("MFCreateMemoryBuffer")
+
+// keyframeRefusals: encoder names whose force-keyframe refusal was logged.
+var keyframeRefusals sync.Map
 
 func (e *encoder) renegotiateOutput() error {
 	var t uintptr

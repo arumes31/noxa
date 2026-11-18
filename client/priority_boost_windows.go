@@ -113,7 +113,7 @@ func boostProcess(pid uint32) (boostedProcess, error) {
 		// Sandboxed WebView2 processes (renderer, storage utility) answer
 		// STATUS_INVALID_PARAMETER: they have no GPU scheduling context. They
 		// still get the CPU boost; only other statuses are worth a log line.
-		if status != statusInvalidParameter {
+		if uint32(status) != statusInvalidParameter {
 			gpuErr = fmt.Errorf("D3DKMTGetProcessSchedulingPriorityClass pid %d: NTSTATUS 0x%08X", pid, uint32(status))
 		}
 		gpu = gpuPriorityUntouched

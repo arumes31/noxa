@@ -438,6 +438,7 @@ func (n *nativeShare) applyUpdate(update NativeShareUpdate) error {
 	}
 	if nativeShareCodecFallback(update.Codec) {
 		n.mu.Unlock()
+		log.Printf("native share publication codec %q is not H.264", update.Codec)
 		n.fallback("codec")
 		return errors.New("publication codec is not H.264")
 	}
@@ -885,8 +886,12 @@ func (n *nativeShare) watch() {
 				if errors.Is(rerr, errNativeShareStopped) {
 					return
 				}
+				log.Printf("native share restart failed: %v", rerr)
 				fallthrough
 			default:
+				if decision != "restart" {
+					log.Printf("native share capture failed again: %v", err)
+				}
 				n.fallback("capture")
 				return
 			}
@@ -919,7 +924,7 @@ func (n *nativeShare) watch() {
 				log.Printf("native share stats %s", snap)
 			}
 			if reason != "" {
-				log.Printf("native share stalled (%s), falling back to Browser capture: %s", reason, snap)
+				log.Printf("native share stalled (%s): %s", reason, snap)
 				n.fallback("stalled")
 				return
 			}
@@ -933,6 +938,7 @@ type nativeStallWatch struct {
 	session *nativecapture.Session
 	sender  *nativesender.Sender
 	packets uint64
+	noKey   uint64
 }
 
 // observe takes one stats snapshot and advances the stall watchdog.
@@ -941,7 +947,7 @@ func (n *nativeShare) observe(w *nativeStallWatch, session *nativecapture.Sessio
 	sender, upload, generation := n.sender, n.upload, n.generation
 	n.mu.Unlock()
 	snap := nativeShareSnapshot{elapsed: elapsed, peer: "none", upload: upload, generation: generation, cs: cs, encoder: session.Info(),
-		unsent: n.frames.unsent.Load(), rejected: n.frames.rejected.Load(), dropped: n.frames.dropped.Load()}
+		unsent: n.frames.unsent.Load(), rejected: n.frames.rejected.Load(), dropped: n.frames.dropped.Load(), noKey: n.frames.noKey.Load()}
 	n.frames.mu.Lock()
 	snap.last = n.frames.last
 	n.frames.mu.Unlock()
@@ -966,9 +972,12 @@ func (n *nativeShare) observe(w *nativeStallWatch, session *nativecapture.Sessio
 	if snap.ss.VideoPackets != w.packets {
 		w.packets, w.LastVideo = snap.ss.VideoPackets, now
 	}
-	// Paused (no viewer demand) or minimized by design; a restarted capture
-	// session gets a fresh window too.
-	w.Idle = !upload || generation == 0 || cs.Minimized
+	// Paused (no viewer demand), minimized, or without an active media key
+	// (Browser capture would wait for the same key): idle by design. A
+	// restarted capture session gets a fresh window too.
+	keyless := snap.noKey != w.noKey
+	w.noKey = snap.noKey
+	w.Idle = !upload || generation == 0 || cs.Minimized || keyless
 	if w.Idle || session != w.session {
 		w.session, w.Resumed = session, now
 	}
@@ -980,6 +989,7 @@ func (n *nativeShare) observe(w *nativeStallWatch, session *nativecapture.Sessio
 }
 
 func (n *nativeShare) end(reason string) {
+	log.Printf("native share ended: %s", reason)
 	n.close()
 	n.emit("ended", reason)
 }
@@ -988,6 +998,7 @@ func (n *nativeShare) fallback(reason string) {
 	if !n.fellBack.CompareAndSwap(false, true) {
 		return
 	}
+	log.Printf("native share falling back to Browser capture: %s", reason)
 	n.close()
 	n.emit("fallback", reason)
 }

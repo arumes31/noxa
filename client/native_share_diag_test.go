@@ -59,7 +59,7 @@ func TestNativeShareSnapshotLine(t *testing.T) {
 		encoder: nativecapture.EncoderInfo{Name: "AMD H.264 Encoder MFT", Vendor: "amd", Hardware: true},
 		dropped: 2, last: "dropped: native frame dropped"}
 	want := `t=5s peer=connected upload=on gen=3 minimized=false captured=150 converted=149 submitted=148 needinput=149 encoded=0 keyframes=0` +
-		` unsent=0 rejected=0 dropped=2 sent=0 keysent=0 rtp=0 wire=0 audio=250/0 encoder="AMD H.264 Encoder MFT"/amd/hw last="dropped: native frame dropped"`
+		` unsent=0 rejected=0 dropped=2 nokey=0 sent=0 keysent=0 rtp=0 wire=0 audio=250/0 encoder="AMD H.264 Encoder MFT"/amd/hw last="dropped: native frame dropped"`
 	if got := s.String(); got != want {
 		t.Fatalf("line\n got %s\nwant %s", got, want)
 	}
@@ -77,7 +77,7 @@ func TestNativeFrameDiagLogsEachReasonOnce(t *testing.T) {
 		d.note(dropKind(noKey), noKey)
 		d.note(dropKind(multi), multi)
 	}
-	if d.dropped.Load() != 3 || d.rejected.Load() != 3 {
+	if d.dropped.Load() != 3 || d.noKey.Load() != 3 || d.rejected.Load() != 3 {
 		t.Fatalf("dropped %d rejected %d", d.dropped.Load(), d.rejected.Load())
 	}
 	out := buf.String()

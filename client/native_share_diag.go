@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"noxa/client/internal/nativecapture"
+	"noxa/internal/framecrypt"
 	"noxa/internal/nativesender"
 )
 
@@ -67,6 +68,7 @@ func nativeStatsAt(i int) time.Duration {
 // first occurrence of each distinct reason (never one line per frame).
 type nativeFrameDiag struct {
 	unsent, rejected, dropped atomic.Uint64 // upload off/no peer; refused by the sender; withheld (no key, key gap)
+	noKey                     atomic.Uint64 // the dropped frames that had no active media key
 
 	mu   sync.Mutex
 	last string
@@ -80,6 +82,9 @@ func (d *nativeFrameDiag) note(kind string, err error) {
 		d.rejected.Add(1)
 	case "dropped":
 		d.dropped.Add(1)
+		if errors.Is(err, framecrypt.ErrNoKey) {
+			d.noKey.Add(1)
+		}
 	}
 	reason := kind + ": " + strings.ReplaceAll(err.Error(), "\n", "; ") // errors.Join text is multi-line
 	d.mu.Lock()
@@ -116,6 +121,7 @@ type nativeShareSnapshot struct {
 	ss                        nativesender.Stats
 	encoder                   nativecapture.EncoderInfo
 	unsent, rejected, dropped uint64
+	noKey                     uint64
 	last                      string
 }
 
@@ -126,8 +132,8 @@ func (s nativeShareSnapshot) String() string {
 	fmt.Fprintf(&b, "t=%s peer=%s upload=%s gen=%d minimized=%v captured=%d converted=%d submitted=%d needinput=%d encoded=%d keyframes=%d",
 		s.elapsed.Round(time.Second), s.peer, onOff[s.upload], s.generation, s.cs.Minimized,
 		s.cs.Captured, s.cs.Converted, s.cs.Submitted, s.cs.NeedInput, s.cs.Encoded, s.cs.Keyframes)
-	fmt.Fprintf(&b, " unsent=%d rejected=%d dropped=%d sent=%d keysent=%d rtp=%d wire=%d audio=%d/%d encoder=%q/%s/%s",
-		s.unsent, s.rejected, s.dropped, s.ss.FramesSent, s.ss.KeyframesSent, s.ss.VideoPackets, s.ss.PacketsSent,
+	fmt.Fprintf(&b, " unsent=%d rejected=%d dropped=%d nokey=%d sent=%d keysent=%d rtp=%d wire=%d audio=%d/%d encoder=%q/%s/%s",
+		s.unsent, s.rejected, s.dropped, s.noKey, s.ss.FramesSent, s.ss.KeyframesSent, s.ss.VideoPackets, s.ss.PacketsSent,
 		s.ss.AudioFramesSent, s.ss.AudioFramesDropped, s.encoder.Name, s.encoder.Vendor, kind)
 	if s.last != "" {
 		fmt.Fprintf(&b, " last=%q", s.last)

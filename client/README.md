@@ -46,7 +46,7 @@ the current user's voice controls.
   notice. It also falls back when it stalls: the native peer is not
   connected 15 s after its offer, or viewers want the share but no video
   packet has left for 10 s (never while the share is paused for lack of
-  viewers or its window is minimized). `client.log` then has a
+  viewers, its window is minimized or no media key is active). `client.log` then has a
   `native share stalled` line; `native share stats` lines (2, 5 and 10 s
   after the start, then every minute) count each pipeline stage, and
   `native encoder` lines name the adapter and every encoder tried. A Browser
