@@ -124,21 +124,21 @@ type ringSlot struct {
 
 // pipeline holds the GPU objects that depend on the output size.
 type pipeline struct {
-	d          *device
-	conv       *converter
-	enc        *encoder
-	ring       [nv12Ring]ringSlot
-	next       int
-	outW, outH int
-	srcW, srcH int
-	events     chan uint32
-	eventErr   chan error
-	needInput  int
-	pending    []int // ring slots converted but not yet submitted
-	inFlight   []flight
-	last       int // ring slot of the newest converted frame, -1 none
-	openedAt   time.Time
-	size       sizeHold
+	d            *device
+	conv         *converter
+	enc          *encoder
+	ring         [nv12Ring]ringSlot
+	next         int
+	outW, outH   int
+	srcW, srcH   int
+	events       chan uint32
+	eventErr     chan error
+	needInput    int
+	pending      []int // ring slots converted but not yet submitted
+	inFlight     []flight
+	last         int // ring slot of the newest converted frame, -1 none
+	openedAt     time.Time
+	size         sizeHold
 	sliceChecked bool // the encoder's first keyframe was inspected for slices
 	// held is a frame (AddRef'd) whose size differs from the pipeline's: a
 	// window that stops repainting after a resize still gets its rebuild.
