@@ -11,8 +11,12 @@
 //   e2ee     (#12) media frames are end-to-end encrypted with per-call keys
 //            sent over Olm (media-e2ee/call-media-e2ee.js); the data channel
 //            state carries {e2ee: CALL_E2EE_MARKER}; there is no plaintext mode
+//   native   main offers and answers list features ["screen-sub"]: a desktop
+//            peer sharing its screen natively then opens a second relay-only
+//            connection (sub "screen") that this phone answers receive-only
+//            (sub "screen-reply") and shows as that peer's screen share
 import { openDM, sealDM } from "./crypto.js";
-import { CALL_E2EE_MARKER, CallMediaE2EE, announcesCallE2EE } from "./media-e2ee/call-media-e2ee.js";
+import { CALL_E2EE_MARKER, CALL_FEATURES, CallMediaE2EE, SCREEN_SUB, SCREEN_SUB_REPLY, ScreenSubReceiver, announcesCallE2EE } from "./media-e2ee/call-media-e2ee.js";
 import { get as setting } from "./settings.js";
 import { CameraSource, callOutcome, callPeer, capSender, classifyCall } from "./video.js";
 
@@ -504,7 +508,8 @@ export class Calls extends EventTarget {
             } else if (event.track.kind === "video") {
                 const slot = video.indexOf(event.transceiver) === 1 ? "screen" : "camera";
                 peer.video ||= {};
-                peer.video[slot] = event.track;
+                if (slot === "screen" && "mainScreen" in peer) peer.mainScreen = event.track;
+                else peer.video[slot] = event.track;
                 this.#emit("state");
             }
         };
@@ -538,6 +543,7 @@ export class Calls extends EventTarget {
                     return;
                 }
                 peer.remoteMedia = { camera: !!state.camera, screen: !!state.screen };
+                if (!state.screen) peer.screenSub?.close(); // the peer's native share ended
                 this.#emit("state");
             } catch {
                 // Ignore malformed state.
@@ -561,6 +567,7 @@ export class Calls extends EventTarget {
     }
 
     #closePeer(peer) {
+        peer.screenSub?.close();
         this.e2ee.releasePeer(peer.pc).catch(() => {});
         clearTimeout(peer.connectTimer);
         clearTimeout(peer.timer);
@@ -573,10 +580,14 @@ export class Calls extends EventTarget {
 
     // --- Signalling -------------------------------------------------------------
 
-    async #send(uid, type, sdp) {
+    // sub: "screen-reply" for this phone's side of a peer's screen sub-connection.
+    async #send(uid, type, sdp, sub = "") {
         const key = await this.#peerKey(uid);
         if (!key) throw Object.assign(new Error("The other device's key could not be verified."), { code: "untrusted" });
-        const body = sealDM(JSON.stringify({ call_id: this.call.id, from: this.uid, to: uid, type, sdp }), key, this.session.identity.xSecret);
+        const description = { call_id: this.call.id, from: this.uid, to: uid, type, sdp };
+        if (sub) description.sub = sub;
+        else if (type === "offer" || type === "answer") description.features = CALL_FEATURES;
+        const body = sealDM(JSON.stringify(description), key, this.session.identity.xSecret);
         // One account shares a small signal allowance across a call.
         const sending = this.#signals.then(async () => {
             await new Promise(resolve => setTimeout(resolve, 55));
@@ -622,6 +633,12 @@ export class Calls extends EventTarget {
             if (!plain) throw Object.assign(new Error("A call message could not be verified."), { code: "untrusted" });
             const description = JSON.parse(plain);
             if (description.call_id !== this.call.id || description.from !== signal.from || description.to !== this.uid) throw new Error("misaddressed call message");
+            if (description.sub !== undefined) {
+                // Only a desktop sharer sends "screen"; this phone never shares natively.
+                if (description.sub === SCREEN_SUB) await this.#screenSub(signal.from, peer).signal(description).catch(() => peer.screenSub?.close());
+                else if (description.sub !== SCREEN_SUB_REPLY) throw new Error("unknown call sub-connection");
+                return;
+            }
             if (description.type === "candidates") {
                 const candidates = JSON.parse(description.sdp);
                 if (!Array.isArray(candidates) || candidates.length > 16 || peer.remoteCount + candidates.length > 64) throw new Error("invalid call candidates");
@@ -652,6 +669,36 @@ export class Calls extends EventTarget {
             }
         }).catch(error => this.#emit("error", error));
         await peer.chain;
+    }
+
+    /** The viewer side of a peer's native screen share; failures end only that picture. */
+    #screenSub(uid, peer) {
+        peer.screenSub ||= new ScreenSubReceiver({
+            e2ee: this.e2ee, config: () => this.rtc, peerClientID: () => this.#clientOf(uid),
+            send: (type, sdp) => this.#send(uid, type, sdp, SCREEN_SUB_REPLY),
+            onTrack: track => {
+                if (this.peers.get(uid) !== peer) return;
+                if (track.kind === "audio") {
+                    peer.audio ||= Object.assign(document.createElement("audio"), { autoplay: true, hidden: true });
+                    if (!peer.audio.isConnected) document.body.append(peer.audio);
+                    peer.audio.muted = this.deafened;
+                    const stream = peer.audio.srcObject || new MediaStream();
+                    stream.addTrack(track);
+                    peer.audio.srcObject = stream;
+                    peer.audio.play().catch(() => {});
+                    return;
+                }
+                peer.video ||= {};
+                if (!("mainScreen" in peer)) peer.mainScreen = peer.video.screen;
+                peer.video.screen = track;
+                this.#emit("state");
+            },
+            onClose: () => {
+                if ("mainScreen" in peer) { peer.video.screen = peer.mainScreen; delete peer.mainScreen; }
+                this.#emit("state");
+            },
+        });
+        return peer.screenSub;
     }
 
     /** Bytes sent and received across this call's peers. */

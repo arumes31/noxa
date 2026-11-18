@@ -20,6 +20,13 @@
 // calls.js): audio [microphone, screen audio] and video [camera, screen]. A
 // sender is bound to this device's slot key and a receiver to the peer's.
 //
+// Native screen share (desktop, PR 5): a peer that shares natively opens a
+// second relay-only connection per viewer, the "screen" sub-connection,
+// carrying only its screen and screen audio under the same call keys. Its
+// sealed signals carry sub "screen" (offer, candidates; from the sharer) or
+// "screen-reply" (answer, candidates; from the viewer). A sharer opens one
+// only to a peer whose main offer or answer listed SCREEN_SUB_FEATURE.
+//
 // There is no plaintext fallback. A peer whose app does not announce call
 // encryption (CALL_E2EE_MARKER on the call-media data channel) cannot be
 // heard or seen here; the caller ends the call with an "update required"
@@ -71,6 +78,109 @@ export function callTransceiverSlots(pc) {
     return out;
 }
 
+/** [{transceiver, kind, slot}] of a screen sub-connection: video "screen", audio "screenaudio". */
+export function callScreenSlots(pc) {
+    const out = [];
+    const seen = new Set();
+    for (const transceiver of pc?.getTransceivers?.() || []) {
+        const kind = transceiver.receiver?.track?.kind || transceiver.sender?.track?.kind;
+        if ((kind !== "audio" && kind !== "video") || seen.has(kind)) continue;
+        seen.add(kind);
+        out.push({ transceiver, kind, slot: kind === "video" ? "screen" : "screenaudio" });
+    }
+    return out;
+}
+
+export const SCREEN_SUB_FEATURE = "screen-sub";
+export const SCREEN_SUB = "screen";
+export const SCREEN_SUB_REPLY = "screen-reply";
+/** Features this app lists in its main call offers and answers. */
+export const CALL_FEATURES = Object.freeze([SCREEN_SUB_FEATURE]);
+
+/** Whether a peer's main offer or answer advertised the screen sub-connection. */
+export function advertisesScreenSub(description) {
+    return Array.isArray(description?.features) && description.features.includes(SCREEN_SUB_FEATURE);
+}
+
+/**
+ * The viewer side of one peer's screen sub-connection: receives only, binds
+ * the receivers to the peer's "screen"/"screenaudio" keys before answering,
+ * and replies through send(kind, payload) (sealed with sub "screen-reply").
+ * A new offer replaces the connection (the sharer reconnected). Errors
+ * reject signal(); the caller closes this sub-connection, never the call.
+ */
+export class ScreenSubReceiver {
+    constructor({ e2ee, config, peerClientID, send, onTrack = () => {}, onClose = () => {}, createPeer = c => new RTCPeerConnection(c) }) {
+        Object.assign(this, { e2ee, config, peerClientID, send, onTrack, onClose, createPeer });
+        this.pc = null;
+        this.remote = [];
+        this.remoteCount = 0;
+    }
+
+    async signal(description) {
+        if (description?.sub !== SCREEN_SUB) throw new Error("not a screen sub-connection signal");
+        if (description.type === "offer") return this.#offer(description.sdp);
+        if (description.type !== "candidates") throw new Error("invalid screen sub-connection signal");
+        const candidates = JSON.parse(description.sdp);
+        if (!Array.isArray(candidates) || !candidates.length || candidates.length > 16 || this.remoteCount + candidates.length > 64) throw new Error("invalid screen sub-connection candidates");
+        this.remoteCount += candidates.length;
+        this.remote.push(...candidates);
+        await this.#apply(this.pc);
+    }
+
+    async #offer(sdp) {
+        this.close();
+        const config = await this.config(); // may fetch the current relay lease
+        const pc = this.e2ee.protectPeer(this.createPeer(this.e2ee.peerConfig(config)));
+        Object.assign(this, { pc, remote: [], remoteCount: 0, local: [], localCount: 0, sent: false });
+        pc.onicecandidate = event => {
+            if (this.pc !== pc || !event.candidate?.candidate || ++this.localCount > 64) return;
+            this.local.push(event.candidate.toJSON());
+            this.#flush(pc);
+        };
+        pc.ontrack = event => { if (this.pc === pc) this.onTrack(event.track); };
+        pc.onconnectionstatechange = () => { if (this.pc === pc && pc.connectionState === "failed") this.close(); };
+        await pc.setRemoteDescription({ type: "offer", sdp });
+        if (this.pc !== pc) return;
+        for (const transceiver of pc.getTransceivers()) transceiver.direction = "recvonly";
+        await this.e2ee.bindPeer(pc, this.peerClientID(), callScreenSlots);
+        if (this.pc !== pc) return;
+        await pc.setLocalDescription(await pc.createAnswer());
+        if (this.pc !== pc) return;
+        await this.send("answer", pc.localDescription.sdp);
+        if (this.pc !== pc) return;
+        this.sent = true;
+        this.#flush(pc);
+        await this.#apply(pc);
+    }
+
+    #flush(pc) {
+        if (!this.sent || this.timer || !this.local.length || this.pc !== pc) return;
+        this.timer = setTimeout(() => {
+            this.timer = 0;
+            if (this.pc !== pc) return;
+            const batch = this.local.splice(0, 16);
+            this.send("candidates", JSON.stringify(batch)).then(() => this.#flush(pc), () => { if (this.pc === pc) this.close(); });
+        }, 150);
+    }
+
+    async #apply(pc) {
+        if (!pc?.remoteDescription) return;
+        while (this.remote.length && this.pc === pc) await pc.addIceCandidate(this.remote.shift()).catch(() => {});
+    }
+
+    close() {
+        const pc = this.pc;
+        if (!pc) return;
+        this.pc = null;
+        clearTimeout(this.timer); this.timer = 0;
+        pc.onicecandidate = null; pc.ontrack = null; pc.onconnectionstatechange = null;
+        void Promise.resolve(this.e2ee.releasePeer(pc)).catch(() => {});
+        pc.close();
+        try { this.onClose(); } catch { /* listeners never break teardown */ }
+    }
+}
+
 /** Codec preferences of a call video transceiver: VP8, H.264 and repair only. */
 export function callCodecPreferences(capabilities) {
     const codecs = capabilities?.codecs || [];
@@ -101,8 +211,11 @@ export class CallMediaE2EE {
      * ({status(), send(control)}, as for channel media).
      * sessionFactory (tests only): replaces MediaSession construction.
      */
-    constructor({ adapter, sessionFactory = null, onStatus = () => {}, onError = () => {}, scope = globalThis, workerURL } = {}) {
+    // owner: the media session's opaque owner (desktop native capture
+    // mirrors the call's own screen keys into Go through it).
+    constructor({ adapter, sessionFactory = null, onStatus = () => {}, onError = () => {}, scope = globalThis, workerURL, owner } = {}) {
         this.adapter = adapter;
+        this.owner = owner;
         this.sessionFactory = sessionFactory;
         this.onStatus = onStatus;
         this.onError = onError;
@@ -129,7 +242,7 @@ export class CallMediaE2EE {
         }
         this.#teardown();
         this.callID = call.id;
-        const options = { adapter: this.adapter, hardwareVideoRequired: false, scope: this.scope, workerURL: this.workerURL,
+        const options = { adapter: this.adapter, hardwareVideoRequired: false, scope: this.scope, workerURL: this.workerURL, owner: this.owner,
             onStatus: status => { if (this.session === session) this.#publish(status); },
             onError: error => { if (this.session === session) this.onError(error); } };
         const session = this.sessionFactory ? this.sessionFactory(options) : new MediaSession(options);
@@ -180,15 +293,16 @@ export class CallMediaE2EE {
      * Binds every transceiver of a call peer: senders to this device's slot
      * keys, receivers to the peer's (peerClientID: the client that answered
      * for that participant). Run after transceivers exist and before each
-     * offer or answer is created; it is idempotent.
+     * offer or answer is created; it is idempotent. slotsOf maps the
+     * transceivers to slots (callScreenSlots for a screen sub-connection).
      */
-    async bindPeer(pc, peerClientID) {
+    async bindPeer(pc, peerClientID, slotsOf = callTransceiverSlots) {
         const session = this.session;
         if (!session?.active) throw new MediaSessionError("closed");
         if (peerClientID == null || peerClientID === "") throw new MediaSessionError("unavailable", "call peer has no client");
         session.syncPeer(pc);
         const work = [];
-        for (const { transceiver, kind, slot } of callTransceiverSlots(pc)) {
+        for (const { transceiver, kind, slot } of slotsOf(pc)) {
             if (kind === "video") preferCodecs(transceiver, this.scope);
             if (transceiver.sender && session.endpointID(transceiver.sender)) work.push(session.bindSender(transceiver.sender, slot));
             const receiver = transceiver.receiver;

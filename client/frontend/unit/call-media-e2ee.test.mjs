@@ -2,7 +2,7 @@
 // roster, transceiver slot binding and the CallMediaE2EE session lifecycle.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { CALL_E2EE_MARKER, CallMediaE2EE, announcesCallE2EE, callCodecPreferences, callRoster, callTransceiverSlots } from "../src/call-media-e2ee.js";
+import { CALL_E2EE_MARKER, CALL_FEATURES, CallMediaE2EE, ScreenSubReceiver, advertisesScreenSub, announcesCallE2EE, callCodecPreferences, callRoster, callScreenSlots, callTransceiverSlots } from "../src/call-media-e2ee.js";
 import { MediaKeyEngine, buildMediaKeyBody, callScopeKey, inChannel, mediaScopeOf, normalizeScopeKey, parseMediaKeyControl, recipientsOf, senderPid } from "../src/media-keys.js";
 
 const CALL = "8f0a2c1e-4b8d-4d6e-9a51-3c2b1a0f9e77";
@@ -187,4 +187,99 @@ test("releasePeer always returns a promise, also after the session stopped", asy
     await e2ee.releasePeer({});
     e2ee.stop();
     await e2ee.releasePeer({});
+});
+
+test("the media session gets the call's owner (native key mirroring)", async () => {
+    const log = [];
+    const e2ee = new CallMediaE2EE({ adapter: {}, sessionFactory: fakeSession(log), owner: { tabID: "t1", callID: CALL } });
+    const session = await e2ee.start(call([alice, bob]));
+    assert.deepEqual(session.options.owner, { tabID: "t1", callID: CALL });
+});
+
+test("a screen sub-connection binds video to screen and audio to screenaudio", async () => {
+    const pc = { getTransceivers: () => [fakeTransceiver("video"), fakeTransceiver("audio"), fakeTransceiver("video")] };
+    assert.deepEqual(callScreenSlots(pc).map(entry => `${entry.kind}:${entry.slot}`), ["video:screen", "audio:screenaudio"]);
+    const log = [];
+    const e2ee = new CallMediaE2EE({ adapter: {}, sessionFactory: fakeSession(log) });
+    await e2ee.start(call([alice, bob]));
+    log.length = 0;
+    await e2ee.bindPeer(pc, "c-bob", callScreenSlots);
+    assert.deepEqual(log.filter(([op]) => op === "recv").map(([, client, slot]) => `${client}|${slot}`), ["c-bob|screen", "c-bob|screenaudio"]);
+});
+
+test("the screen sub-connection feature is read from main offers and answers", () => {
+    assert.deepEqual(CALL_FEATURES, ["screen-sub"]);
+    assert.equal(advertisesScreenSub({ type: "offer", features: ["screen-sub"] }), true);
+    assert.equal(advertisesScreenSub({ type: "offer" }), false, "an older app lists no features");
+    assert.equal(advertisesScreenSub({ type: "answer", features: "screen-sub" }), false);
+});
+
+// A stand-in RTCPeerConnection: records the negotiation and candidates.
+function fakePeer(log) {
+    const transceivers = [fakeTransceiver("video"), fakeTransceiver("audio")];
+    const pc = {
+        transceivers, remoteDescription: null, localDescription: null, connectionState: "new", added: [], closed: false,
+        getTransceivers: () => transceivers,
+        async setRemoteDescription(d) { log.push(["remote", d.type]); pc.remoteDescription = d; },
+        async createAnswer() { log.push(["directions", transceivers.map(t => t.direction)]); return { type: "answer", sdp: "answer-sdp" }; },
+        async setLocalDescription(d) { pc.localDescription = d; },
+        async addIceCandidate(c) { pc.added.push(c); },
+        close() { pc.closed = true; log.push(["close"]); },
+    };
+    return pc;
+}
+
+function receiverFixture() {
+    const log = [], sent = [], tracks = [], peers = [];
+    const e2ee = { peerConfig: c => ({ ...c, encoded: true }), protectPeer: pc => { log.push(["protect"]); return pc; },
+        bindPeer: async (pc, client, slotsOf) => log.push(["bind", client, slotsOf(pc).map(e => e.slot).join(",")]), releasePeer: async () => log.push(["release"]) };
+    let closes = 0;
+    const receiver = new ScreenSubReceiver({ e2ee, config: () => ({ iceTransportPolicy: "relay" }), peerClientID: () => "c-bob",
+        send: async (kind, payload) => { sent.push([kind, payload]); }, onTrack: track => tracks.push(track), onClose: () => { closes++; },
+        createPeer: config => { log.push(["create", config.iceTransportPolicy, config.encoded]); const pc = fakePeer(log); peers.push(pc); return pc; } });
+    return { receiver, log, sent, tracks, peers, closes: () => closes };
+}
+
+test("a screen sub-connection offer is answered receive-only after its receivers are bound", async () => {
+    const f = receiverFixture();
+    await f.receiver.signal({ sub: "screen", type: "offer", sdp: "offer-sdp" });
+    assert.deepEqual(f.log, [["create", "relay", true], ["protect"], ["remote", "offer"], ["bind", "c-bob", "screen,screenaudio"], ["directions", ["recvonly", "recvonly"]]]);
+    assert.deepEqual(f.sent, [["answer", "answer-sdp"]]);
+    await f.receiver.signal({ sub: "screen", type: "candidates", sdp: JSON.stringify([{ candidate: "candidate:1 1 udp 1 10.0.0.1 1 typ relay", sdpMid: "0" }]) });
+    assert.equal(f.peers[0].added.length, 1);
+    // Our own candidates follow the answer in a batch.
+    f.peers[0].onicecandidate({ candidate: { candidate: "candidate:2", toJSON: () => ({ candidate: "candidate:2", sdpMid: "0" }) } });
+    await new Promise(r => setTimeout(r, 200));
+    assert.deepEqual(f.sent.at(-1), ["candidates", JSON.stringify([{ candidate: "candidate:2", sdpMid: "0" }])]);
+    const track = { kind: "video" };
+    f.peers[0].ontrack({ track });
+    assert.deepEqual(f.tracks, [track]);
+});
+
+test("a new offer replaces the screen sub-connection; failure and close end it without throwing", async () => {
+    const f = receiverFixture();
+    await f.receiver.signal({ sub: "screen", type: "offer", sdp: "a" });
+    await f.receiver.signal({ sub: "screen", type: "offer", sdp: "b" });
+    assert.equal(f.peers.length, 2);
+    assert.equal(f.peers[0].closed, true, "the earlier attempt is closed");
+    assert.equal(f.closes(), 1);
+    assert.equal(f.peers[0].ontrack, null, "a replaced connection's handlers are detached");
+    f.peers[1].connectionState = "failed";
+    f.peers[1].onconnectionstatechange();
+    assert.equal(f.peers[1].closed, true);
+    assert.equal(f.receiver.pc, null);
+    assert.equal(f.closes(), 2);
+    f.receiver.close(); // idempotent
+    assert.equal(f.closes(), 2);
+});
+
+test("screen sub-connection signals are validated", async () => {
+    const f = receiverFixture();
+    await assert.rejects(f.receiver.signal({ sub: "screen", type: "answer", sdp: "x" }), /invalid/);
+    await assert.rejects(f.receiver.signal({ type: "offer", sdp: "x" }), /not a screen/);
+    await assert.rejects(f.receiver.signal({ sub: "screen", type: "candidates", sdp: JSON.stringify(Array(17).fill({ candidate: "candidate:1" })) }), /candidates/);
+    // Candidates before the offer are held, then dropped by the offer (a new attempt).
+    await f.receiver.signal({ sub: "screen", type: "candidates", sdp: JSON.stringify([{ candidate: "candidate:9", sdpMid: "0" }]) });
+    await f.receiver.signal({ sub: "screen", type: "offer", sdp: "a" });
+    assert.equal(f.peers[0].added.length, 0);
 });

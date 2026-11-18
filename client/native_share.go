@@ -125,8 +125,10 @@ type NativeShareUpdate struct {
 
 // NativeKeyOp mirrors one media-key engine operation for pid "self|screen"
 // (Slot "" or "screen") or "self|screenaudio" (Slot "screenaudio").
+// Call set: the key belongs to that private call's media session instead.
 type NativeKeyOp struct {
 	Slot  string `json:"slot,omitempty"`
+	Call  string `json:"call,omitempty"`
 	Op    string `json:"op"` // key, activate, retire, retireOne, forget
 	Epoch uint64 `json:"epoch"`
 	Kid   uint8  `json:"kid"`
@@ -140,6 +142,8 @@ type NativeShareStatus struct {
 	Monitors   []nativecapture.Monitor `json:"monitors"`
 	Windows    []nativecapture.Window  `json:"windows"`
 	Foreground uint64                  `json:"foreground,string"`
+	// CallAvailable: a private call share is possible (it needs no server peer).
+	CallAvailable bool `json:"call_available"`
 }
 
 // nativeShareEventData is emitted as "native_share": started, minimized,
@@ -222,6 +226,9 @@ type nativeShare struct {
 	badFrames   atomic.Int32
 	// Server candidates that arrive while an offer is still in flight.
 	pending []netproto.ICECandidate
+	// call: a private call share (native_call_share.go) sends to its viewers
+	// over screen sub-connections instead of the server's native peer.
+	call *nativeCall
 }
 
 type nativeSample struct {
@@ -251,7 +258,8 @@ func (m *connManager) nativeStatus() NativeShareStatus {
 	m.mu.Lock()
 	supported, e2ee := m.supportsNativeMediaPeer, m.supportsMediaE2EE
 	m.mu.Unlock()
-	st := NativeShareStatus{Monitors: nativecapture.Monitors(), Windows: nativecapture.Windows(), Foreground: nativecapture.ForegroundWindow()}
+	st := NativeShareStatus{Monitors: nativecapture.Monitors(), Windows: nativecapture.Windows(), Foreground: nativecapture.ForegroundWindow(),
+		CallAvailable: nativeCallAvailable(e2ee)}
 	switch {
 	case runtime.GOOS != "windows":
 		st.Reason = "unsupported_platform"
@@ -282,6 +290,9 @@ func (a *App) NativeScreenKeyForTab(tabID string, op NativeKeyOp) error {
 	}
 	if op.Slot != "" && op.Slot != "screen" && op.Slot != "screenaudio" {
 		return errors.New("unknown media key slot")
+	}
+	if op.Call != "" {
+		return applyNativeKeyOp(cm.callKeys(op.Call, op.Slot), op)
 	}
 	return applyNativeKeyOp(cm.nativeKeys(op.Slot), op)
 }
@@ -597,6 +608,10 @@ func (n *nativeShare) onAudio(p nativecapture.AudioPacket) {
 	n.mu.Lock()
 	sender, upload := n.sender, n.upload
 	n.mu.Unlock()
+	if n.call != nil {
+		n.call.writeAudio(p)
+		return
+	}
 	if sender != nil && upload {
 		_ = sender.WriteAudio(p.Data, p.Captured) // a keyless packet is dropped, never sent
 	}
@@ -659,6 +674,9 @@ func (n *nativeShare) openCapture() error {
 }
 
 func (n *nativeShare) openSender() error {
+	if n.call != nil {
+		return n.call.open()
+	}
 	n.cm.mu.Lock()
 	servers := slices.Clone(n.cm.iceServers)
 	n.cm.mu.Unlock()
@@ -728,10 +746,17 @@ func (n *nativeShare) onFrame(f nativecapture.Frame) {
 	n.mu.Lock()
 	sender, upload := n.sender, n.upload
 	n.mu.Unlock()
-	if sender == nil || !upload {
+	var err error
+	switch {
+	case !upload:
 		return
+	case n.call != nil:
+		err = n.call.writeFrame(f)
+	case sender == nil:
+		return
+	default:
+		err = sender.WriteFrame(f.Data, f.Keyframe, f.SeqHeader, f.Captured)
 	}
-	err := sender.WriteFrame(f.Data, f.Keyframe, f.SeqHeader, f.Captured)
 	if err == nil || errors.Is(err, nativesender.ErrDropped) {
 		n.badFrames.Store(0)
 		return
@@ -907,7 +932,9 @@ func (n *nativeShare) close() {
 	if sender != nil {
 		_ = sender.Close()
 	}
-	if wasRunning || sender != nil {
+	if n.call != nil {
+		n.call.close()
+	} else if wasRunning || sender != nil {
 		_ = n.cm.write(netproto.MsgWebRTCOffer, netproto.WebRTCOffer{Peer: netproto.PeerNative})
 	}
 	n.cm.mu.Lock()

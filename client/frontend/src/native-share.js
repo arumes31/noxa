@@ -141,14 +141,16 @@ const base64 = bytes => btoa(String.fromCharCode(...bytes));
  * Mirrors one media key engine operation for the own screen and screen
  * audio slots to Go.
  * owner is the tab of the channel media session that issued it (never the
- * active tab: a background engine's keys must not reach another tab).
+ * active tab: a background engine's keys must not reach another tab), or
+ * { tabID, callID } for a private call's media session (call keyring).
  */
 export function mirrorNativeKey(pid, op, owner) {
     const slot = pid === "self|screen" ? "screen" : pid === "self|screenaudio" ? "screenaudio" : "";
     if (!slot || typeof app()?.NativeScreenKeyForTab !== "function") return;
-    const tabID = typeof owner === "string" ? owner : "";
-    if (!tabID) return;
-    const body = { slot, op: op.op, epoch: op.epoch || 0, kid: op.kid || 0, ...(op.key ? { key: base64(op.key) } : {}) };
+    const tabID = typeof owner === "string" ? owner : typeof owner?.tabID === "string" ? owner.tabID : "";
+    const call = typeof owner === "object" && typeof owner?.callID === "string" ? owner.callID : "";
+    if (!tabID || (typeof owner === "object" && !call)) return;
+    const body = { slot, op: op.op, epoch: op.epoch || 0, kid: op.kid || 0, ...(op.key ? { key: base64(op.key) } : {}), ...(call ? { call } : {}) };
     // Bound calls run concurrently in Go: keep key → activate → retire order.
     keyChain = keyChain.then(() => app().NativeScreenKeyForTab(tabID, body)).catch(() => {});
 }

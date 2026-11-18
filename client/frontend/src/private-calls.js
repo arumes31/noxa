@@ -10,7 +10,7 @@ import { icon, setStatusIcon } from "./icons.js";
 import { aggregateCallConnections, callConnectionAnnouncement, describeCallConnection, initialCallConnection, reduceCallConnection, trackIsFlowing } from "./call-connection-state.js";
 import { answerCallMedia, createCallMedia, offerCallMedia } from "./private-call-media.js";
 import { callUndockButton, closeCallUndock } from "./call-undocking.js";
-import { CallMediaE2EE } from "./call-media-e2ee.js";
+import { CallMediaE2EE, ScreenSubReceiver, SCREEN_SUB, advertisesScreenSub } from "./call-media-e2ee.js";
 import { desktopMediaAdapter, mediaErrorText } from "./channel-media.js";
 
 const V = () => window.__noxa;
@@ -74,6 +74,7 @@ function action(key, callback) {
     return button;
 }
 function closePeer(peer) {
+    peer.screenSub?.close();
     peer.stopRelay?.();
     void Promise.resolve(peer.releaseEncryption?.()).catch(() => {});
     clearTimeout(peer.candidateTimer); clearTimeout(peer.connectTimer);
@@ -205,7 +206,7 @@ async function applyCall(call, tabID, generation) {
         session.media = createCallMedia(session, { current, acceptedPeer, label, report, render });
         {
             const owner = session;
-            owner.e2ee = new CallMediaE2EE({ adapter: desktopMediaAdapter(tabID), sessionFactory: callMediaFactory,
+            owner.e2ee = new CallMediaE2EE({ adapter: desktopMediaAdapter(tabID), sessionFactory: callMediaFactory, owner: { tabID, callID: call.id },
                 onStatus: status => { if (current(owner)) { owner.e2eeStatus = status; syncEncryptionStatus(owner); } },
                 onError: error => failCall(owner, error) });
             // An app without call encryption cannot be heard here: say so.
@@ -238,6 +239,7 @@ async function applyCall(call, tabID, generation) {
         if (!accepted.some(member => member.unique_id === peerID) || blocked(peerID)) { closePeer(peer); owner.peers.delete(peerID); }
     }
     owner.media.updateGrid();
+    owner.media.syncNativeTargets();
     // Remote state may revoke or update a consented call, never create consent.
     if (me.state !== "accepted" || accepted.length < 2 || !ownerConsented(owner)) return;
     try {
@@ -597,30 +599,8 @@ function ensurePeer(owner, uid) {
     pc.ontrack = event => {
         if (!acceptedPeer(owner, uid) || owner.peers.get(uid) !== peer) return;
         if (event.track.kind === "video") { owner.media.receiveVideo(peer, event); return; }
-        peer.audioSources ||= new Map();
-        if (peer.audioSources.has(event.track.id)) return;
-        watchPeerRemoteAudio(owner, peer, event.track);
-        const remote = createRemoteAudioSource(owner.context, event.track);
-        peer.audioSources.set(event.track.id, remote);
-        if (!peer.gain) {
-            peer.gain = owner.context.createGain();
-            peer.destination = owner.context.createMediaStreamDestination();
-            if (V().state.settings?.voice_limiter !== false) {
-                peer.limiter = makeLimiter(owner.context);
-                peer.limiter.connect(peer.destination);
-            }
-            peer.gain.connect(peer.limiter || peer.destination);
-            peer.shareGain = owner.context.createGain();
-            peer.shareGain.connect(peer.limiter || peer.destination);
-            peer.analyser = owner.context.createAnalyser(); peer.analyser.fftSize = 256;
-            peer.samples = new Uint8Array(peer.analyser.frequencyBinCount);
-            peer.gain.connect(peer.analyser);
-            audio.srcObject = peer.destination.stream;
-        }
         const audioIndex = pc.getTransceivers().filter(transceiver => transceiver.receiver.track.kind === "audio").indexOf(event.transceiver);
-        remote.src.connect(audioIndex === 1 ? peer.shareGain : peer.gain);
-        syncAudio(owner);
-        void audio.play().catch(report);
+        receiveAudio(owner, peer, event.track, audioIndex === 1);
     };
     pc.onconnectionstatechange = () => {
         updatePeerLink(owner, peer, { type: "transport", state: pc.connectionState });
@@ -630,7 +610,56 @@ function ensurePeer(owner, uid) {
     return peer;
 }
 
-function sendSignal(owner, uid, kind, payload) {
+// A peer's remote audio: its microphone, or (share) its screen audio, which
+// follows the per-user share volume. Native screen audio arrives on the
+// screen sub-connection.
+function receiveAudio(owner, peer, track, share) {
+    peer.audioSources ||= new Map();
+    if (peer.audioSources.has(track.id)) return;
+    watchPeerRemoteAudio(owner, peer, track);
+    const remote = createRemoteAudioSource(owner.context, track);
+    peer.audioSources.set(track.id, remote);
+    if (!peer.gain) {
+        peer.gain = owner.context.createGain();
+        peer.destination = owner.context.createMediaStreamDestination();
+        if (V().state.settings?.voice_limiter !== false) {
+            peer.limiter = makeLimiter(owner.context);
+            peer.limiter.connect(peer.destination);
+        }
+        peer.gain.connect(peer.limiter || peer.destination);
+        peer.shareGain = owner.context.createGain();
+        peer.shareGain.connect(peer.limiter || peer.destination);
+        peer.analyser = owner.context.createAnalyser(); peer.analyser.fftSize = 256;
+        peer.samples = new Uint8Array(peer.analyser.frequencyBinCount);
+        peer.gain.connect(peer.analyser);
+        peer.audio.srcObject = peer.destination.stream;
+    }
+    remote.src.connect(share ? peer.shareGain : peer.gain);
+    syncAudio(owner);
+    void peer.audio.play().catch(report);
+}
+
+// The viewer side of a peer's native screen share (its "screen"
+// sub-connection). Its failure only ends that share's picture here.
+function screenSub(owner, uid, peer) {
+    peer.screenSub ||= new ScreenSubReceiver({
+        // The current relay lease: a share can start long after the call did.
+        e2ee: owner.e2ee, config: async () => privateCallRTCConfiguration(owner.ice = await app().GetICEServersForTab(owner.tabID)), peerClientID: () => peerClientID(owner, uid),
+        send: (kind, payload) => sendSignal(owner, uid, kind, payload, true),
+        onTrack: track => {
+            if (!acceptedPeer(owner, uid) || owner.peers.get(uid) !== peer) return;
+            if (track.kind === "audio") { receiveAudio(owner, peer, track, true); return; }
+            peer.screenTrack = track;
+            track.addEventListener("ended", () => owner.media.updateGrid(), { once: true });
+            owner.media.updateGrid();
+        },
+        onClose: () => { peer.screenTrack = null; if (current(owner)) owner.media.updateGrid(); },
+    });
+    return peer.screenSub;
+}
+
+// screenReply: this side's answer and candidates for a peer's screen sub-connection.
+function sendSignal(owner, uid, kind, payload, screenReply = false) {
     if (owner.queuedSignals >= 256) return Promise.reject(new Error("Call signaling capacity reached"));
     owner.queuedSignals++;
     const sending = owner.signals.then(async () => {
@@ -640,7 +669,8 @@ function sendSignal(owner, uid, kind, payload) {
         if (!acceptedPeer(owner, uid)) return;
         // One account shares a 32/s server allowance across all group peers.
         owner.nextSignalAt = Date.now() + 55;
-        await app().SendPrivateCallDescriptionForTab(owner.tabID, owner.call.id, uid, kind, payload);
+        if (screenReply) await app().SendPrivateCallScreenReplyForTab(owner.tabID, owner.call.id, uid, kind, payload);
+        else await app().SendPrivateCallDescriptionForTab(owner.tabID, owner.call.id, uid, kind, payload);
     }).finally(() => { owner.queuedSignals--; });
     owner.signals = sending.catch(() => {});
     return sending;
@@ -699,6 +729,15 @@ export async function privateCallSignal(signal) {
         peer.chain = peer.chain.then(async () => {
             const description = await app().OpenPrivateCallDescriptionForTab(owner.tabID, signal);
             if (!acceptedPeer(owner, signal.from) || peer.pc.signalingState === "closed") return;
+            // A "screen-reply" went to this side's native sender inside Open.
+            if (description.sub) {
+                if (description.sub === SCREEN_SUB) await screenSub(owner, signal.from, peer).signal(description).catch(() => peer.screenSub?.close());
+                return;
+            }
+            if (description.type === "offer" || description.type === "answer") {
+                const supported = advertisesScreenSub(description);
+                if (peer.screenSubSupported !== supported) { peer.screenSubSupported = supported; owner.media.syncNativeTargets(); }
+            }
             if (description.type === "candidates") {
                 const candidates = JSON.parse(description.sdp);
                 if (!Array.isArray(candidates) || !candidates.length || candidates.length > 16 || peer.remoteCandidateCount + candidates.length > 64) throw new Error("Invalid call candidates");

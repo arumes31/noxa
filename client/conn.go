@@ -103,6 +103,8 @@ type connManager struct {
 	uniqueID            string
 	deviceID            string              // linked device of this session (devices_v1)
 	callMediaCache      callMediaStateCache // call state behind call media-key targets (#12)
+	callSignalMu        sync.Mutex          // paces call signals (paceCallSignal)
+	callSignalNext      time.Time
 	supportsDevices     bool
 	supportsWebLogin    bool
 	supportsLinkPreview bool
@@ -125,7 +127,8 @@ type connManager struct {
 	nativeShare             *nativeShare
 	nativeKeyring           *framecrypt.Encryptor
 	nativeAudioKeyring      *framecrypt.Encryptor
-	detachedNative          []*nativeShare // detached with their connection, closed by finishDetach
+	nativeCallKeys          *nativeCallKeys // the private call's "self|screen" keys
+	detachedNative          []*nativeShare  // detached with their connection, closed by finishDetach
 	// ratchetWake: the server's olm_pending doorbell wakes the drain loop.
 	ratchetWake        chan struct{}
 	authorizationModel string
@@ -836,7 +839,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.supportsHandover = slices.Contains(resp.Capabilities, netproto.CapabilityHandover)
 	m.iceServers = resp.ICEServers
 	m.supportsNativeMediaPeer = slices.Contains(resp.Capabilities, netproto.CapabilityNativeMediaPeer)
-	m.nativeKeyring, m.nativeAudioKeyring = nil, nil
+	m.nativeKeyring, m.nativeAudioKeyring, m.nativeCallKeys = nil, nil, nil
 	// A native share never outlives its connection's keys.
 	staleNative := m.nativeShare
 	m.nativeShare = nil

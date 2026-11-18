@@ -930,6 +930,10 @@ export function SendPrivateCallDescriptionForTab(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['SendPrivateCallDescriptionForTab'](arg1, arg2, arg3, arg4, arg5);
 }
 
+export function SendPrivateCallScreenReplyForTab(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['SendPrivateCallScreenReplyForTab'](arg1, arg2, arg3, arg4, arg5);
+}
+
 export function SendTyping(arg1, arg2) {
   return window['go']['main']['App']['SendTyping'](arg1, arg2);
 }
@@ -1134,6 +1138,10 @@ export function StartDirectDisappearingForTab(arg1, arg2) {
   return window['go']['main']['App']['StartDirectDisappearingForTab'](arg1, arg2);
 }
 
+export function StartNativeCallShareForTab(arg1, arg2) {
+  return window['go']['main']['App']['StartNativeCallShareForTab'](arg1, arg2);
+}
+
 export function StartNativeScreenShareForTab(arg1, arg2) {
   return window['go']['main']['App']['StartNativeScreenShareForTab'](arg1, arg2);
 }
@@ -1216,6 +1224,10 @@ export function TrustServerFingerprint(arg1, arg2) {
 
 export function UpdateGamingOverlay(arg1) {
   return window['go']['main']['App']['UpdateGamingOverlay'](arg1);
+}
+
+export function UpdateNativeCallShareTargetsForTab(arg1, arg2, arg3) {
+  return window['go']['main']['App']['UpdateNativeCallShareTargetsForTab'](arg1, arg2, arg3);
 }
 
 export function UpdateNativeScreenShareForTab(arg1, arg2) {
