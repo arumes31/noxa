@@ -1,17 +1,16 @@
 // share-picker.js — the share-screen dialog view (P02): source tabs, a large
-// live preview of the source picked in the system picker (with an area
-// selector for Region), and a bar whose quality and audio buttons open small
-// panels. Capture and publication stay in video-publication.js.
+// preview stage (a still of the picked monitor with an area selector for
+// Region), and a bar whose quality and audio buttons open small panels. The
+// source tiles, capture and publication stay in video-publication.js.
 import { t } from "./i18n.js";
 import { createShareQualityControls, shareSummary } from "./screen-share-quality.js";
-import { normalizeRegion, regionLargeEnough } from "./share-region.js";
+import { normalizeRegion, regionLargeEnough } from "./share-frame-geometry.js";
 
 const icon = path => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${path}</svg>`;
 const ICONS = {
     monitor: icon('<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>'),
     window: icon('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/>'),
     region: icon('<path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/><rect x="8" y="8" width="8" height="8" rx="1"/>'),
-    choose: icon('<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M12 8v5M9.5 10.5h5M8 21h8"/>'),
     chevron: icon('<path d="M6 15l6-6 6 6"/>'),
     audio: icon('<path d="M11 5L6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/>'),
     muted: icon('<path d="M11 5L6 9H3v6h3l5 4z"/><path d="M22 9l-6 6M16 9l6 6"/>'),
@@ -33,7 +32,7 @@ export function moveRegion(region, dx, dy, dw = 0, dh = 0) {
     return { x: Math.min(1 - width, Math.max(0, region.x + dx)), y: Math.min(1 - height, Math.max(0, region.y + dy)), width, height };
 }
 
-export function createSharePicker({ id, preset, custom, bitrateCeiling, surface = "monitor", audio = "none", regionSupported = true }) {
+export function createSharePicker({ id, preset, custom, bitrateCeiling, surface = "monitor", audio = "none" }) {
     const dialog = document.createElement("div");
     dialog.className = "dlg share-dlg share-picker";
     const sourceName = `${id}-source`;
@@ -45,14 +44,13 @@ export function createSharePicker({ id, preset, custom, bitrateCeiling, surface 
         <fieldset class="share-sources sp-tabs">
             <legend class="sr-only">${t("polish.source")}</legend>
             ${["monitor", "window", "region"].map(value => `
-            <label class="sp-tab"${value === "region" ? ` title="${t(regionSupported ? "polish.cropHelp" : "polish.cropUnavailable")}"` : ""}>
-                <input type="radio" name="${sourceName}" value="${value}" ${value === "region" && !regionSupported ? "disabled" : ""} />
+            <label class="sp-tab"${value === "region" ? ` title="${t("polish.cropHelp")}"` : ""}>
+                <input type="radio" name="${sourceName}" value="${value}" />
                 ${ICONS[value]}<span>${t(`polish.${value}`)}</span>
             </label>`).join("")}
         </fieldset>
         <div class="sp-stage">
             <div class="sp-empty">
-                <button type="button" class="sh-choose sp-choose" aria-describedby="${id}-choose-help">${ICONS.choose}<span>${t("share.chooseSource")}</span></button>
                 <p class="set-hint sp-choose-help" id="${id}-choose-help"></p>
             </div>
             <div class="sp-preview" hidden>
@@ -62,7 +60,6 @@ export function createSharePicker({ id, preset, custom, bitrateCeiling, surface 
                 </div>
                 <div class="sp-preview-meta">
                     <span class="sh-source-label sp-source-label"></span>
-                    <button type="button" class="sp-change">${t("share.changeSource")}</button>
                 </div>
             </div>
         </div>

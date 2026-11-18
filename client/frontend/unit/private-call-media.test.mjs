@@ -9,11 +9,11 @@ mock.module(new URL("../src/camera-capture.js", import.meta.url).href, { namedEx
     captureCamera: (_settings, _limits, { signal }) => new Promise(resolve => pending.push({ resolve, signal })),
 } });
 mock.module(new URL("../src/i18n.js", import.meta.url).href, { namedExports: { t: key => key } });
-// Native call shares: Native mode, a stand-in stream, and noXa's picker.
+// Native call shares: a stand-in stream and noXa's picker.
 const standIn = { kind: "video", readyState: "live", stop() { this.readyState = "ended"; }, addEventListener() {} };
 mock.module(new URL("../src/native-share.js", import.meta.url).href, { namedExports: {
-    screenCaptureBackend: () => "native",
     nativeStandInStream: () => ({ getTracks: () => [standIn], getVideoTracks: () => [standIn] }),
+    nativeFailureKey: reason => `share.failed.${reason}`,
 } });
 mock.module(new URL("../src/display-capture-lease.js", import.meta.url).href, { namedExports: {
     retainDisplayCapture() {}, stopDisplayCapture(stream) { for (const track of stream?.getTracks() || []) track.stop?.(); },
@@ -34,10 +34,11 @@ globalThis.document = { createElement: element };
 globalThis.window = globalThis;
 globalThis.addEventListener ??= () => {};
 globalThis.removeEventListener ??= () => {};
-globalThis.__noxa = { state: { settings: {} }, toast() {} };
+const toasts = [];
+globalThis.__noxa = { state: { settings: {} }, toast: (text, kind) => toasts.push([text, kind]) };
 globalThis.MediaStream ??= class { constructor(tracks) { this.tracks = tracks; } };
 
-const { createCallMedia } = await import("../src/private-call-media.js");
+const { createCallMedia, callShareRefusal } = await import("../src/private-call-media.js");
 
 // The camera module is imported lazily; wait until the capture is requested.
 async function capturing() {
@@ -96,14 +97,14 @@ test("a peer's native screen share comes from its sub-connection and ends with i
     channel.onmessage({ data: JSON.stringify({ camera: false, screen: true, e2ee: CALL_E2EE_MARKER }) });
     assert.equal(peer.mediaTiles.screen.mediaTrack, native, "the sub-connection's track is shown");
     peer.screenTrack = null; media.updateGrid();
-    assert.equal(peer.mediaTiles.screen.mediaTrack, main, "a Browser share on the main slot rebuilds the tile");
+    assert.equal(peer.mediaTiles.screen.mediaTrack, main, "a PWA's browser share on the main slot rebuilds the tile");
     peer.screenTrack = native;
     channel.onmessage({ data: JSON.stringify({ camera: false, screen: false, e2ee: CALL_E2EE_MARKER }) });
     assert.equal(closed, 1, "the share ended: its sub-connection closes");
     assert.equal(peer.mediaTiles.screen, undefined);
 });
 
-test("Native mode opens noXa's picker and streams through Go, never the main screen slot", async () => {
+test("a screen share opens noXa's picker and streams through Go, never the main screen slot", async () => {
     const started = [], stopped = [], updates = [], sent = [];
     globalThis.go = { main: { App: {
         StartNativeCallShareForTab: async (tab, request) => { started.push([tab, request]); },
@@ -138,17 +139,61 @@ test("Native mode opens noXa's picker and streams through Go, never the main scr
     dialog.onClose();
 });
 
-test("an older peer keeps the Browser path", async () => {
+test("a participant whose app cannot view native shares refuses the share; nothing falls back to the browser picker", async () => {
+    assert.equal(callShareRefusal([{ screenSubSupported: true }, { screenSubSupported: false }]), "call.media.viewerTooOld");
+    assert.equal(callShareRefusal([{ screenSubSupported: true }, {}]), "call.media.shareNotReady", "support still unknown");
+    assert.equal(callShareRefusal([]), "call.media.shareNotReady");
+    assert.equal(callShareRefusal([{ screenSubSupported: true }]), "");
     const owner = { uid: "me", tabID: "t1", panel: element(), peers: new Map(), call: { id: "c1", participants: [{ unique_id: "me", state: "accepted" }] } };
     const media = createCallMedia(owner, { current: () => true, acceptedPeer: () => true, label: id => id, report() {}, render() {} });
     owner.peers.set("old", { screenSubSupported: false });
     let browser = 0;
     globalThis.navigator ??= {};
     const previous = globalThis.navigator.mediaDevices;
-    Object.defineProperty(globalThis.navigator, "mediaDevices", { configurable: true, value: { getDisplayMedia: async () => { browser++; throw Object.assign(new Error("cancelled"), { name: "NotAllowedError" }); } } });
-    dialog = null;
-    await media.start("screen");
+    Object.defineProperty(globalThis.navigator, "mediaDevices", { configurable: true, value: { getDisplayMedia: async () => { browser++; throw new Error("unexpected"); } } });
+    dialog = null; toasts.length = 0;
+    assert.equal(await media.start("screen"), false);
     Object.defineProperty(globalThis.navigator, "mediaDevices", { configurable: true, value: previous });
-    assert.equal(dialog, null);
-    assert.equal(browser, 1, "the browser picker opened");
+    assert.equal(dialog, null, "the picker stays closed");
+    assert.equal(browser, 0, "the browser picker never opens");
+    assert.equal(media.isActive("screen"), false);
+    assert.deepEqual(toasts, [["call.media.viewerTooOld", "warn"]]);
+});
+
+test("a joiner that cannot view native shares, or a Go failure, ends the share with a notice", async () => {
+    let event = null;
+    globalThis.runtime = { EventsOn: (name, handler) => { if (name === "native_share") event = handler; return () => {}; } };
+    const stopped = [], started = [];
+    globalThis.go = { main: { App: {
+        StartNativeCallShareForTab: async (tab, request) => { started.push(request.id); },
+        StopNativeScreenShareForTab: async (tab, id) => { stopped.push(id); },
+        UpdateNativeCallShareTargetsForTab: async () => {},
+    } } };
+    const owner = { uid: "me", tabID: "t1", panel: element(), peers: new Map(), call: { id: "c1", participants: [{ unique_id: "me", state: "accepted" }] } };
+    const media = createCallMedia(owner, { current: () => true, acceptedPeer: () => true, label: id => id, report() {}, render() {} });
+    owner.peers.set("bob", { screenSubSupported: true });
+    const share = async () => {
+        dialog = null;
+        await media.start("screen");
+        assert.equal(await dialog.startNative({ source: { monitor: 0, window: "0" }, max_width: 1280, max_height: 720, fps: 30, bitrate: 2000000, audioMode: "none" }), true);
+        dialog.onClose();
+    };
+    await share();
+    toasts.length = 0;
+    owner.peers.set("old", { screenSubSupported: false });
+    media.syncNativeTargets();
+    assert.equal(media.isActive("screen"), false);
+    assert.deepEqual(toasts, [["call.media.viewerTooOld", "error"]]);
+    owner.peers.delete("old");
+    await share();
+    toasts.length = 0;
+    event({ tab: "t1", share: "another", state: "failed", reason: "encoder" });
+    assert.equal(media.isActive("screen"), true, "another share's event is ignored");
+    event({ tab: "t1", share: started.at(-1), state: "failed", reason: "encoder" });
+    assert.equal(media.isActive("screen"), false, "no browser capture replaces it");
+    assert.deepEqual(toasts, [["share.failed.encoder", "error"]]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.ok(stopped.includes(started.at(-1)), "Go's capture is stopped");
+    media.close();
+    delete globalThis.runtime;
 });

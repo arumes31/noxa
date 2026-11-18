@@ -28,7 +28,7 @@ test("every microphone transceiver and channel-audio update applies voice priori
     const channelAudio = main.slice(main.indexOf("async function applyChannelAudio"), main.indexOf("// (25) A move into or out of a music channel"));
     assert.match(channelAudio, /await setVoiceSenderParameters\(sender,/);
     const publication = readFileSync(new URL("../src/video-publication.js", import.meta.url), "utf8");
-    assert.equal((publication.match(/applyVideoNetworkPriority\(/g) || []).length, 2, "screen/camera caps and initial screen encoding");
+    assert.equal((publication.match(/applyVideoNetworkPriority\(/g) || []).length, 1, "camera caps (a screen share sends from Go)");
 });
 
 test("promoted microphone sender receives bitrate and voice priority, and rejects failed updates", async () => {

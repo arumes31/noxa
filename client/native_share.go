@@ -265,6 +265,8 @@ func (m *connManager) nativeStatus() NativeShareStatus {
 	switch {
 	case runtime.GOOS != "windows":
 		st.Reason = "unsupported_platform"
+	case !nativecapture.Supported():
+		st.Reason = "unsupported_windows"
 	case !supported:
 		st.Reason = "server_outdated"
 	case !e2ee:

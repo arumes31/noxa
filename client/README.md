@@ -36,37 +36,44 @@ the current user's voice controls.
 - **Voice and video:** channel and private/group calls, explicit camera and
   screen capture, microphone recovery, per-member voice/share-audio controls,
   echo tests and stream diagnostics. Camera capture starts only on request.
-  While a screen share runs, the WebView2 processes get high GPU scheduling
-  and above-normal CPU priority. On Windows the share dialog offers
-  **Screen capture: Browser / Native**. Browser is the default. Native uses
-  Windows Graphics Capture, a hardware H.264 encoder through Media Foundation
-  and a second, publish-only WebRTC peer, with the same end-to-end frame
-  encryption. The server must support `native-media-peer-v1`. If native
-  capture is unavailable or fails, the share uses Browser capture and shows a
-  notice. It also falls back when it stalls: the native peer is not
-  connected 15 s after its offer, or viewers want the share but no video
-  packet has left for 10 s (never while the share is paused for lack of
-  viewers, its window is minimized or no media key is active). `client.log` then has a
-  `native share stalled` line; `native share stats` lines (2, 5 and 10 s
+  **Screen sharing is native only** (the WebView2 browser picker and
+  `getDisplayMedia` are never used for sharing): Windows Graphics Capture, an
+  H.264 encoder through Media Foundation and a second, publish-only WebRTC
+  peer, with the same end-to-end frame encryption. While a share runs, this
+  process gets high GPU scheduling and above-normal CPU priority. Channel
+  shares need a server with `native-media-peer-v1`. Without Windows 10 1903+,
+  Media Foundation (N editions need the Media Feature Pack), a capable server
+  or encrypted voice, the share button stays and its dialog says why sharing
+  is not possible. The capture device is created on the GPU that drives the
+  captured monitor; encoders are tried in this order: hardware MFTs of that
+  adapter (by the activate's adapter LUID, else its PCI vendor ID), other
+  hardware MFTs, then the Microsoft software H.264 MFT. A hardware encoder
+  that ignores the one-slice setting is skipped for the rest of the run and
+  the next one opens. A share ends with a notice naming the reason when
+  capture fails again after one restart, the encoder keeps producing
+  unusable output, the native peer fails after its retries, a viewer cannot
+  play H.264, or it stalls: the native peer is not connected 15 s after its
+  offer, or viewers want the share but no video packet has left for 10 s
+  (never while the share is paused for lack of viewers, its window is
+  minimized or no video key is active). `client.log` then has a
+  `native share failed` line; `native share stats` lines (2, 5 and 10 s
   after the start, then every minute) count each pipeline stage, and
-  `native encoder` lines name the adapter and every encoder tried. A Browser
-  share logs one `browser share` line with the sender's stats after 5 s.
-  Native mode has its own picker: live thumbnails of every monitor or
-  window (refreshed about every 1.5 s while the dialog is open), a running
-  game (a window covering its monitor) listed first, and the last shared
-  source preselected (matched by executable and title, then by executable).
-  A native **Region** is drawn on a still of the picked monitor and cropped
-  on the GPU (one confirmation, no browser picker); its Browser fallback
-  crops the browser capture to the same area. **Studio** in Native mode
+  `native encoder` lines name the adapter and every encoder tried.
+  The picker shows live thumbnails of every monitor or window (refreshed
+  about every 1.5 s while the dialog is open), a running game (a window
+  covering its monitor) listed first, and the last shared source preselected
+  (matched by executable and title, then by executable). A **Region** is
+  drawn on a still of the picked monitor and cropped on the GPU. **Studio**
   composes its screens, windows and cameras (Media Foundation) with a
   Direct3D 11 compositor in Go; text and images arrive from the webview as
   transparent overlay PNGs, uploaded only on change. In a **private call**,
-  Native mode opens the same picker from the call's screen button; Go then
-  opens one relay-only peer-to-peer connection per participant (the call's
-  `screen` sub-connection, signaled with the call's sealed signals) and
-  encrypts with the call's media keys. It needs no server support, only
-  participants whose apps advertise `screen-sub` (older apps keep Browser
-  capture).
+  the call's screen button opens the same picker; Go then opens one
+  relay-only peer-to-peer connection per participant (the call's `screen`
+  sub-connection, signaled with the call's sealed signals) and encrypts with
+  the call's media keys. It needs no server support, but every participant's
+  app must advertise `screen-sub`; otherwise the share is refused with a
+  notice (and a running share ends when such a participant joins). Desktop
+  clients still show browser screen shares from PWA users.
   Share audio follows the dialog's audio choice: a window share sends only
   that application's audio, a monitor share sends system audio without
   noXa's own voices (WASAPI process loopback, Windows build 20348 or later, i.e. Windows 11). If

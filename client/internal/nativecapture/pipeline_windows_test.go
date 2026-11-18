@@ -333,6 +333,15 @@ func TestStudioSessionEncodes(t *testing.T) {
 	}
 }
 
+func TestSupportedOnThisDesktop(t *testing.T) {
+	if os.Getenv("NOXA_NATIVE_CAPTURE") == "" {
+		t.Skip("set NOXA_NATIVE_CAPTURE=1 on an interactive Windows desktop")
+	}
+	if !Supported() {
+		t.Fatal("Windows Graphics Capture or Media Foundation reported unsupported on a capture-capable desktop")
+	}
+}
+
 // The software H.264 MFT, the last step of the encoder chain, opens on this
 // device and encodes NV12 input from the same ring textures.
 func TestSoftwareEncoderIsTheLastResort(t *testing.T) {

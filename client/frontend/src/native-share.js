@@ -1,19 +1,32 @@
-// Native screen capture (Windows desktop): capture, H.264 encode, frame
-// encryption and the publish-only "native" peer run in Go. The webview keeps
-// the publication lifecycle and mirrors its "self|screen" and
-// "self|screenaudio" media keys here.
+// Native screen capture (Windows desktop), the desktop's only way to share:
+// capture, H.264 encode, frame encryption and the publish-only "native" peer
+// run in Go. The webview keeps the publication lifecycle and mirrors its
+// "self|screen" and "self|screenaudio" media keys here.
 // Frames never pass through the webview.
 import { observeMediaKeys } from "./media-e2ee.js";
 
-const STORAGE_KEY = "noxa.screenCaptureBackend";
 const app = () => window.go?.main?.App;
 
-/** "native" or "browser" (the default in this release). */
-export function screenCaptureBackend() {
-    try { return localStorage.getItem(STORAGE_KEY) === "native" ? "native" : "browser"; } catch { return "browser"; }
+// The former "Screen capture: Browser/Native" choice is ignored: drop it once.
+try { globalThis.localStorage?.removeItem("noxa.screenCaptureBackend"); } catch { /* storage is optional */ }
+
+const UNAVAILABLE = ["unsupported_platform", "unsupported_windows", "server_outdated", "media_e2ee_unavailable"];
+
+/**
+ * The i18n key explaining why a native share cannot start from status
+ * (NativeScreenShareStatusForTab), or "" when it can. call: a private call
+ * share, which needs no server native peer.
+ */
+export function nativeUnavailableKey(status, call = false) {
+    if (call ? status?.call_available : status?.available) return "";
+    // A call share is only refused for the platform, Windows or call encryption.
+    const reason = call && status?.reason === "server_outdated" ? "media_e2ee_unavailable" : status?.reason;
+    return UNAVAILABLE.includes(reason) ? `share.unavailable.${reason}` : "share.unavailable";
 }
-export function setScreenCaptureBackend(value) {
-    try { localStorage.setItem(STORAGE_KEY, value === "native" ? "native" : "browser"); } catch { /* per-device convenience only */ }
+
+/** The i18n key of the notice for a share Go ended after a failure ("failed" event reason). */
+export function nativeFailureKey(reason) {
+    return ["capture", "encoder", "peer", "stalled", "codec"].includes(reason) ? `share.failed.${reason}` : "share.failed";
 }
 
 export async function nativeShareStatus(tabID) {
