@@ -4,6 +4,7 @@ package nativecapture
 
 import (
 	"os"
+	"runtime"
 	"strconv"
 	"sync"
 	"testing"
@@ -11,8 +12,7 @@ import (
 )
 
 // TestMonitorCaptureEncodes runs the full pipeline on the primary monitor.
-// NOXA_NATIVE_CAPTURE=1 enables it (needs an interactive desktop);
-// NOXA_NATIVE_SOFTWARE=1 admits the software MFT (GPU-less CI runners).
+// NOXA_NATIVE_CAPTURE=1 enables it (needs an interactive desktop).
 func TestMonitorCaptureEncodes(t *testing.T) {
 	if os.Getenv("NOXA_NATIVE_CAPTURE") == "" {
 		t.Skip("set NOXA_NATIVE_CAPTURE=1 on an interactive Windows desktop")
@@ -38,8 +38,7 @@ func TestMonitorCaptureEncodes(t *testing.T) {
 		}
 		defer func() { _ = dump.Close() }()
 	}
-	s, err := Start(Config{Source: Source{Monitor: monitor}, MaxWidth: 1920, MaxHeight: 1080, FPS: fps, Bitrate: 8_000_000,
-		AllowSoftware: os.Getenv("NOXA_NATIVE_SOFTWARE") != ""}, func(f Frame) {
+	s, err := Start(Config{Source: Source{Monitor: monitor}, MaxWidth: 1920, MaxHeight: 1080, FPS: fps, Bitrate: 8_000_000}, func(f Frame) {
 		mu.Lock()
 		frames = append(frames, Frame{Keyframe: f.Keyframe, Width: f.Width, Height: f.Height, SeqHeader: f.SeqHeader, Data: f.Data[:min(len(f.Data), 64)]})
 		mu.Unlock()
@@ -82,8 +81,7 @@ func TestMonitorCaptureEncodes(t *testing.T) {
 
 func runCapture(t *testing.T, src Source, fps int, d time.Duration) (Stats, EncoderInfo, *Session) {
 	t.Helper()
-	s, err := Start(Config{Source: src, MaxWidth: 1920, MaxHeight: 1080, FPS: fps, Bitrate: 8_000_000,
-		AllowSoftware: os.Getenv("NOXA_NATIVE_SOFTWARE") != ""}, func(Frame) {})
+	s, err := Start(Config{Source: src, MaxWidth: 1920, MaxHeight: 1080, FPS: fps, Bitrate: 8_000_000}, func(Frame) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,8 +153,7 @@ func TestLadderControlsMidStream(t *testing.T) {
 	var mu sync.Mutex
 	var bytes, frames int
 	var lastW, lastH int
-	s, err := Start(Config{Source: Source{Window: uint64(win.hwnd.Load())}, MaxWidth: 1920, MaxHeight: 1080, FPS: 30, Bitrate: 4_000_000,
-		AllowSoftware: os.Getenv("NOXA_NATIVE_SOFTWARE") != ""}, func(f Frame) {
+	s, err := Start(Config{Source: Source{Window: uint64(win.hwnd.Load())}, MaxWidth: 1920, MaxHeight: 1080, FPS: 30, Bitrate: 4_000_000}, func(f Frame) {
 		mu.Lock()
 		bytes += len(f.Data)
 		frames++
@@ -226,8 +223,7 @@ func TestWindowResizeRebuildsAfterItSettles(t *testing.T) {
 	var mu sync.Mutex
 	var keysAfter int
 	var resized bool
-	s, err := Start(Config{Source: Source{Window: uint64(win.hwnd.Load())}, MaxWidth: 1920, MaxHeight: 1080, FPS: 30, Bitrate: 2_000_000,
-		AllowSoftware: os.Getenv("NOXA_NATIVE_SOFTWARE") != ""}, func(f Frame) {
+	s, err := Start(Config{Source: Source{Window: uint64(win.hwnd.Load())}, MaxWidth: 1920, MaxHeight: 1080, FPS: 30, Bitrate: 2_000_000}, func(f Frame) {
 		mu.Lock()
 		if resized && f.Keyframe {
 			keysAfter++
@@ -307,8 +303,7 @@ func TestStudioSessionEncodes(t *testing.T) {
 	}}
 	var mu sync.Mutex
 	keys, frames := 0, 0
-	s, err := Start(Config{Source: Source{Studio: true}, Scene: scene, MaxWidth: 1280, MaxHeight: 720, FPS: 30, Bitrate: 4_000_000,
-		AllowSoftware: os.Getenv("NOXA_NATIVE_SOFTWARE") != ""}, func(f Frame) {
+	s, err := Start(Config{Source: Source{Studio: true}, Scene: scene, MaxWidth: 1280, MaxHeight: 720, FPS: 30, Bitrate: 4_000_000}, func(f Frame) {
 		mu.Lock()
 		frames++
 		if f.Keyframe {
@@ -336,4 +331,38 @@ func TestStudioSessionEncodes(t *testing.T) {
 	if st.Width != 1280 || st.Height != 720 || frames < 45 || keys < 1 {
 		t.Fatalf("studio %dx%d frames=%d keyframes=%d", st.Width, st.Height, frames, keys)
 	}
+}
+
+// The software H.264 MFT, the last step of the encoder chain, opens on this
+// device and encodes NV12 input from the same ring textures.
+func TestSoftwareEncoderIsTheLastResort(t *testing.T) {
+	if os.Getenv("NOXA_NATIVE_CAPTURE") == "" {
+		t.Skip("set NOXA_NATIVE_CAPTURE=1 on an interactive Windows desktop")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	initThread()
+	d, err := newDevice(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.close()
+	if err := mfStartup(); err != nil {
+		t.Fatal(err)
+	}
+	var report []string
+	activates, infos, free := enumEncoders(d, &report)
+	defer free()
+	order := rankEncoders(infos, func(encoderInfo) bool { return false })
+	if len(order) == 0 || infos[order[len(order)-1]].hardware {
+		t.Fatalf("no software encoder last: %v %v", infos, report)
+	}
+	last := order[len(order)-1]
+	info := infos[last]
+	enc, err := openEncoder(d, activates[last], &info, 640, 360, 30, 1_000_000)
+	if err != nil {
+		t.Fatalf("software encoder %s: %v", info, err)
+	}
+	defer enc.close()
+	t.Logf("adapter %s; chain: %v; last resort %s%s; enumeration notes: %v", d.adapter, infos, info, enc.notes, report)
 }

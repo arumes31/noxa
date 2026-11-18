@@ -92,10 +92,10 @@ func TestNativeFrameDiagLogsEachReasonOnce(t *testing.T) {
 
 func TestNativeStallIdleFollowsTheCurrentKey(t *testing.T) {
 	cases := []struct {
-		name                          string
-		upload, minimized, keyActive  bool
-		generation                    uint64
-		idle                          bool
+		name                         string
+		upload, minimized, keyActive bool
+		generation                   uint64
+		idle                         bool
 	}{
 		{"uploading with a key", true, false, true, 3, false},
 		{"no active video key", true, false, false, 3, true},
@@ -134,10 +134,10 @@ func TestNativeStallDecisionIsRevalidated(t *testing.T) {
 	n := &nativeShare{stop: make(chan struct{}), session: session, sender: sender, upload: true, generation: 4}
 	seen := nativeObserved{session: session, sender: sender, upload: true, generation: 4}
 	for name, change := range map[string]func(){
-		"sender replaced":     func() { n.sender = &nativesender.Sender{} },
-		"session restarted":   func() { n.session = &nativecapture.Session{} },
-		"upload paused":       func() { n.upload = false },
-		"new publication":     func() { n.generation = 5 },
+		"sender replaced":   func() { n.sender = &nativesender.Sender{} },
+		"session restarted": func() { n.session = &nativecapture.Session{} },
+		"upload paused":     func() { n.upload = false },
+		"new publication":   func() { n.generation = 5 },
 	} {
 		n.session, n.sender, n.upload, n.generation = session, sender, true, 4
 		change()

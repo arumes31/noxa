@@ -1,7 +1,7 @@
 // Package nativecapture captures a monitor or window with Windows Graphics
 // Capture, converts it to NV12 on the GPU and encodes H.264 with a Media
-// Foundation hardware encoder, all in pure Go (no cgo). Other platforms get
-// a stub that reports ErrUnsupported.
+// Foundation encoder MFT (hardware first, software last), all in pure Go
+// (no cgo). Other platforms get a stub that reports ErrUnsupported.
 package nativecapture
 
 import (
@@ -59,8 +59,6 @@ type Config struct {
 	MaxWidth, MaxHeight int
 	FPS                 int
 	Bitrate             int // bits per second
-	// AllowSoftware admits a software encoder MFT (tests only).
-	AllowSoftware bool
 	// Scene and Overlays are the first Studio scene (Source.Studio), composed
 	// on a CanvasWidth x CanvasHeight canvas (default MaxWidth x MaxHeight).
 	Scene                     Scene

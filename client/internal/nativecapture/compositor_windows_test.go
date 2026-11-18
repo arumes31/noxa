@@ -99,7 +99,7 @@ func TestCompositorComposesSceneOverlayAndFade(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	initThread()
-	d, err := newDevice()
+	d, err := newDevice(0)
 	if err != nil {
 		t.Skipf("no D3D11 device: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestRegionConvertCopiesTheCroppedArea(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	initThread()
-	d, err := newDevice()
+	d, err := newDevice(0)
 	if err != nil {
 		t.Skipf("no D3D11 device: %v", err)
 	}

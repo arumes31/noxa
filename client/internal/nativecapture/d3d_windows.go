@@ -14,8 +14,10 @@ var (
 	d3d11                                    = windows.NewLazySystemDLL("d3d11.dll")
 	procD3D11CreateDevice                    = d3d11.NewProc("D3D11CreateDevice")
 	procCreateDirect3D11DeviceFromDXGIDevice = d3d11.NewProc("CreateDirect3D11DeviceFromDXGIDevice")
+	procCreateDXGIFactory1                   = windows.NewLazySystemDLL("dxgi.dll").NewProc("CreateDXGIFactory1")
 
 	iidIDXGIDevice         = mustGUID("54ec77fa-1377-44e6-8c32-88fd5f44c84c")
+	iidIDXGIFactory1       = mustGUID("770aae78-f26f-4dba-a829-253c83d1b387")
 	iidID3D10Multithread   = mustGUID("9B7E4E00-342C-4106-A19F-4F2704F689F0")
 	iidID3D11VideoDevice   = mustGUID("10EC4D5B-975A-4689-B9E4-D0AAC30FE333")
 	iidID3D11VideoContext  = mustGUID("61F21C45-3C0E-4a74-9CEA-67100D9AD5E4")
@@ -29,6 +31,7 @@ const (
 	dxgiFormatNV12     = 103
 	bindRenderTarget   = 0x20
 	bindShaderResource = 0x8
+	bindVideoEncoder   = 0x400 // D3D11_BIND_VIDEO_ENCODER (D3D 11.1): input of the video encoder
 )
 
 type texture2DDesc struct {
@@ -45,6 +48,8 @@ type device struct {
 	dev, ctx, videoDev, videoCtx uintptr
 	winrt                        uintptr // WinRT IDirect3DDevice for the frame pool
 	adapter                      string  // DXGI adapter description, vendor/device ID and LUID (diagnostics)
+	luid                         uint64  // the adapter LUID as MFT_ENUM_ADAPTER_LUID holds it (0 unknown)
+	vendorID                     uint32  // the adapter's PCI vendor ID (0 unknown)
 }
 
 // dxgiAdapterDesc is DXGI_ADAPTER_DESC.
@@ -56,30 +61,87 @@ type dxgiAdapterDesc struct {
 	LUIDHigh                                      int32
 }
 
-// adapterString describes the adapter behind an IDXGIDevice ("" when unknown).
-func adapterString(dxgi uintptr) string {
+// describeAdapter fills d.adapter (diagnostics), d.luid and d.vendorID from the adapter behind an IDXGIDevice.
+func (d *device) describeAdapter(dxgi uintptr) {
+	d.adapter = "unknown"
 	var adapter uintptr
 	if hr := vcall(dxgi, 7, uintptr(unsafe.Pointer(&adapter))); hr.failed() { // #nosec G103 -- IDXGIDevice::GetAdapter
-		return "unknown"
+		return
 	}
 	defer release(adapter)
 	var desc dxgiAdapterDesc
 	if hr := vcall(adapter, 8, uintptr(unsafe.Pointer(&desc))); hr.failed() { // #nosec G103 -- IDXGIAdapter::GetDesc
-		return "unknown"
+		return
 	}
-	return fmt.Sprintf("%q vendor=0x%04X device=0x%04X luid=%08X%08X", windows.UTF16ToString(desc.Description[:]),
-		desc.VendorID, desc.DeviceID, uint32(desc.LUIDHigh), desc.LUIDLow) // #nosec G115 -- LUID bits
+	d.luid = uint64(uint32(desc.LUIDHigh))<<32 | uint64(desc.LUIDLow) // #nosec G115 -- LUID bits
+	d.vendorID = desc.VendorID
+	d.adapter = fmt.Sprintf("%q vendor=0x%04X device=0x%04X luid=%016X", windows.UTF16ToString(desc.Description[:]),
+		desc.VendorID, desc.DeviceID, d.luid)
 }
 
-func newDevice() (*device, error) {
+// dxgiOutputDesc is DXGI_OUTPUT_DESC.
+type dxgiOutputDesc struct {
+	DeviceName [32]uint16
+	Desktop    rect
+	Attached   int32
+	Rotation   uint32
+	Monitor    uintptr
+}
+
+// monitorAdapter returns the DXGI adapter (AddRef'd) with an output on
+// monitor, or 0: the capture device then sits on the GPU that scans out the
+// captured screen, so WGC frames need no cross-adapter copy.
+func monitorAdapter(monitor uintptr) uintptr {
+	if monitor == 0 {
+		return 0
+	}
+	var factory uintptr
+	if r, _, _ := procCreateDXGIFactory1.Call(uintptr(unsafe.Pointer(&iidIDXGIFactory1)), uintptr(unsafe.Pointer(&factory))); hresult(r).failed() { // #nosec G103
+		return 0
+	}
+	defer release(factory)
+	for i := uintptr(0); ; i++ {
+		var adapter uintptr
+		if hr := vcall(factory, 12, i, uintptr(unsafe.Pointer(&adapter))); hr.failed() { // #nosec G103 -- IDXGIFactory1::EnumAdapters1 (DXGI_ERROR_NOT_FOUND ends)
+			return 0
+		}
+		for j := uintptr(0); ; j++ {
+			var output uintptr
+			if hr := vcall(adapter, 7, j, uintptr(unsafe.Pointer(&output))); hr.failed() { // #nosec G103 -- IDXGIAdapter::EnumOutputs
+				break
+			}
+			var desc dxgiOutputDesc
+			ok := vcall(output, 7, uintptr(unsafe.Pointer(&desc))).succeeded() && desc.Monitor == monitor // #nosec G103 -- IDXGIOutput::GetDesc
+			release(output)
+			if ok {
+				return adapter
+			}
+		}
+		release(adapter)
+	}
+}
+
+// newDevice creates the hardware device on the adapter driving monitor (0:
+// the default adapter, also the fallback when that adapter refuses).
+func newDevice(monitor uintptr) (*device, error) {
 	d := &device{}
 	var level uint32
-	// D3D_DRIVER_TYPE_HARDWARE, BGRA_SUPPORT|VIDEO_SUPPORT, D3D11_SDK_VERSION.
-	// #nosec G103 -- out pointers.
-	r, _, _ := procD3D11CreateDevice.Call(0, 1, 0, 0x20|0x800, 0, 0, 7,
-		uintptr(unsafe.Pointer(&d.dev)), uintptr(unsafe.Pointer(&level)), uintptr(unsafe.Pointer(&d.ctx)))
-	if err := hresult(r).err("D3D11CreateDevice"); err != nil {
-		return nil, err
+	create := func(adapter, driverType uintptr) error {
+		// BGRA_SUPPORT|VIDEO_SUPPORT, D3D11_SDK_VERSION.
+		// #nosec G103 -- out pointers.
+		r, _, _ := procD3D11CreateDevice.Call(adapter, driverType, 0, 0x20|0x800, 0, 0, 7,
+			uintptr(unsafe.Pointer(&d.dev)), uintptr(unsafe.Pointer(&level)), uintptr(unsafe.Pointer(&d.ctx)))
+		return hresult(r).err("D3D11CreateDevice")
+	}
+	onMonitor := false
+	if adapter := monitorAdapter(monitor); adapter != 0 {
+		onMonitor = create(adapter, 0) == nil // D3D_DRIVER_TYPE_UNKNOWN: required with an explicit adapter
+		release(adapter)
+	}
+	if !onMonitor {
+		if err := create(0, 1); err != nil { // D3D_DRIVER_TYPE_HARDWARE on the default adapter
+			return nil, err
+		}
 	}
 	var err error
 	if mt, qerr := queryInterface(d.dev, &iidID3D10Multithread); qerr == nil {
@@ -100,7 +162,7 @@ func newDevice() (*device, error) {
 		return nil, err
 	}
 	defer release(dxgi)
-	d.adapter = adapterString(dxgi)
+	d.describeAdapter(dxgi)
 	// Capture is latency critical; positive values may be refused without
 	// privilege, which keeps the default.
 	vcall(dxgi, 10, 7) // IDXGIDevice::SetGPUThreadPriority

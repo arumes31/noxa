@@ -125,6 +125,21 @@ func monitors() []monitorInfo {
 	return append([]monitorInfo(nil), enumMonitors...)
 }
 
+// sourceMonitor is the monitor src is shown on (0 for a Studio or an unknown monitor).
+func sourceMonitor(src Source) uintptr {
+	switch {
+	case src.Studio:
+		return 0
+	case src.Window != 0:
+		monitor, _, _ := procMonitorFromWindow.Call(uintptr(src.Window), 2) // MONITOR_DEFAULTTONEAREST
+		return monitor
+	}
+	if list := monitors(); src.Monitor >= 0 && src.Monitor < len(list) {
+		return list[src.Monitor].handle
+	}
+	return 0
+}
+
 // Monitors lists the displays that can be shared.
 func Monitors() []Monitor {
 	var out []Monitor
