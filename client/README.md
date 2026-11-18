@@ -46,8 +46,9 @@ the current user's voice controls.
   or encrypted voice, the share button stays and its dialog says why sharing
   is not possible. The capture device is created on the GPU that drives the
   captured monitor; encoders are tried in this order: hardware MFTs of that
-  adapter (by the activate's adapter LUID, else its PCI vendor ID), other
-  hardware MFTs, then the Microsoft software H.264 MFT. A hardware encoder
+  adapter (listed by `MFTEnum2` with its LUID; by PCI vendor ID where
+  `MFTEnum2` is missing), other hardware MFTs, then the Microsoft software
+  H.264 MFT. A hardware encoder
   that ignores the one-slice setting is skipped for the rest of the run and
   the next one opens. A share ends with a notice naming the reason when
   capture fails again after one restart, the encoder keeps producing

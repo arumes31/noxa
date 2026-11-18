@@ -96,6 +96,9 @@ func multiSliceRejected(info encoderInfo) bool {
 	return ok && info.hardware
 }
 
+// keyframeSlices counts a keyframe's slices for the multi-slice check (a test seam).
+var keyframeSlices = sliceCount
+
 // sliceCount is the number of coded slices (NAL types 1 and 5) in an Annex-B access unit.
 func sliceCount(au []byte) int {
 	n := 0

@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -425,3 +427,107 @@ func TestSoftwareEncoderIsTheLastResort(t *testing.T) {
 		t.Fatalf("software encoder: hardware=%v encoded=%d keyframes=%d err=%v", info.Hardware, encoded, keyframes, keyErr)
 	}
 }
+
+// MFTEnum2 really filters by adapter: the device's LUID lists its hardware
+// MFTs, a LUID no adapter has lists none (an ignored attribute would list
+// them all); the vendor fallback then decides instead.
+func TestAdapterEnumerationFiltersByLUID(t *testing.T) {
+	if os.Getenv("NOXA_NATIVE_CAPTURE") == "" {
+		t.Skip("set NOXA_NATIVE_CAPTURE=1 on an interactive Windows desktop")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	initThread()
+	d, err := newDevice(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.close()
+	if err := mfStartup(); err != nil {
+		t.Fatal(err)
+	}
+	onAdapter := func(luid uint64) (n int, report []string) {
+		probe := *d // only the adapter identity is read
+		probe.luid = luid
+		_, infos, free := enumEncoders(&probe, &report)
+		defer free()
+		for _, info := range infos {
+			if info.onAdapter {
+				n++
+			}
+		}
+		return n, report
+	}
+	own, report := onAdapter(d.luid)
+	foreign, foreignReport := onAdapter(0x7FFF_FFFF_0000_0001)
+	t.Logf("own adapter: %d on-adapter MFTs %v; foreign LUID: %d %v", own, report, foreign, foreignReport)
+	failed := func(report []string) bool {
+		return slices.ContainsFunc(report, func(line string) bool { return strings.Contains(line, "(MFTEnum2): 0 encoders") })
+	}
+	if own == 0 || failed(report) || !failed(foreignReport) {
+		t.Fatalf("MFTEnum2 adapter filter: own %d %v, foreign %d %v", own, report, foreign, foreignReport)
+	}
+}
+
+// A hardware encoder found to write multi-slice keyframes mid-stream is
+// replaced at once by the next candidate (here the software MFT), keeping
+// the converter, ring and last picture: frames resume well inside the
+// 10 s stall watchdog even from a static source.
+func TestMultiSliceEncoderIsReplacedMidStream(t *testing.T) {
+	if os.Getenv("NOXA_NATIVE_CAPTURE") == "" {
+		t.Skip("set NOXA_NATIVE_CAPTURE=1 on an interactive Windows desktop")
+	}
+	var mu sync.Mutex
+	var rejected []string
+	keyframeSlices = func([]byte) int { return 2 } // every hardware keyframe "has two slices"
+	t.Cleanup(func() {
+		keyframeSlices = sliceCount
+		mu.Lock()
+		defer mu.Unlock()
+		for _, name := range rejected {
+			multiSliceEncoders.Delete(name)
+		}
+	})
+	var software, hardware int
+	var swapped time.Time
+	var s *Session
+	start := time.Now()
+	sess, err := Start(Config{Source: Source{Monitor: 0}, MaxWidth: 1280, MaxHeight: 720, FPS: 30, Bitrate: 2_000_000}, func(f Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		if s == nil {
+			return
+		}
+		if info := s.Info(); info.Hardware {
+			hardware++
+		} else {
+			if software == 0 {
+				swapped = time.Now()
+			}
+			software++
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	s = sess
+	mu.Unlock()
+	time.Sleep(3 * time.Second)
+	s.Close()
+	multiSliceEncoders.Range(func(key, _ any) bool {
+		mu.Lock()
+		rejected = append(rejected, key.(string))
+		mu.Unlock()
+		return true
+	})
+	info := s.Info()
+	mu.Lock()
+	defer mu.Unlock()
+	t.Logf("final encoder %q hardware=%v; frames: %d hardware (dropped by the check), %d software, first software after %v; rejected %v",
+		info.Name, info.Hardware, hardware, software, swapped.Sub(start), rejected)
+	if info.Hardware || software == 0 || len(rejected) == 0 || swapped.Sub(start) > 2*time.Second {
+		t.Fatalf("no mid-stream swap: hardware=%v software frames=%d rejected=%v after %v", info.Hardware, software, rejected, swapped.Sub(start))
+	}
+}
+

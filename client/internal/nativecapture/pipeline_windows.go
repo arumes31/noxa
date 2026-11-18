@@ -535,7 +535,7 @@ func (s *Session) drain(p *pipeline) error {
 			// H.264 slices cannot be merged and the sender admits one per access
 			// unit: an encoder that ignored the slice setting is replaced at once
 			// by the next candidate; the keyframe resend feeds it the last picture.
-			if n := sliceCount(data); n > 1 && rejectMultiSlice(p.enc.info) {
+			if n := keyframeSlices(data); n > 1 && rejectMultiSlice(p.enc.info) {
 				log.Printf("native encoder: %s wrote %d slices per keyframe; opening the next encoder", p.enc.info, n)
 				p.closeEncoder()
 				return s.openEncoder(p)

@@ -359,8 +359,7 @@ export function createVideoPublication({ policy }) {
     function updateShareSettings() {
         const native = V().state.screenSharing && V().state.nativeShare;
         if (!native) return null;
-        if (native.studio) return { surface: "studio" };
-        return { surface: native.surface, ...native.selection, audioMode: native.audioMode };
+        return { surface: native.studio ? "studio" : native.surface, ...native.selection, audioMode: native.audioMode };
     }
     function openResumedShare(settings) {
         if (settings.surface === "studio") { document.getElementById("voice-studio")?.click(); return; }

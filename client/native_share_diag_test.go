@@ -135,7 +135,7 @@ func TestNativeStallDecisionIsRevalidated(t *testing.T) {
 	seen := nativeObserved{session: session, sender: sender, upload: true, generation: 4}
 	for name, change := range map[string]func(){
 		"sender replaced":   func() { n.sender = &nativesender.Sender{} },
-		"session restarted": func() { n.session = &nativecapture.Session{} },
+		"session restarted": func() { n.session = nil }, // zero-size off Windows: distinct values can compare equal
 		"upload paused":     func() { n.upload = false },
 		"new publication":   func() { n.generation = 5 },
 	} {
