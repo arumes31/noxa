@@ -47,6 +47,12 @@ the current user's voice controls.
   window (refreshed about every 1.5 s while the dialog is open), a running
   game (a window covering its monitor) listed first, and the last shared
   source preselected (matched by executable and title, then by executable).
+  A native **Region** is drawn on a still of the picked monitor and cropped
+  on the GPU (one confirmation, no browser picker); its Browser fallback
+  crops the browser capture to the same area. **Studio** in Native mode
+  composes its screens, windows and cameras (Media Foundation) with a
+  Direct3D 11 compositor in Go; text and images arrive from the webview as
+  transparent overlay PNGs, uploaded only on change.
   Share audio follows the dialog's audio choice: a window share sends only
   that application's audio, a monitor share sends system audio without
   noXa's own voices (WASAPI process loopback, Windows build 20348 or later, i.e. Windows 11). If

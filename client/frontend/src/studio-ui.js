@@ -11,13 +11,19 @@
 //   and the whole session: capture tracks, audio nodes, timers, canvases and
 //   bitmaps. Account/server/channel switch and disconnect call disposeStudio().
 // - The only way a draft reaches the program is Take.
+// - Native capture mode (Windows desktop): sources are picked in noXa's own
+//   picker and captured in Go; the program is composed there
+//   (studio-native.js). getDisplayMedia is never called. The mode is fixed
+//   per session.
 import { t } from "./i18n.js";
 import { mountServerDialog, closeDialog, topDialog } from "./modal.js";
 import { labelButton } from "./icons.js";
 import { retainDisplayCapture, releaseDisplayCapture } from "./display-capture-lease.js";
 import { displayAudioOptions, validateDisplayAudio } from "./display-audio.js";
 import { cameraConstraints } from "./camera-capture.js";
-import { startStudioShare, studioShareActive, stopShare, shareResumePending } from "./video.js";
+import { startStudioShare, startNativeStudioShare, updateNativeStudio, studioShareActive, stopShare, shareResumePending } from "./video.js";
+import { screenCaptureBackend, nativeShareStatus, nativeSourceOptions, nativeThumbnails, nativeCameras, nativeTile } from "./native-share.js";
+import { nativeProgram, overlayKey, renderOverlays, createNativeSync } from "./studio-native.js";
 import {
     MAX_SCENES, MAX_SOURCES, TRANSITION_MIN_MS, TRANSITION_MAX_MS, StudioStateError,
     parseStudio, serializeStudio, selectedScene, addScene, renameScene, removeScene, selectScene, setTransition,
@@ -37,6 +43,14 @@ let session = null;
 let panel = null;
 let panelID = 0;
 let sessionID = 0;
+// A native Studio that failed (after Go's one restart) makes later sessions
+// of this app run use Browser capture.
+let nativeStudioFailed = false;
+
+// Native mode is wanted when chosen in the share dialog and Go can run it.
+function nativeWanted() {
+    return screenCaptureBackend() === "native" && !nativeStudioFailed && typeof window.go?.main?.App?.UpdateNativeStudioForTab === "function";
+}
 
 function storage() {
     try { return globalThis.localStorage; } catch { return null; }
@@ -65,7 +79,7 @@ function errorText(error) {
 function createSession() {
     const id = ++sessionID;
     const registry = createCaptureRegistry({
-        onChange: () => { if (session?.id === id) { session.engine?.renderProgram(performance.now()); syncAudio(); schedule(); } },
+        onChange: () => { if (session?.id === id) { session.engine?.renderProgram(performance.now()); syncAudio(); session.nativeSync?.send(); schedule(); } },
         onRelease: stream => releaseDisplayCapture(stream),
     });
     const uid = String(V()?.state?.myUniqueID || "");
@@ -74,13 +88,153 @@ function createSession() {
     const assets = assetDB ? createAssetStore({ name: assetDB }) : createAssetStore({ indexedDB: null });
     const { width, height } = outputSize(V()?.state?.mediaLimits);
     const engine = new StudioEngine({ registry, assets, width, height, fps: STUDIO_FPS, renderer: rendererOverride,
-        label: source => source.kind === "image" ? t("studio.sourceUnavailable") : t(`studio.state.${registry.state(source.capture)}`) });
+        label: source => source.kind === "image" ? t("studio.sourceUnavailable")
+            : registry.get(source.capture)?.native && source.kind === "camera" && registry.state(source.capture) === "live" ? t("studio.nativeCameraPreview")
+                : t(`studio.state.${registry.state(source.capture)}`) });
     const studio = loadStudio(uid);
     session = { id, uid, registry, assets, engine, audio: null, studio, live: false, starting: false,
-        selectedSource: "", width, height, meterTimer: null, restored: studio.scenes.some(scene => scene.sources.some(source => source.kind === "display" || source.kind === "camera")) };
+        selectedSource: "", width, height, meterTimer: null, restored: studio.scenes.some(scene => scene.sources.some(source => source.kind === "display" || source.kind === "camera")),
+        native: nativeWanted(), nativeTake: 0, nativeTimer: null, nativeSync: null };
+    if (session.native) startNative(session);
     engine.setDraft(selectedScene(studio), studio.scenes);
     void assets.load(assetRefs(studio)).then(() => { if (session?.id === id) { engine.renderPreview(); schedule(); } });
     return session;
+}
+
+// ---- native mode -----------------------------------------------------
+
+// startNative confirms Native capture can run (else the session uses
+// Browser capture, with a notice) and keeps native display thumbnails and
+// the live program in step.
+function startNative(owner) {
+    const tabID = V()?.state?.activeTabID;
+    void nativeShareStatus(tabID).then(status => {
+        if (session !== owner || status.available) return;
+        // Nothing was captured natively yet in practice: the check is quick.
+        if (!owner.registry.ids().some(id => owner.registry.get(id)?.native)) {
+            owner.native = false;
+            clearInterval(owner.nativeTimer);
+            owner.nativeSync = null;
+            showError(t("studio.nativeUnavailable"));
+        }
+    });
+    owner.nativeSync = createNativeSync({
+        build: () => {
+            if (session !== owner || !owner.engine.live) return null;
+            const { layers, groups } = nativeProgram(owner.engine.live, source => nativeLayer(owner, source));
+            const key = overlayKey(groups, { width: owner.width, height: owner.height, ready: asset => !!owner.assets.bitmap?.(asset) });
+            return { take: owner.nativeTake, layers, groups, key, transition: owner.nativeTransition };
+        },
+        render: groups => renderOverlays(owner.engine, groups, owner.width, owner.height),
+        post: scene => { if (session === owner && owner.live) updateNativeStudio(scene); },
+    });
+    let ticks = 0;
+    owner.nativeTimer = setInterval(() => {
+        if (session !== owner) return;
+        void paintNative(owner, ++ticks % 2 === 0);
+        if (owner.live) owner.nativeSync.send();
+    }, 1000);
+}
+
+// nativeLayer is the Go source of a program source's native capture, or null.
+function nativeLayer(owner, source) {
+    const entry = owner.registry.get(source.capture);
+    if (!entry?.native || owner.registry.state(source.capture) !== "live") return null;
+    return entry.native;
+}
+
+// paintNative refreshes native display thumbnails (the preview monitors)
+// and, every other second, ends captures of windows that were closed.
+async function paintNative(owner, checkWindows) {
+    const entries = owner.registry.ids().map(id => owner.registry.get(id)).filter(entry => entry?.native?.kind === "display" && entry.state === "live");
+    if (!entries.length) return;
+    const thumbs = await nativeThumbnails([...new Set(entries.map(entry => entry.native.value))]);
+    for (const entry of entries) {
+        const url = thumbs[entry.native.value];
+        if (!url || session !== owner) continue;
+        const image = new Image();
+        image.src = url;
+        try { await image.decode(); } catch { continue; }
+        if (session === owner) owner.registry.paint(entry.id, image);
+    }
+    if (!checkWindows || session !== owner) return;
+    const status = await nativeShareStatus(V()?.state?.activeTabID);
+    if (!status.available || session !== owner) return;
+    const open = new Set((status.windows || []).map(w => String(w.handle)));
+    for (const entry of entries) if (entry.native.source.window !== "0" && !open.has(entry.native.source.window)) owner.registry.end(entry.id);
+}
+
+// pickNative is noXa's own picker for a native Studio capture: monitors and
+// windows with thumbnails, or the cameras. Resolves the option or null.
+async function pickNative(kind) {
+    let options;
+    if (kind === "camera") {
+        options = (await nativeCameras()).map(camera => ({ value: camera.id, label: camera.name || camera.id }));
+        if (!options.length) throw new Error(t("studio.nativeNoCameras"));
+    } else {
+        const status = await nativeShareStatus(V()?.state?.activeTabID);
+        if (!status.available) throw new Error(t("share.nativeUnavailable"));
+        options = ["monitor", "window"].flatMap(surface => nativeSourceOptions(status, surface, null).map(option => ({ ...option, surface })));
+        if (!options.length) throw new Error(t("share.nativeNoSources"));
+    }
+    return new Promise(resolve => {
+        const overlay = element("div", { class: "dlg-overlay" });
+        const dialog = element("div", { class: "dlg share-dlg studio-native-pick" });
+        const grid = element("div", { class: "sp-native-grid", attrs: { role: "radiogroup", "aria-label": t("studio.nativePick") } });
+        let value = (options.find(option => option.selected) || options[0]).value, result = null;
+        const name = `studio-native-${++panelID}`;
+        for (const option of options) {
+            const tile = nativeTile(option, name, () => { value = option.value; });
+            tile.querySelector("input").checked = option.value === value;
+            tile.querySelector(".sp-native-title").textContent = option.label;
+            const detail = tile.querySelector(".sp-native-detail");
+            detail.textContent = [option.game ? t("share.nativeGame") : "", option.exe || ""].filter(Boolean).join(" · ");
+            detail.hidden = !detail.textContent;
+            tile.querySelector("img").hidden = kind === "camera";
+            grid.append(tile);
+        }
+        const add = element("button", { type: "button", class: "primary", text: t("studio.nativeAdd"),
+            onclick: () => { result = options.find(option => option.value === value) || null; closeDialog(overlay, "ok"); } });
+        const cancel = element("button", { type: "button", text: t("desktop.cancel"), onclick: () => closeDialog(overlay, "cancel") });
+        dialog.append(element("h3", { text: t("studio.nativePick") }), grid, element("div", { class: "dlg-buttons" }, [cancel, add]));
+        overlay.append(dialog);
+        mountServerDialog(overlay, { initialFocus: grid.querySelector("input:checked"), onClose: () => resolve(result) });
+        if (kind !== "camera") void nativeThumbnails(options.map(option => option.value)).then(thumbs => {
+            for (const img of grid.querySelectorAll("img[data-value]")) if (thumbs[img.dataset.value]) img.src = thumbs[img.dataset.value];
+        });
+    });
+}
+
+// captureNative is capture() in Native mode: Go captures, the webview shows
+// thumbnails. Audio is a flag Go follows from the program (a window's own
+// audio when it is the only one, else system audio without noXa).
+async function captureNative(kind, { replace = "" } = {}) {
+    const owner = session;
+    const audioMode = panel?.overlay.querySelector(".studio-capture-audio")?.value || "none";
+    let picked;
+    try { picked = await pickNative(kind); }
+    catch (error) { if (session === owner) showError(t("studio.captureFailed", { error: error.message || String(error) })); return; }
+    if (!picked || session !== owner) return;
+    const native = kind === "camera" ? { kind: "camera", camera: picked.value }
+        : { kind: "display", value: picked.value, source: picked.surface === "window" ? { monitor: 0, window: picked.value.slice(2) } : { monitor: Number(picked.value.slice(2)), window: "0" } };
+    const surface = kind === "display" ? picked.surface : "";
+    const audio = kind === "display" && audioMode !== "none";
+    let id;
+    try { id = owner.registry.addNative({ kind, label: picked.label, surface, native, audio }); }
+    catch (error) { showError(t("studio.captureFailed", { error: error.message })); return; }
+    // The call's camera may hold the device; Windows usually shares it.
+    if (kind === "camera" && V()?.state?.localStream?.getVideoTracks?.().some(track => track.readyState === "live" && track.enabled)) {
+        V()?.toast?.(t("studio.nativeCameraShared"), "warn");
+    }
+    if (kind === "display") void paintNative(owner, false);
+    const scene = selectedScene(owner.studio);
+    const ok = apply(studio => {
+        if (replace) return updateSource(studio, scene.id, replace, { capture: id, surface, audio });
+        const added = addSource(studio, scene.id, { kind, name: t(`studio.kind.${kind}`), capture: id, surface, audio });
+        owner.selectedSource = added.source.id;
+        return added.studio;
+    });
+    if (!ok) owner.registry.setHolder("draft", captureRefs(owner.studio.scenes));
 }
 
 function audioGraph() {
@@ -121,6 +275,8 @@ function disposeSession() {
     // a frozen frame): end it first. Its onEnded sees a retired session.
     if (current.live && studioShareActive()) void stopShare();
     clearInterval(current.meterTimer);
+    clearInterval(current.nativeTimer);
+    current.nativeSync?.reset();
     current.engine.dispose(); // registry, captures, bitmaps, timer, canvases
     current.audio?.dispose();
 }
@@ -153,6 +309,11 @@ function doTake() {
     const snapshot = take(session.studio);
     session.engine.take(snapshot, session.studio.transition);
     syncAudio(); // the only place a draft audio choice reaches the program
+    if (session.native) {
+        session.nativeTake++;
+        session.nativeTransition = session.studio.transition;
+        if (session.live) session.nativeSync.send(true);
+    }
     schedule();
 }
 
@@ -175,6 +336,7 @@ async function capture(kind, { replace = "" } = {}) {
     const owner = session;
     if (!owner) return;
     showError("");
+    if (owner.native) { await captureNative(kind, { replace }); return; }
     const audioMode = panel?.overlay.querySelector(".studio-capture-audio")?.value || "none";
     let result;
     try {
@@ -212,7 +374,7 @@ function reuseCapture(id) {
     const entry = session.registry.get(id);
     const scene = selectedScene(session.studio);
     apply(studio => {
-        const added = addSource(studio, scene.id, { kind: entry.kind, name: t(`studio.kind.${entry.kind}`), capture: id, surface: entry.surface, audio: !!entry.audioTrack });
+        const added = addSource(studio, scene.id, { kind: entry.kind, name: t(`studio.kind.${entry.kind}`), capture: id, surface: entry.surface, audio: !!(entry.audioTrack || entry.nativeAudio) });
         session.selectedSource = added.source.id;
         return added.studio;
     });
@@ -259,6 +421,7 @@ async function goLive() {
     showError("");
     owner.starting = true;
     schedule();
+    if (owner.native) { await goLiveNative(owner); return; }
     const stream = owner.engine.outputStream(audioGraph().track);
     try {
         const started = await startStudioShare(stream, { width: owner.width, height: owner.height, fps: STUDIO_FPS,
@@ -281,6 +444,47 @@ async function goLive() {
             if (!panel && !owner.live) disposeSession(); else schedule();
         }
     }
+}
+
+// goLiveNative publishes the program composed in Go; Takes follow through
+// the native sync (studio-native.js).
+async function goLiveNative(owner) {
+    try {
+        owner.nativeTake = Math.max(1, owner.nativeTake);
+        owner.nativeTransition ||= owner.studio.transition;
+        const scene = owner.nativeSync.initial() || { take: String(owner.nativeTake), layers: [], transition: { kind: "cut", ms: 0 }, overlays: [] };
+        const started = await startNativeStudioShare({ width: owner.width, height: owner.height, fps: STUDIO_FPS, scene,
+            onEnded: () => studioEnded(owner), change: () => openStudio(), onFallback: () => { nativeStudioFailed = true; } });
+        if (session !== owner) {
+            if (started && studioShareActive()) void stopShare();
+            return;
+        }
+        owner.live = !!started;
+        // A Take made while the share started.
+        if (started) owner.nativeSync.send(true);
+        else nativeStartFailed(owner);
+    } catch (error) {
+        if (session === owner) showError(t("studio.liveFailed", { error: error.message || String(error) }));
+    } finally {
+        if (session === owner) {
+            owner.starting = false;
+            if (!panel && !owner.live) disposeSession(); else schedule();
+        }
+    }
+}
+
+// nativeStartFailed: Go could not start (e.g. no hardware encoder). Native
+// captures are useless to Browser capture, so a fresh Browser session
+// replaces this one and says why.
+function nativeStartFailed(owner) {
+    nativeStudioFailed = true;
+    if (session !== owner) return;
+    owner.starting = false;
+    disposeSession();
+    if (!panel) return;
+    createSession();
+    render();
+    showError(t("studio.nativeStartFailed"));
 }
 
 // studioEnded: the publication stopped (Stop anywhere). The whole session
@@ -480,7 +684,7 @@ function renderProps(container, scene) {
             ]));
     }
     const entry = source.capture ? session.registry.get(source.capture) : null;
-    if (source.kind === "display" && entry?.audioTrack) {
+    if (source.kind === "display" && (entry?.audioTrack || entry?.nativeAudio)) {
         const toggle = element("input", { type: "checkbox", class: "studio-route-audio", checked: !!source.audio, onchange: event => set({ audio: event.target.checked }) });
         container.append(element("label", { class: "studio-check" }, [toggle, element("span", { text: t("studio.routeAudio") })]),
             element("p", { class: "set-hint", text: t("studio.routeAudioHelp") }));

@@ -1,8 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"image"
+	"image/color"
+	"image/png"
 	"strings"
 	"testing"
 	"time"
@@ -221,7 +226,7 @@ func TestNativeShareAudioFallbacks(t *testing.T) {
 			}
 			return &nativecapture.AudioSession{Mode: mode}, nil
 		}
-		n := &nativeShare{req: NativeShareRequest{Audio: c.audio, Source: nativecapture.Source{Window: c.window}}}
+		n := &nativeShare{audioMode: c.audio, audioWindow: c.window}
 		notice := n.openAudio()
 		if notice != c.wantNotice || (n.audio != nil) != c.wantSession || len(tried) != len(c.wantTried) {
 			t.Errorf("%s: notice %q session %v tried %v", c.name, notice, n.audio != nil, tried)
@@ -299,5 +304,116 @@ func TestNativeShareAudioFailureEndsAudio(t *testing.T) {
 	n.watchAudio(session, failed)
 	if n.audio != other {
 		t.Fatal("a stale failure removed the current audio session")
+	}
+}
+
+func TestStudioAudioFollowsProgram(t *testing.T) {
+	display := func(src nativecapture.Source, audio bool) nativecapture.Layer {
+		return nativecapture.Layer{Kind: nativecapture.LayerDisplay, Source: src, Audio: audio}
+	}
+	cases := []struct {
+		name   string
+		layers []nativecapture.Layer
+		mode   string
+		window uint64
+	}{
+		{"no audio", []nativecapture.Layer{display(nativecapture.Source{Window: 5}, false)}, "none", 0},
+		{"one window", []nativecapture.Layer{display(nativecapture.Source{Window: 5}, true), {Kind: nativecapture.LayerCamera, Camera: "c"}}, "application", 5},
+		{"same window twice", []nativecapture.Layer{display(nativecapture.Source{Window: 5}, true), display(nativecapture.Source{Window: 5}, true)}, "application", 5},
+		{"monitor", []nativecapture.Layer{display(nativecapture.Source{Monitor: 1}, true)}, "system", 0},
+		{"two windows", []nativecapture.Layer{display(nativecapture.Source{Window: 5}, true), display(nativecapture.Source{Window: 6}, true)}, "system", 0},
+	}
+	for _, c := range cases {
+		mode, window := studioAudio(nativecapture.Scene{Layers: c.layers})
+		if mode != c.mode || window != c.window {
+			t.Errorf("%s: %s %d, want %s %d", c.name, mode, window, c.mode, c.window)
+		}
+	}
+}
+
+func pngOf(t *testing.T, img image.Image) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestDecodeOverlaysValidatesImages(t *testing.T) {
+	nrgba := image.NewNRGBA(image.Rect(0, 0, 4, 2))
+	nrgba.SetNRGBA(1, 1, color.NRGBA{255, 0, 0, 128})
+	gray := image.NewGray(image.Rect(0, 0, 3, 3))
+	got, err := decodeOverlays([][]byte{pngOf(t, nrgba), pngOf(t, gray)})
+	if err != nil || len(got) != 2 {
+		t.Fatalf("decodeOverlays = %v %v", got, err)
+	}
+	if c := got[0].NRGBAAt(1, 1); c != (color.NRGBA{255, 0, 0, 128}) {
+		t.Fatalf("straight alpha lost: %v", c)
+	}
+	if got[1].Rect.Dx() != 3 || got[1].NRGBAAt(0, 0).A != 255 {
+		t.Fatalf("converted overlay = %v", got[1].Rect)
+	}
+	if _, err := decodeOverlays([][]byte{[]byte("not a png")}); err == nil {
+		t.Fatal("garbage accepted")
+	}
+	if _, err := decodeOverlays([][]byte{pngOf(t, image.NewNRGBA(image.Rect(0, 0, nativeOverlaySide+1, 1)))}); err == nil {
+		t.Fatal("oversized overlay accepted")
+	}
+	if _, err := decodeOverlays(make([][]byte, nativecapture.MaxStudioLayers+1)); err == nil {
+		t.Fatal("too many overlays accepted")
+	}
+}
+
+func TestNativeStudioSceneJSON(t *testing.T) {
+	overlay := base64.StdEncoding.EncodeToString([]byte{1, 2})
+	body := `{"id":"s","source":{"monitor":0,"window":"0","studio":true},"studio":{"take":"3","transition":{"kind":"fade","ms":300},` +
+		`"layers":[{"kind":"display","source":{"monitor":1,"window":"0"},"audio":true,"x":0.1,"y":0,"w":0.5,"h":0.5,"crop":{"l":0.1,"t":0,"r":0,"b":0}},` +
+		`{"kind":"overlay","overlay":0}],"overlays":["` + overlay + `"]}}`
+	var req NativeShareRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	s := req.Studio
+	if !req.Source.Studio || s == nil || s.Take != 3 || len(s.Layers) != 2 || s.Layers[0].Source.Monitor != 1 || !s.Layers[0].Audio ||
+		s.Layers[0].Crop.L != 0.1 || s.Transition.MS != 300 || len(s.Overlays) != 1 || !bytes.Equal(s.Overlays[0], []byte{1, 2}) {
+		t.Fatalf("decoded %+v", s)
+	}
+}
+
+func TestNativeStudioSetSceneOrderAndAudio(t *testing.T) {
+	defer func(orig func(nativecapture.AudioMode, uint64, func(nativecapture.AudioPacket)) (*nativecapture.AudioSession, error)) {
+		startNativeAudio = orig
+	}(startNativeAudio)
+	var opened []nativecapture.AudioMode
+	startNativeAudio = func(mode nativecapture.AudioMode, _ uint64, _ func(nativecapture.AudioPacket)) (*nativecapture.AudioSession, error) {
+		opened = append(opened, mode)
+		return &nativecapture.AudioSession{Mode: mode}, nil
+	}
+	n := &nativeShare{cm: &connManager{sink: &eventRecorder{}, tabID: "a"}, stop: make(chan struct{}), running: true,
+		req: NativeShareRequest{ID: "s", Source: nativecapture.Source{Studio: true}}, audioMode: "none"}
+	withAudio := nativecapture.Scene{Take: 2, Layers: []nativecapture.Layer{{Kind: nativecapture.LayerDisplay, Source: nativecapture.Source{Monitor: 0}, Audio: true}}}
+	n.setScene(withAudio, nil)
+	if n.audio == nil || len(opened) != 1 || opened[0] != nativecapture.AudioSystem || n.scene.Take != 2 {
+		t.Fatalf("take 2: audio %v opened %v take %d", n.audio, opened, n.scene.Take)
+	}
+	n.setScene(nativecapture.Scene{Take: 1}, nil)
+	if n.scene.Take != 2 || n.audio == nil {
+		t.Fatal("an older Take replaced the program")
+	}
+	// Same audio plan: the session is kept (only overlays change).
+	n.setScene(withAudio, nil)
+	if len(opened) != 1 {
+		t.Fatalf("unchanged audio reopened: %v", opened)
+	}
+	n.setScene(nativecapture.Scene{Take: 3}, nil)
+	if n.audio != nil || n.audioMode != "none" {
+		t.Fatal("audio kept after a Take without audio")
+	}
+}
+
+func TestNativeCameraReason(t *testing.T) {
+	if nativeCameraReason("camera busy: MFCreateDeviceSource: HRESULT 0x80070005") != "busy" || nativeCameraReason("camera stopped") != "unavailable" {
+		t.Fatal("camera reasons")
 	}
 }

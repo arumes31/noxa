@@ -2,7 +2,10 @@
 
 package nativecapture
 
-import "time"
+import (
+	"image"
+	"time"
+)
 
 // Session is unavailable off Windows.
 type Session struct{}
@@ -19,6 +22,12 @@ func (*Session) Fatal() <-chan error { return nil }
 func (*Session) Info() EncoderInfo   { return EncoderInfo{} }
 func (*Session) Stats() Stats        { return Stats{} }
 func (*Session) Close()              {}
+
+// SetScene does nothing off Windows.
+func (*Session) SetScene(Scene, []*image.NRGBA) {}
+
+// Cameras is empty off Windows.
+func Cameras() []Camera { return nil }
 
 // Monitors is empty off Windows.
 func Monitors() []Monitor { return nil }

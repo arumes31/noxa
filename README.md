@@ -440,6 +440,22 @@ only.
   images / 32 MB (in IndexedDB); unused images are removed. Captures are never
   restored, so each screen or camera source must be captured again after a
   restart. Switching channel, server or account ends Studio.
+* **Native capture (Windows)**: with **Screen capture: Native** chosen in
+  the share dialog, Studio never opens the browser picker. Screens and
+  windows are picked in noXa's own picker with thumbnails, cameras from the
+  list of Windows cameras, and the program is composed on the GPU (Direct3D 11:
+  position, crop, cut and crossfade) and sent as hardware H.264 through the
+  native share path. Text and images are drawn by the app into transparent
+  overlay images, sent only when they change and blended natively in their
+  layer order. The preview shows thumbnails; a native camera appears in the
+  program only. Audio follows the program: one window with audio enabled
+  sends that application's audio, anything else with audio sends system
+  audio without noXa. A camera that another process (also the call camera)
+  holds cannot be opened on every machine: Studio then shows a notice and an
+  empty box and retries every few seconds. If native
+  capture is unavailable, Studio uses Browser capture with a notice; if it
+  fails while live (after one restart), Studio ends and later sessions use
+  Browser capture until noXa restarts.
 
 <a id="permissions"></a>
 
