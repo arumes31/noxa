@@ -9380,9 +9380,10 @@ test("labels screen-share controls and explains low-bandwidth data use", async (
 
     await shareButton.click();
     const shareDialog = page.getByRole("dialog", { name: "Share screen" });
-    await expect(shareDialog.getByRole("group", { name: "Source" })).toBeVisible();
-    await expect(shareDialog.getByRole("radio")).toHaveCount(3);
-    await expect(shareDialog.getByRole("radio", { name: "Screen", exact: true })).toBeChecked();
+    await expect(shareDialog.getByRole("radiogroup", { name: "Source" })).toBeVisible();
+    // Without the desktop bridge there is nothing to list.
+    await expect(shareDialog.getByRole("radio")).toHaveCount(0);
+    await expect(shareDialog.getByRole("button", { name: "Area", exact: true })).toBeDisabled();
     await expect(shareDialog.locator(".sp-quality-toggle")).toContainText("Full HD");
     await expect(shareDialog.locator(".sp-quality-toggle")).toContainText("1080p · 30 fps · Auto");
     await expect(shareDialog.getByRole("button", { name: "Share audio: No audio", exact: true })).toBeVisible();

@@ -138,19 +138,77 @@ test("leaving the restored channel permanently removes the stream resume prompt"
 });
 
 test("application audio requires a window and never switches silently to system audio", async ({ page }) => {
+    await installNative(page);
     await page.locator("#voice-screen").click();
+    const dialog = page.getByRole("dialog", { name: "Share screen" });
+    const screen = dialog.getByRole("radio", { name: /^Screen 1/ }), editor = dialog.getByRole("radio", { name: /^Editor/ });
+    const area = dialog.getByRole("button", { name: "Area", exact: true });
+    await expect(screen).toBeChecked();
     await expect(page.locator(".sh-audio input:checked")).toHaveValue("none");
     await expect(page.locator('.sh-audio input[value="application"]')).toBeDisabled();
-    await page.getByLabel("Window", { exact: true }).check();
+    await editor.check();
     await expect(page.locator(".sh-audio input:checked")).toHaveValue("application");
-    await page.getByLabel("Screen", { exact: true }).check();
+    // A Region is cut from a screen: Area is off and disabled while a window is picked.
+    await expect(area).toBeDisabled();
+    await screen.check();
     await expect(page.locator(".sh-audio input:checked")).toHaveValue("none");
     await expect(page.locator('.sh-audio input[value="application"]')).toBeDisabled();
-    await page.getByLabel("Region", { exact: true }).check();
+    await area.click();
+    await expect(dialog.getByRole("button", { name: "Area: drag on preview", exact: true })).toHaveAttribute("aria-pressed", "true");
     await expect(page.locator(".sh-audio input:checked")).toHaveValue("none");
     await expect(page.locator('.sh-audio input[value="application"]')).toBeDisabled();
-    await page.getByLabel("Window", { exact: true }).check();
+    await editor.check();
     await expect(page.locator(".sh-audio input:checked")).toHaveValue("application");
+    await expect(area).toHaveAttribute("aria-pressed", "false");
+});
+
+test("a Region starts only once the picked screen's still is shown, and is sent cropped", async ({ page }, testInfo) => {
+    await installNative(page);
+    await page.evaluate(() => {
+        const still = document.createElement("canvas");
+        still.width = 1920; still.height = 1080;
+        const g = still.getContext("2d");
+        g.fillStyle = "#1d2023"; g.fillRect(0, 0, 1920, 1080);
+        g.fillStyle = "#161a1d"; g.fillRect(0, 100, 340, 980);
+        g.fillStyle = "#272a2e"; g.fillRect(460, 260, 1300, 700);
+        window.__media.still = still.toDataURL("image/jpeg");
+        let release;
+        window.__media.releaseStill = new Promise(resolve => { release = resolve; });
+        window.__media.allowStill = release;
+        const thumbs = { "m:0": window.__media.still, "w:77": window.__media.still };
+        Object.assign(window.go.main.App, {
+            NativeScreenPreview: async () => { await window.__media.releaseStill; return window.__media.still; },
+            NativeScreenThumbnails: async values => Object.fromEntries(values.filter(v => thumbs[v]).map(v => [v, thumbs[v]])),
+            NativeScreenShareStatusForTab: async () => ({ available: true, call_available: true, foreground: "88",
+                monitors: [{ index: 0, width: 1920, height: 1080, primary: true }, { index: 1, width: 2560, height: 1440 }],
+                windows: [{ handle: "77", title: "Editor", exe: "editor.exe" }, { handle: "88", title: "Starfall Arena", exe: "starfall.exe", fullscreen: true }] }),
+        });
+    });
+    await page.locator("#voice-screen").click();
+    const dialog = page.getByRole("dialog", { name: "Share screen" });
+    await expect(dialog.getByRole("group", { name: "Screens" }).getByRole("radio")).toHaveCount(2);
+    // A running game comes first among the windows.
+    await expect(dialog.getByRole("group", { name: "Windows" }).getByRole("radio").first()).toHaveAccessibleName(/^Starfall Arena Game · running/);
+    await expect(dialog.getByRole("radio", { name: "Screen 1 1920 × 1080 · Primary" })).toBeChecked();
+    await expect(dialog.locator(".sp-source-label")).toHaveText("Screen 1");
+    const start = dialog.getByRole("button", { name: "Start sharing", exact: true });
+    await expect(start).toBeEnabled();
+    await dialog.getByRole("button", { name: "Area", exact: true }).click();
+    // The area belongs to the still shown, never to one still loading.
+    await expect(start).toBeDisabled();
+    await page.evaluate(() => window.__media.allowStill());
+    await expect(dialog.getByRole("group", { name: "Shared area" })).toBeVisible();
+    await expect(start).toBeEnabled();
+    await page.addStyleTag({ url: "/src/style.css" });
+    await page.screenshot({ path: testInfo.outputPath("share-picker-split.png") });
+    // Narrow windows stack the list above the preview without sideways scrolling.
+    await page.setViewportSize({ width: 400, height: 720 });
+    expect(await dialog.locator(".share-picker").evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("share-picker-split-narrow.png") });
+    await start.click();
+    await expect.poll(() => page.evaluate(() => window.__media.nativeStarts.length)).toBe(1);
+    const [, request] = await page.evaluate(() => window.__media.nativeStarts[0]);
+    expect(request.source).toMatchObject({ monitor: 0, window: "0", region: { x: 0.2, y: 0.2, width: 0.6, height: 0.6 } });
 });
 
 test("slot declarations preserve negotiated MSID after replacing a real browser sender", async ({ page }) => {
@@ -539,7 +597,7 @@ async function installNative(page, status = { available: true }) {
 async function startNative(page) {
     await page.locator("#voice-screen").click();
     const dialog = page.getByRole("dialog", { name: "Share screen" });
-    await expect(dialog.locator(".sp-native-tile")).toHaveCount(1);
+    await expect(dialog.locator(".sp-native-tile")).toHaveCount(2);
     await dialog.getByRole("button", { name: "Start sharing", exact: true }).click();
     await expect(page.locator("#voice-screen")).toHaveAttribute("aria-pressed", "true");
     return page.evaluate(() => window.__media.nativeStarts.at(-1));

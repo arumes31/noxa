@@ -85,7 +85,8 @@ export function nativeTile(o, name, onChange) {
     title.className = "sp-native-title";
     const detail = document.createElement("span");
     detail.className = "sp-native-detail";
-    tile.append(input, img, title, detail);
+    // The space keeps title and detail apart in the radio's accessible name.
+    tile.append(input, img, title, " ", detail);
     return tile;
 }
 
