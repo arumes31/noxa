@@ -1398,13 +1398,6 @@ analysis, and a backup/restore drill. Passing a local subset does not replace
 these gates. [`.github/workflows/ci.yml`](.github/workflows/ci.yml) contains the
 exact commands and live protocol fixtures. Website checks are separate in [`website/README.md`](website/README.md).
 
-The browser/SFU test checks independent single-encoding shares, upload suspension
-without viewers, resumption and sender-controlled quality changes using synthetic
-canvas capture. CI runs
-the 720p30 profile. On an idle development machine, set
-`NOXA_BROWSER_MEDIA_PERF=1` to include the more demanding 1080p60 profile; its
-observed frame rate still depends on software-encoder and host capacity.
-
 ### Performance measurements (2026-11-07)
 
 These measurements decided three proposals; none of them changed code. Rerun them before revisiting the decisions.

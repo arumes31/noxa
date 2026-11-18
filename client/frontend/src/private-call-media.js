@@ -217,6 +217,8 @@ export function createCallMedia(owner, { current, acceptedPeer, label, report, r
             return false;
         }
         captures.screen = capture; requests.screen = null; nativeTargets = targets.join(" ");
+        // A participant who joined while Start was pending gets its sub-connection now.
+        syncNativeTargets();
         if (capture.audio) nativeAudioNotice(capture.audio);
         await syncPeers().catch(report);
         if (captures.screen === capture) { updateGrid(); render(owner); }

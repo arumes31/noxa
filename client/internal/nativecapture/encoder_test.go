@@ -63,6 +63,7 @@ func TestMultiSliceReopenDecision(t *testing.T) {
 		t.Fatalf("slice counts %d %d", sliceCount(one), sliceCount(two))
 	}
 	hw := encoderInfo{name: "test multi-slice hw", hardware: true}
+	t.Cleanup(func() { multiSliceEncoders.Delete(hw.name) })
 	if multiSliceRejected(hw) {
 		t.Fatal("rejected before any output")
 	}

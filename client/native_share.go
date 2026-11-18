@@ -211,6 +211,7 @@ type nativeShare struct {
 	level      nativesender.Level
 	generation uint64
 	upload     bool
+	uploadRev  uint64 // counts upload transitions: a pause and resume in one generation still changes it
 	running    bool
 	// Studio: the scene on air (re-applied after a restart); the audio plan.
 	scene       nativecapture.Scene
@@ -446,6 +447,9 @@ func (n *nativeShare) applyUpdate(update NativeShareUpdate) error {
 	}
 	n.generation = update.Generation
 	resume := update.UploadActive && !n.upload
+	if update.UploadActive != n.upload {
+		n.uploadRev++
+	}
 	n.upload = update.UploadActive
 	// Under n.mu (atomic stores): overlapping bridge calls reach the session
 	// in the order they adopted their state.
@@ -955,6 +959,7 @@ type nativeObserved struct {
 	session    *nativecapture.Session
 	sender     *nativesender.Sender
 	upload     bool
+	uploadRev  uint64
 	generation uint64
 }
 
@@ -968,9 +973,9 @@ func nativeStallIdle(upload bool, generation uint64, minimized, keyActive bool) 
 // observe takes one stats snapshot and advances the stall watchdog.
 func (n *nativeShare) observe(w *nativeStallWatch, session *nativecapture.Session, cs nativecapture.Stats, elapsed time.Duration, now time.Time) (nativeShareSnapshot, nativeObserved, string) {
 	n.mu.Lock()
-	sender, upload, generation := n.sender, n.upload, n.generation
+	sender, upload, uploadRev, generation := n.sender, n.upload, n.uploadRev, n.generation
 	n.mu.Unlock()
-	seen := nativeObserved{session: session, sender: sender, upload: upload, generation: generation}
+	seen := nativeObserved{session: session, sender: sender, upload: upload, uploadRev: uploadRev, generation: generation}
 	snap := nativeShareSnapshot{elapsed: elapsed, peer: "none", upload: upload, generation: generation, cs: cs, encoder: session.Info(),
 		unsent: n.frames.unsent.Load(), rejected: n.frames.rejected.Load(), dropped: n.frames.dropped.Load(), noKey: n.frames.noKey.Load()}
 	n.frames.mu.Lock()
@@ -1029,7 +1034,7 @@ func (n *nativeShare) fail(reason string) {
 // released n.mu in between); a stale decision is discarded.
 func (n *nativeShare) failIfCurrent(seen nativeObserved, reason string) bool {
 	n.mu.Lock()
-	current := n.session == seen.session && n.sender == seen.sender && n.upload == seen.upload && n.generation == seen.generation &&
+	current := n.session == seen.session && n.sender == seen.sender && n.upload == seen.upload && n.uploadRev == seen.uploadRev && n.generation == seen.generation &&
 		n.failed.CompareAndSwap(false, true)
 	n.mu.Unlock()
 	if current {

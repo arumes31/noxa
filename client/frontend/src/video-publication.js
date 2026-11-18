@@ -353,6 +353,7 @@ export function createVideoPublication({ policy }) {
     let studioShare = null;
     // A native share has no source to resume after a reconnect: it ends with the connection.
     function endShareForReconnect() {
+        if (nativePending) nativePending.ended = true; // a Start still in flight is discarded too
         if (V().state.nativeShare) void doStopShare();
     }
     // The settings of the running share for the post-update resume prompt, or null.
@@ -543,7 +544,8 @@ export function createVideoPublication({ policy }) {
         const nativeOption = () => nativeOptions.find(o => o.value === nativeValue) || null;
         nativeChoice = () => {
             if (!nativeUsable() || !nativeValue) return null;
-            if (view.surface() === "region") return nativeRegionSource(nativeValue, view.region());
+            // The drawn area belongs to the monitor whose still is shown, never to one still loading.
+            if (view.surface() === "region") return preview?.shown && preview.value === nativeValue ? nativeRegionSource(nativeValue, view.region()) : null;
             return nativeSource(view.surface(), nativeValue);
         };
         $(".sp-notes").appendChild(nativeBox);
