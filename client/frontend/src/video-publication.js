@@ -493,6 +493,8 @@ export function createVideoPublication({ policy }) {
                 const kind = nativeValue ? (nativeValue.startsWith("w:") ? "window" : "monitor") : initialKind;
                 nativeValue = (options[kind].find(o => o.selected) || options[kind === "window" ? "monitor" : "window"].find(o => o.selected))?.value || "";
                 if (nativeValue.startsWith("w:")) view.setArea(false);
+                // The old source is gone: never show its picture over the new pick.
+                if (preview) { dropNativePreview(); view.clearPreview(); }
             }
             fillList(lists.monitor, options.monitor);
             fillList(lists.window, options.window);
