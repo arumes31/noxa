@@ -113,3 +113,48 @@ func TestCallParticipantVisibleAcrossOwnSessions(t *testing.T) {
 		}
 	}
 }
+
+func TestPrivateCallSubConnectionDescriptionsAreValidated(t *testing.T) {
+	senderPub, senderPriv, err := box.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipientPub, recipientPriv, err := box.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	open := func(d PrivateCallDescription) (PrivateCallDescription, error) {
+		d.CallID, d.From, d.To = "call", "alice", "bob"
+		plain, err := json.Marshal(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := sealDM(string(plain), *recipientPub, *senderPriv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return openPrivateCallDescription(netproto.CallSignal{CallID: "call", From: "alice", To: "bob", Body: body}, "bob", *senderPub, *recipientPriv)
+	}
+	sdp := "v=0\r\na=fingerprint:sha-256 01:02\r\n"
+	got, err := open(PrivateCallDescription{Type: "answer", SDP: sdp, Features: callFeatures})
+	if err != nil || len(got.Features) != 1 || got.Features[0] != callFeatureScreenSub || got.Sub != "" {
+		t.Fatalf("main answer: %+v %v", got, err)
+	}
+	if got, err := open(PrivateCallDescription{Type: "offer", SDP: sdp, Sub: callSubScreen}); err != nil || got.Sub != callSubScreen {
+		t.Fatalf("screen offer: %+v %v", got, err)
+	}
+	for _, bad := range []PrivateCallDescription{
+		{Type: "offer", SDP: sdp, Sub: callSubScreenReply},
+		{Type: "answer", SDP: sdp, Sub: callSubScreen},
+		{Type: "offer", SDP: sdp, Sub: "camera"},
+		{Type: "offer", SDP: sdp, Sub: callSubScreen, Features: callFeatures},
+	} {
+		if _, err := open(bad); err == nil {
+			t.Fatalf("accepted %+v", bad)
+		}
+	}
+	// An older app's description (no sub, no features) is the main connection.
+	if got, err := open(PrivateCallDescription{Type: "offer", SDP: sdp}); err != nil || got.Sub != "" || len(got.Features) != 0 {
+		t.Fatalf("older offer: %+v %v", got, err)
+	}
+}

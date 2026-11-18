@@ -105,16 +105,20 @@ func (a *App) StartNativeCallShareForTab(tabID string, req NativeCallShareReques
 	if req.Source.Studio || req.Studio != nil {
 		return errors.New("a Studio cannot be shared into a private call")
 	}
-	_ = cm.refreshRelay(conn) // keep the cached relay during a transient renewal failure
-	ice, err := callRelayServers(cm.iceServersSnapshot())
-	if err != nil {
+	// Every connection attempt reads the current relay lease: reconnects and
+	// joiners of a long share must not use expired TURN credentials.
+	servers := func() ([]webrtc.ICEServer, error) {
+		_ = cm.refreshRelay(conn) // keep the cached relay during a transient renewal failure
+		return callRelayServers(cm.iceServersSnapshot())
+	}
+	if _, err := servers(); err != nil {
 		return err
 	}
 	n := &nativeShare{cm: cm, keys: cm.callKeys(req.CallID, "screen"), audioKeys: cm.callKeys(req.CallID, "screenaudio"),
 		req: req.NativeShareRequest, stop: make(chan struct{}), audioMode: req.Audio, audioWindow: req.Source.Window,
 		// No publication: a call viewer gets frames as soon as it connects.
 		upload: true, generation: 1}
-	n.call = &nativeCall{share: n, callID: req.CallID, ice: ice, policy: webrtc.ICETransportPolicyRelay, peers: map[string]*nativeCallPeer{}}
+	n.call = &nativeCall{share: n, callID: req.CallID, servers: servers, policy: webrtc.ICETransportPolicyRelay, peers: map[string]*nativeCallPeer{}}
 	if err := n.call.setTargets(req.Targets); err != nil {
 		return err
 	}
@@ -148,10 +152,10 @@ func (a *App) UpdateNativeCallShareTargetsForTab(tabID, id string, targets []str
 // nativeCall is the fan-out of one native call share: one publish-only
 // sender per viewer, all fed by the same encoder.
 type nativeCall struct {
-	share  *nativeShare
-	callID string
-	ice    []webrtc.ICEServer
-	policy webrtc.ICETransportPolicy
+	share   *nativeShare
+	callID  string
+	servers func() ([]webrtc.ICEServer, error)
+	policy  webrtc.ICETransportPolicy
 	// Tests only: loopback candidates and an in-process viewer.
 	settings *webrtc.SettingEngine
 	sendTo   func(uid string, d PrivateCallDescription) error
@@ -280,6 +284,11 @@ func (c *nativeCall) connect(p *nativeCallPeer) error {
 	}
 	p.link = link
 	c.mu.Unlock()
+	ice, err := c.servers()
+	if err != nil {
+		c.lost(p, link)
+		return err
+	}
 	n := c.share
 	n.mu.Lock()
 	initial, maxBitrate := n.level.Bitrate, n.ladder.Top.Bitrate
@@ -288,7 +297,7 @@ func (c *nativeCall) connect(p *nativeCallPeer) error {
 		audioKeys = n.audioKeys
 	}
 	n.mu.Unlock()
-	sender, err := nativesender.New(nativesender.Config{ICEServers: c.ice, ICETransportPolicy: c.policy, SettingEngine: c.settings,
+	sender, err := nativesender.New(nativesender.Config{ICEServers: ice, ICETransportPolicy: c.policy, SettingEngine: c.settings,
 		Signaling: link, Keys: n.keys, AudioKeys: audioKeys, InitialBitrate: initial, MaxBitrate: maxBitrate,
 		OnKeyframeRequest: n.requestKeyframe, OnEstimate: func(bps int) { c.estimate(p, bps) }})
 	if err != nil {

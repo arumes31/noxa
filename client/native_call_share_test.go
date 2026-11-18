@@ -101,6 +101,7 @@ func testAU(key bool, payload []byte) []byte {
 // its answer and candidates come back as sealed-description replies.
 type callViewer struct {
 	t      *testing.T
+	uid    string
 	call   *nativeCall
 	mu     sync.Mutex
 	recv   []*sendertest.Receiver
@@ -109,7 +110,7 @@ type callViewer struct {
 }
 
 func (v *callViewer) send(uid string, d PrivateCallDescription) error {
-	if uid != "viewer" || d.Sub != callSubScreen || !validCallDescriptionShape(d) || !validPrivateCallPayload(d.Type, d.SDP) {
+	if uid != v.uid || d.Sub != callSubScreen || !validCallDescriptionShape(d) || !validPrivateCallPayload(d.Type, d.SDP) {
 		v.t.Errorf("invalid sub-connection signal to %s: %+v", uid, d)
 		return errors.New("invalid")
 	}
@@ -127,7 +128,7 @@ func (v *callViewer) send(uid string, d PrivateCallDescription) error {
 		v.mu.Lock()
 		v.recv = append(v.recv, r)
 		v.mu.Unlock()
-		v.call.reply(PrivateCallDescription{CallID: testCallID, From: "viewer", Type: "answer", SDP: answer.SDP, Sub: callSubScreenReply})
+		v.call.reply(PrivateCallDescription{CallID: testCallID, From: v.uid, Type: "answer", SDP: answer.SDP, Sub: callSubScreenReply})
 		v.offers <- struct{}{}
 	case "candidates":
 		var list []callCandidate
@@ -156,7 +157,7 @@ type viewerCandidates struct{ v *callViewer }
 func (c viewerCandidates) AddCandidate(candidate netproto.ICECandidate) error {
 	mid, index := candidate.SDPMid, candidate.SDPMLineIndex
 	payload, _ := json.Marshal([]callCandidate{{Candidate: candidate.Candidate, SDPMid: &mid, SDPMLineIndex: &index}})
-	c.v.call.reply(PrivateCallDescription{CallID: testCallID, From: "viewer", Type: "candidates", SDP: string(payload), Sub: callSubScreenReply})
+	c.v.call.reply(PrivateCallDescription{CallID: testCallID, From: c.v.uid, Type: "candidates", SDP: string(payload), Sub: callSubScreenReply})
 	return nil
 }
 
@@ -167,19 +168,29 @@ func testCallShare(t *testing.T) (*nativeShare, *callViewer) {
 	top := nativesender.Level{MaxWidth: 1280, MaxHeight: 720, FPS: 30, Bitrate: 2_000_000}
 	n.ladder = nativesender.NewLadder(top, top.Bitrate)
 	n.level = n.ladder.Current()
-	n.call = &nativeCall{share: n, callID: testCallID, peers: map[string]*nativeCallPeer{}, settings: sendertest.LoopbackSettings()}
-	viewer := &callViewer{t: t, call: n.call, offers: make(chan struct{}, 4)}
+	n.call = &nativeCall{share: n, callID: testCallID, peers: map[string]*nativeCallPeer{}, settings: sendertest.LoopbackSettings(),
+		servers: func() ([]webrtc.ICEServer, error) { return nil, nil }}
+	viewer := &callViewer{t: t, uid: "viewer", call: n.call, offers: make(chan struct{}, 4)}
 	n.call.sendTo = viewer.send
 	cm.nativeShare = n
 	t.Cleanup(n.close)
 	return n, viewer
 }
 
-func waitConnected(t *testing.T, c *nativeCall) {
+func waitConnected(t *testing.T, c *nativeCall) { waitConnectedN(t, c, 1) }
+
+func waitConnectedN(t *testing.T, c *nativeCall, want int) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if s := c.senders(); len(s) == 1 && s[0].ConnectionState() == webrtc.PeerConnectionStateConnected {
+		s := c.senders()
+		connected := 0
+		for _, sender := range s {
+			if sender.ConnectionState() == webrtc.PeerConnectionStateConnected {
+				connected++
+			}
+		}
+		if len(s) == want && connected == want {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -301,5 +312,58 @@ func TestNativeCallShareTargetsAndReplies(t *testing.T) {
 	n.cm.routeCallScreenReply(PrivateCallDescription{CallID: testCallID, From: "viewer", Type: "answer", SDP: "answer-sdp", Sub: callSubScreenReply})
 	if got := <-link.answers; got != "answer-sdp" {
 		t.Fatalf("answer %q", got)
+	}
+}
+
+// One encoder feeds every viewer of a group call: each decrypts the same frames.
+func TestNativeCallShareFansOutToEveryViewer(t *testing.T) {
+	n, _ := testCallShare(t)
+	viewers := map[string]*callViewer{}
+	for _, uid := range []string{"v1", "v2"} {
+		viewers[uid] = &callViewer{t: t, uid: uid, call: n.call, offers: make(chan struct{}, 4)}
+	}
+	n.call.sendTo = func(uid string, d PrivateCallDescription) error { return viewers[uid].send(uid, d) }
+	material := make([]byte, 32)
+	_, _ = rand.Read(material)
+	if err := n.keys.SetKey(9, 1, material); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.keys.Activate(9); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.call.setTargets([]string{"v1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.call.open(); err != nil {
+		t.Fatal(err)
+	}
+	// v2 joins the running share.
+	if err := n.call.setTargets([]string{"v1", "v2"}); err != nil {
+		t.Fatal(err)
+	}
+	waitConnectedN(t, n.call, 2)
+	start := time.Now()
+	var want [][]byte
+	for i := range 8 {
+		key := i%4 == 0
+		payload := make([]byte, 300+i*500)
+		_, _ = rand.Read(payload)
+		au := testAU(key, payload)
+		canonical, _, _ := framecrypt.CanonicalH264(au, nil, nil)
+		want = append(want, canonical)
+		n.onFrame(nativecapture.Frame{Data: au, Keyframe: key, Captured: start.Add(time.Duration(i) * 16 * time.Millisecond)})
+	}
+	for uid, v := range viewers {
+		r := v.current()
+		for i := range want {
+			select {
+			case frame := <-r.Frames:
+				if got := sendertest.Decrypt(t, material, frame); !bytes.Equal(got, want[i]) {
+					t.Fatalf("%s frame %d differs after decrypt", uid, i)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("%s frame %d not received", uid, i)
+			}
+		}
 	}
 }

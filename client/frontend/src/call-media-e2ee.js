@@ -130,7 +130,8 @@ export class ScreenSubReceiver {
 
     async #offer(sdp) {
         this.close();
-        const pc = this.e2ee.protectPeer(this.createPeer(this.e2ee.peerConfig(this.config())));
+        const config = await this.config(); // may fetch the current relay lease
+        const pc = this.e2ee.protectPeer(this.createPeer(this.e2ee.peerConfig(config)));
         Object.assign(this, { pc, remote: [], remoteCount: 0, local: [], localCount: 0, sent: false });
         pc.onicecandidate = event => {
             if (this.pc !== pc || !event.candidate?.candidate || ++this.localCount > 64) return;

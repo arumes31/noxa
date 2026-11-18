@@ -643,7 +643,8 @@ function receiveAudio(owner, peer, track, share) {
 // sub-connection). Its failure only ends that share's picture here.
 function screenSub(owner, uid, peer) {
     peer.screenSub ||= new ScreenSubReceiver({
-        e2ee: owner.e2ee, config: () => privateCallRTCConfiguration(owner.ice), peerClientID: () => peerClientID(owner, uid),
+        // The current relay lease: a share can start long after the call did.
+        e2ee: owner.e2ee, config: async () => privateCallRTCConfiguration(owner.ice = await app().GetICEServersForTab(owner.tabID)), peerClientID: () => peerClientID(owner, uid),
         send: (kind, payload) => sendSignal(owner, uid, kind, payload, true),
         onTrack: track => {
             if (!acceptedPeer(owner, uid) || owner.peers.get(uid) !== peer) return;
