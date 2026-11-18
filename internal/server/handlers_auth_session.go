@@ -249,7 +249,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		Nickname:           id.nickname,
 		Guest:              id.guest,
 		TLSFingerprint:     s.tlsFingerprint,
-		Capabilities:       []string{netproto.CapabilityLobbyPrivacy, netproto.CapabilityLinkPreview, netproto.CapabilityAudioState, netproto.CapabilityVoiceTelemetry, netproto.CapabilityStreamVideoQuality, netproto.CapabilityStreamDiagnostics, netproto.CapabilityStreamSourceQuality, netproto.CapabilityStreamCodec, netproto.CapabilityStreamHEVC, netproto.CapabilityStreamCodecRefresh, netproto.CapabilityStreamReceiverRecovery, netproto.CapabilityConversationActivity, netproto.CapabilityHandover},
+		Capabilities:       []string{netproto.CapabilityLobbyPrivacy, netproto.CapabilityLinkPreview, netproto.CapabilityAudioState, netproto.CapabilityVoiceTelemetry, netproto.CapabilityStreamVideoQuality, netproto.CapabilityStreamDiagnostics, netproto.CapabilityStreamSourceQuality, netproto.CapabilityStreamCodec, netproto.CapabilityStreamHEVC, netproto.CapabilityStreamCodecRefresh, netproto.CapabilityStreamReceiverRecovery, netproto.CapabilityConversationActivity, netproto.CapabilityHandover, netproto.CapabilityFastHeartbeat},
 	}
 	s.announceClientVersions(&resp)
 	if keptToken != "" {

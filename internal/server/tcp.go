@@ -136,6 +136,9 @@ type Client struct {
 	announcesResume  bool                                        // client presents resume tokens, protected by mu
 	handover         *handoverStandby                            // update handover login state, protected by mu
 	announcesGoodbye bool                                        // client sends MsgGoodbye before a deliberate close, protected by mu
+	announcesFastHB  bool                                        // client pings every netproto.FastHeartbeatInterval, protected by mu
+	fastHeartbeat    atomic.Bool                                 // armed by its first ping after login: silence means lost in seconds
+	readWaitSince    atomic.Int64                                // monoEpoch offset (ns) the read loop last got bytes; 0 while it dispatches
 	inputAt          time.Time                                   // last input a desktop reported (activity)
 	webHidden        bool                                        // the web app reported it is in the background
 	passkey          *passkeyCeremony
@@ -1032,6 +1035,8 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 		gone:       make(chan struct{}),
 	}
 	client.webTransport.Store(web)
+	client.noteReadWait()
+	reader := activityReader{conn: conn, client: client}
 	var closeReason netproto.ControlCloseReason
 	defer func() {
 		reason := closeReason
@@ -1071,7 +1076,7 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 	)
 
 	// Server-initiated keepalive: Ping every 15s; matching Pongs feed the
-	// smoothed RTT reported in Client Info.
+	// smoothed RTT reported in Client Info. It also closes silent clients.
 	pingStop := make(chan struct{})
 	pingDone := make(chan struct{})
 	defer func() {
@@ -1104,7 +1109,7 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 		// The body buffer is pooled and released once dispatch returns:
 		// handlers decode payloads synchronously (encoding/json copies) and
 		// keep no reference to the frame (#3).
-		frame, err := netproto.ReadFrameLimitPooled(conn, limit)
+		frame, err := netproto.ReadFrameLimitPooled(reader, limit)
 		if err != nil {
 			closeReason = netproto.ControlReadCloseReason(err)
 			if closeReason == netproto.ControlCloseReadTimeout && !authDeadline.IsZero() {
@@ -1145,7 +1150,10 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 		if !authDeadline.IsZero() {
 			requestCtx = authCtx
 		}
+		// A slow handler stops this loop from reading; that is not silence.
+		client.readWaitSince.Store(0)
 		err = s.dispatch(requestCtx, client, frame)
+		client.noteReadWait()
 		msgType := frame.Type
 		frame.Release()
 		if err != nil {
@@ -1506,18 +1514,76 @@ func (s *TCPServer) servePingLoop(client *Client, stop <-chan struct{}, done cha
 	s.pingLoop(client, stop)
 }
 
+// Server ping cadence, and how often a fast-heartbeat client's silence is checked.
+const (
+	serverPingInterval = 15 * time.Second
+	fastHeartbeatCheck = time.Second
+)
+
+// monoEpoch anchors readWaitSince on the monotonic clock, so a wall-clock
+// step cannot make every fast-heartbeat client look silent.
+var monoEpoch = time.Now()
+
+// noteReadWait records that the read loop received bytes or is waiting again.
+func (c *Client) noteReadWait() {
+	c.readWaitSince.Store(int64(time.Since(monoEpoch)) + 1) // never 0, which means dispatching
+}
+
+// activityReader stamps readWaitSince whenever bytes arrive, so a large frame
+// trickling in over a slow link still counts as a live connection.
+type activityReader struct {
+	conn   net.Conn
+	client *Client
+}
+
+func (r activityReader) Read(p []byte) (int, error) {
+	n, err := r.conn.Read(p)
+	if n > 0 {
+		r.client.noteReadWait()
+	}
+	return n, err
+}
+
+// fastHeartbeatLost reports a fast-heartbeat client whose read loop has been
+// waiting without a byte for longer than netproto.FastHeartbeatTimeout.
+func (c *Client) fastHeartbeatLost(now time.Time) (time.Duration, bool) {
+	since := c.readWaitSince.Load()
+	if !c.fastHeartbeat.Load() || since == 0 || c.inHandoverStandby() {
+		return 0, false
+	}
+	idle := now.Sub(monoEpoch) - time.Duration(since)
+	return idle, idle > netproto.FastHeartbeatTimeout
+}
+
 // pingLoop sends a server-initiated Ping every 15s until stopped; matching
-// Pongs feed the client's smoothed RTT.
+// Pongs feed the client's smoothed RTT. A client on the fast heartbeat is
+// closed as soon as it falls silent (fastHeartbeatLost); others only after
+// client_timeout_seconds without a frame.
 func (s *TCPServer) pingLoop(client *Client, stop <-chan struct{}) {
-	ticker := time.NewTicker(15 * time.Second)
+	ticker := time.NewTicker(fastHeartbeatCheck)
 	defer ticker.Stop()
+	lastPing := time.Now()
 	for {
 		select {
 		case <-stop:
 			return
 		case <-s.stopCh:
 			return
-		case <-ticker.C:
+		case now := <-ticker.C:
+			if idle, lost := client.fastHeartbeatLost(now); lost {
+				client.markCloseCause(netproto.ControlCloseServerInactivity)
+				s.logger.Info("control connection closed",
+					zap.String("reason", string(netproto.ControlCloseServerInactivity)),
+					zap.Int64("idle_ms", idle.Milliseconds()),
+					zap.Bool("fast_heartbeat", true),
+				)
+				_ = client.Conn.Close()
+				return
+			}
+			if now.Sub(lastPing) < serverPingInterval {
+				continue
+			}
+			lastPing = now
 			s.configMu.RLock()
 			timeout := s.cfg.ClientTimeoutSeconds
 			s.configMu.RUnlock()

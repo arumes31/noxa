@@ -69,7 +69,7 @@ redis_tls_server_name: ""      # optional; defaults to the host in redis_addr wh
 redis_tls_ca_file: ""          # optional PEM CA bundle; uses system roots when empty
 
 max_clients: 1024
-client_timeout_seconds: 90
+client_timeout_seconds: 90    # desktop clients with the fast heartbeat are dropped after 5 s of silence instead
 default_opus_bitrate: 32000
 video_max_bitrate: 0          # per-publisher relayed video RTP bits/s, all slots/layers; 1s burst; 0 = unlimited
 video_max_width: 0            # both dimensions 0 = unlimited; enabling requires VP8 video
