@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -111,6 +112,39 @@ func TestHandlePingArmsFastHeartbeat(t *testing.T) {
 				t.Fatalf("armed = %v, want %v", got, tc.armed)
 			}
 		})
+	}
+}
+
+// End to end: a desktop that announced the feature and pinged once is dropped
+// within the window after it falls silent, as a lost connection; an old
+// client with the same silence stays.
+func TestFastHeartbeatDropsSilentDesktopEndToEnd(t *testing.T) {
+	env := startTestEnv(t, nil)
+	defer env.stop()
+	login := func(features ...string) (net.Conn, string) {
+		conn := dialRetry(t, env.addr)
+		t.Cleanup(func() { _ = conn.Close() })
+		send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw", ClientFeatures: features})
+		var resp netproto.AuthResponse
+		if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthResponse), &resp); err != nil || !resp.OK {
+			t.Fatalf("login: %v %+v", err, resp)
+		}
+		if !slices.Contains(resp.Capabilities, netproto.CapabilityFastHeartbeat) {
+			t.Fatalf("capabilities %v lack %s", resp.Capabilities, netproto.CapabilityFastHeartbeat)
+		}
+		send(t, conn, netproto.MsgPing, netproto.Ping{})
+		readOfType(t, conn, netproto.MsgPong)
+		return conn, resp.ClientID
+	}
+	_, legacyID := login(netproto.ClientFeatureGoodbye)
+	_, fastID := login(netproto.ClientFeatureGoodbye, netproto.ClientFeatureFastHeartbeat)
+	silentAt := time.Now()
+	waitFor(t, "silent fast-heartbeat client dropped", func() bool { _, ok := env.state.GetClient(fastID); return !ok })
+	if took := time.Since(silentAt); took < netproto.FastHeartbeatTimeout-time.Second || took > netproto.FastHeartbeatTimeout+fastHeartbeatCheck+time.Second {
+		t.Fatalf("dropped after %s, want %s plus one check tick", took, netproto.FastHeartbeatTimeout)
+	}
+	if _, ok := env.state.GetClient(legacyID); !ok {
+		t.Fatal("an old client was dropped by the fast heartbeat window")
 	}
 }
 
