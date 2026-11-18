@@ -530,4 +530,3 @@ func TestMultiSliceEncoderIsReplacedMidStream(t *testing.T) {
 		t.Fatalf("no mid-stream swap: hardware=%v software frames=%d rejected=%v after %v", info.Hardware, software, rejected, swapped.Sub(start))
 	}
 }
-
