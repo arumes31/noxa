@@ -42,7 +42,7 @@ type displayCapturePower struct {
 	epoch      uint64
 	powerEpoch uint64
 	powerSeen  bool
-	// boost follows whether any capture lease is live (Browser-mode priority).
+	// boost follows whether any capture lease is live (native capture priority).
 	boost func(on bool)
 }
 
@@ -63,7 +63,7 @@ func (p *displayCapturePower) initLocked() {
 		p.leases = make(map[string]time.Time)
 	}
 	if p.boost == nil {
-		p.boost = func(on bool) { screenCaptureBoost.set("browser", on) }
+		p.boost = func(on bool) { screenCaptureBoost.set("capture", on) }
 	}
 }
 

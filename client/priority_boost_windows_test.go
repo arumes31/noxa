@@ -24,7 +24,7 @@ func currentPriorities(t *testing.T) (uint32, int32) {
 	return cpu, gpu
 }
 
-// The boost reaches this process (and its WebView2 tree) and is restored.
+// The boost reaches this process and is restored.
 func TestCaptureBoostRaisesAndRestoresThisProcess(t *testing.T) {
 	cpu, gpu := currentPriorities(t)
 	if err := applyCaptureBoost(true); err != nil {

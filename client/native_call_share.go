@@ -338,7 +338,7 @@ func (c *nativeCall) connect(p *nativeCallPeer) error {
 
 // lost reconnects a viewer whose connection failed (its webview closed the
 // sub-connection, a relay failure); nativeReconnectLimit consecutive
-// failures fall back to Browser capture.
+// failures end the share.
 func (c *nativeCall) lost(p *nativeCallPeer, link *nativeCallLink) {
 	c.mu.Lock()
 	if c.closed || p.closed || p.link != link {
@@ -355,7 +355,7 @@ func (c *nativeCall) lost(p *nativeCallPeer, link *nativeCallLink) {
 			_ = sender.Close()
 		}
 		if attempt > nativeReconnectLimit {
-			c.share.fallback("peer")
+			c.share.fail("peer")
 			return
 		}
 		select {

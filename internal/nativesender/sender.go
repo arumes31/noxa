@@ -114,7 +114,7 @@ type Sender struct {
 	sentAny     bool
 	sps, pps    []byte
 	seqHeader   []byte
-	keyGap      bool // frames were dropped for lack of a key: resume on a keyframe
+	keyGap      bool // no decodable reference yet (start, missing key): resume on a keyframe
 	stats       Stats
 	estimator   cc.BandwidthEstimator
 	statsGetter stats.Getter
@@ -155,7 +155,8 @@ func New(cfg Config) (*Sender, error) {
 		return nil, err
 	}
 	registry := &interceptor.Registry{}
-	s := &Sender{cfg: cfg, start: time.Now(), estimatorCh: make(chan cc.BandwidthEstimator, 1)}
+	// keyGap: nothing goes out before the first keyframe, so viewers never wait on P-frames.
+	s := &Sender{cfg: cfg, start: time.Now(), keyGap: true, estimatorCh: make(chan cc.BandwidthEstimator, 1)}
 	congestion, err := cc.NewInterceptor(func() (cc.BandwidthEstimator, error) {
 		return gcc.NewSendSideBWE(gcc.SendSideBWEInitialBitrate(cfg.InitialBitrate),
 			gcc.SendSideBWEMinBitrate(minBitrate), gcc.SendSideBWEMaxBitrate(cfg.MaxBitrate))
@@ -356,9 +357,7 @@ func (s *Sender) WriteFrame(au []byte, keyframe bool, seqHeader []byte, captured
 	encrypted, err := s.cfg.Keys.EncryptH264(canonical, s.ssrc, ts)
 	if err != nil {
 		s.stats.FramesDropped++
-		if !s.keyGap {
-			s.keyGap = true
-		}
+		s.keyGap = true
 		return errors.Join(ErrDropped, err)
 	}
 	s.keyGap = false

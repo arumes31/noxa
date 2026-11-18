@@ -18,7 +18,7 @@ import (
 	"noxa/internal/netproto"
 )
 
-func TestNativeShareFallbackDecisions(t *testing.T) {
+func TestNativeShareFailureDecisions(t *testing.T) {
 	if got := nativeShareDecision(nativecapture.ErrSourceClosed, 0); got != "ended" {
 		t.Fatalf("closed window: %s", got)
 	}
@@ -26,12 +26,12 @@ func TestNativeShareFallbackDecisions(t *testing.T) {
 	if got := nativeShareDecision(failure, 0); got != "restart" {
 		t.Fatalf("first failure: %s", got)
 	}
-	if got := nativeShareDecision(failure, 1); got != "fallback" {
+	if got := nativeShareDecision(failure, 1); got != "failed" {
 		t.Fatalf("second failure: %s", got)
 	}
 	for codec, want := range map[string]bool{"": false, "h264": false, "vp8": true, "h265": true} {
-		if nativeShareCodecFallback(codec) != want {
-			t.Fatalf("codec %q fallback != %v", codec, want)
+		if nativeShareCodecUnsupported(codec) != want {
+			t.Fatalf("codec %q unsupported != %v", codec, want)
 		}
 	}
 }
@@ -103,9 +103,9 @@ func TestNativeShareGenerationUpdates(t *testing.T) {
 	}
 }
 
-func TestNativeShareStaleCodecNeverFallsBack(t *testing.T) {
+func TestNativeShareStaleCodecNeverFails(t *testing.T) {
 	n := &nativeShare{stop: make(chan struct{}), generation: 20}
-	// n.cm is nil: a fallback would panic. A late generation-19 VP8 update
+	// n.cm is nil: a failure would panic. A late generation-19 VP8 update
 	// must be rejected as stale before the codec can end generation 20.
 	if err := n.applyUpdate(NativeShareUpdate{Generation: 19, Codec: "vp8"}); err == nil {
 		t.Fatal("stale codec update accepted")

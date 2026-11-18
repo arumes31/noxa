@@ -658,10 +658,6 @@ export function LogChat(arg1) {
   return window['go']['main']['App']['LogChat'](arg1);
 }
 
-export function LogScreenShareDiagnostics(arg1) {
-  return window['go']['main']['App']['LogScreenShareDiagnostics'](arg1);
-}
-
 export function MOTD() {
   return window['go']['main']['App']['MOTD']();
 }
