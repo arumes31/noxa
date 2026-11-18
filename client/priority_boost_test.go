@@ -23,7 +23,7 @@ func TestCaptureBoostHoldsUntilLastReasonEnds(t *testing.T) {
 	}
 }
 
-func TestDisplayCaptureLeaseDrivesBrowserBoost(t *testing.T) {
+func TestDisplayCaptureLeaseDrivesCaptureBoost(t *testing.T) {
 	f := newDisplayCaptureFixture(t)
 	var states []bool
 	f.p.boost = func(on bool) { states = append(states, on) }

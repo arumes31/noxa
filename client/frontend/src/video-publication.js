@@ -1,6 +1,6 @@
 import { hardwareVideoEvidence } from "./hardware-video.js";
 import { updateStartupBlocked } from "./update-transition.js";
-import { retainDisplayCapture, releaseDisplayCapture, stopDisplayCapture, transferDisplayCapture, onDisplayCaptureStop } from "./display-capture-lease.js";
+import { retainDisplayCapture, stopDisplayCapture, onDisplayCaptureStop } from "./display-capture-lease.js";
 // video-publication.js — camera/screen capture and publication lifecycle.
 import { captureCamera, applyCameraPreview } from "./camera-capture.js";
 import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
@@ -8,37 +8,30 @@ import { startPublication, stopPublication, publicationSnapshot, preparePublicat
 import { hardwareRecoveryCodec, knownSoftwareVideoEncoder } from "./video-hevc.js";
 import { preferPublicationCodec } from "./video-codecs.js";
 import { startShareStatus, stopShareStatus, refreshShareStatus } from "./share-status.js";
-import { displayAudioOptions, validateDisplayAudio } from "./display-audio.js";
 import { applyVideoNetworkPriority } from "./voice-priority.js";
-import { shareQuality, screenShareConstraints, createShareQualityControls, DEFAULT_SHARE_PRESET } from "./screen-share-quality.js";
+import { shareQuality, DEFAULT_SHARE_PRESET } from "./screen-share-quality.js";
 import { createSharePicker } from "./share-picker.js";
-import { cropDisplayStream, regionCropSupported, displayStreamHasFrameGeometry } from "./share-region.js";
 import { closeDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { labelButton } from "./icons.js";
 import { renderMicStatus } from "./audio.js";
-import { videoConstraints, trackFitsVideoLimits, capVideoEncodings, screenBitrateHeadroom } from "./media-limits.js";
+import { videoConstraints, trackFitsVideoLimits, capVideoEncodings } from "./media-limits.js";
 import { t as tLabel } from "./i18n.js";
-import { rememberVideoSenderProfile, browserShareStatsLine } from "./video-sender-stats.js";
+import { rememberVideoSenderProfile } from "./video-sender-stats.js";
 import { hardwareVideoEncodeAvailable, videoSenderCaptureSample, hardwareStartupGeometry } from "./video-sender-hardware-recovery.js";
 import { sampleSenderStats } from "./peer-stats.js";
-import { createScreenResolutionController } from "./screen-resolution.js";
-import { createScreenStartupAttempt } from "./video-startup-plan.js";
-import { createShareResume } from "./share-resume.js";
-import { screenCaptureBackend, setScreenCaptureBackend, nativeShareStatus, nativeSource, nativeSourceOptions, nativeStandInStream, nativeEventIsCurrent,
+import { nativeShareStatus, nativeSource, nativeSourceOptions, nativeStandInStream, nativeEventIsCurrent, nativeUnavailableKey, nativeFailureKey,
     nativeRegionSource, nativeScreenPreview, nativeTile,
     nativeThumbnails, rememberNativeSource } from "./native-share.js";
-import { renegotiate, negotiateOffer, queuePeerNegotiation } from "./video-negotiation.js";
+import { negotiateOffer, queuePeerNegotiation } from "./video-negotiation.js";
 const V = () => window.__noxa;
 
 export function createVideoPublication({ policy }) {
     // videoSender returns the sender of a video transceiver this client can send
-    // on, or null. Matches by transceiver so it never confuses the share-audio
-    // sender, and skips recvonly ones: with no camera there is no send transceiver
+    // on, or null. Matches by transceiver and skips recvonly ones: with no camera there is no send transceiver
     // at all and replaceTrack on a server-side recvonly would publish nothing.
     function videoSenderFor(pc) {
         if (!pc) return null;
         const t = pc.getTransceivers().find((t) =>
-            t !== V().state.shareVideoTransceiver &&
             (t.receiver.track?.kind === "video" || t.sender.track?.kind === "video") &&
             (t.direction === "sendrecv" || t.direction === "sendonly"));
         return t ? t.sender : null;
@@ -52,65 +45,7 @@ export function createVideoPublication({ policy }) {
     const pendingVideoSenders = new WeakMap();
     const videoLimitUpdates = new WeakMap();
     const capturePreferences = new WeakMap();
-    const screenResolutions = new WeakMap();
     const codecSelections = new WeakMap();
-    const startupAttempt = createScreenStartupAttempt();
-
-    function screenResolution(sender, track) {
-        const settings = track.getSettings(), profile = capturePreferences.get(track);
-        // A bitrate-only preference edit preserves adaptation, just as the
-        // ceiling-only update path does. Sources, sessions and geometry do not.
-        const key = JSON.stringify([captureMediaScope(), settings.width, settings.height,
-            profile?.width, profile?.height, profile?.fps, track.contentHint, !!policy.lowBandwidth]);
-        let entry = screenResolutions.get(sender);
-        if (!entry || entry.track !== track || entry.key !== key) {
-            entry = { track, key, scale: 1, update: createScreenResolutionController() };
-            screenResolutions.set(sender, entry);
-        }
-        return entry;
-    }
-
-    function adaptScreenResolution(pc, stats) {
-        const { state } = V(), scope = captureMediaScope();
-        const transceiver = state.shareVideoTransceiver, sender = transceiver?.sender;
-        const track = state.shareStream?.getVideoTracks()[0], received = performance.now();
-        const current = () => state.pc === pc && mediaScopeIsCurrent(scope) && pc.connectionState === "connected" &&
-            pc.signalingState === "stable" && state.shareVideoTransceiver === transceiver && !transceiver.stopped &&
-            state.shareStream?.getVideoTracks()[0] === track && sender.track === track && track.readyState === "live" &&
-            track.enabled && !state.shareQualityUpdating && !policy.lowBandwidth && publicationUploadActive("screen", track) !== false;
-        if (!pc || !sender || !track || !current()) {
-            screenResolutions.get(sender)?.update({ sample: null });
-            return Promise.resolve();
-        }
-        const entry = screenResolution(sender, track);
-        return queuePeerNegotiation(pc, () => {
-            const pending = (capUpdates.get(pc) || Promise.resolve()).catch(() => {}).then(async () => {
-                if (!current() || performance.now() - received > 1500 || screenResolution(sender, track) !== entry) return;
-                const parameters = sender.getParameters();
-                if (parameters.encodings?.length !== 1 || parameters.encodings[0].active === false) return;
-                const rows = [...stats.values()].filter(row => row.type === "outbound-rtp" && !row.isRemote &&
-                    (row.kind || row.mediaType) === "video" && (row.mid != null ? row.mid === transceiver.mid :
-                        stats.get(row.mediaSourceId)?.trackIdentifier === track.id));
-                const row = rows.length === 1 ? rows[0] : null;
-                const capture = row && videoSenderCaptureSample(stats, row, track);
-                const sample = capture && { id: `${row.id}:${capture.id}`, time: row.timestamp, captureTime: capture.timestamp,
-                    captured: capture.frames, encoded: row.framesEncoded, reason: row.qualityLimitationReason };
-                const settings = track.getSettings();
-                const scale = entry.update({ sample, scale: entry.scale, width: settings.width, height: settings.height,
-                    fps: capturePreferences.get(track)?.fps || settings.frameRate || 60 });
-                if (Math.abs(scale - (parameters.encodings[0].scaleResolutionDownBy ?? 1)) < 0.001) return;
-                parameters.encodings[0].scaleResolutionDownBy = scale;
-                parameters.degradationPreference = "maintain-resolution";
-                // Retain negotiated bitrate, priority, codec and activation. A
-                // rejected parameter update is retried on a later fresh sample.
-                await sender.setParameters(parameters);
-                if (current() && screenResolution(sender, track) === entry) entry.scale = scale;
-            });
-            capUpdates.set(pc, pending);
-            return pending;
-        });
-    }
-
     function selectCodec(slot, track, transceiver) {
         const codec = publicationCodec(slot, track);
         const format = codec === "h265" ? publicationHEVCFormat(slot, track) : undefined;
@@ -140,10 +75,10 @@ export function createVideoPublication({ policy }) {
         const { state } = V(), pc = state.pc, scope = captureMediaScope();
         if (!pc) return Promise.resolve();
         const current = () => state.pc === pc && mediaScopeIsCurrent(scope) && track.readyState !== "ended" &&
-            (slot === "screen" ? state.shareStream?.getVideoTracks()[0] === track : state.localStream?.getVideoTracks().includes(track));
+            state.localStream?.getVideoTracks().includes(track);
         return queuePeerNegotiation(pc, async () => {
             if (!current()) return;
-            const transceiver = slot === "screen" ? state.shareVideoTransceiver : pc.getTransceivers().find(item => item.sender.track === track);
+            const transceiver = pc.getTransceivers().find(item => item.sender.track === track);
             const previous = codecSelections.get(transceiver);
             try {
                 if (!demandOnly && selectCodec(slot, track, transceiver)) await negotiateOffer(pc, scope.generation, undefined, current, scope.tabID);
@@ -156,36 +91,6 @@ export function createVideoPublication({ policy }) {
                     if (previous) { preferPublicationCodec(transceiver, previous.codec, previous.format); codecSelections.set(transceiver, previous); }
                     else codecSelections.delete(transceiver);
                     throw error;
-                }
-            }
-            if (slot === "screen" && current() && !policy.lowBandwidth && publicationUploadActive(slot, track) === true) {
-                const seedProfile = capturePreferences.get(track), seedLimits = state.mediaLimits;
-                const seedBudget = seedLimits?.video_max_bitrate ?? 0;
-                const otherVideoActive = () => pc.getSenders().some(sender => sender !== transceiver.sender &&
-                    sender.track?.kind === "video" && sender.track.readyState === "live" &&
-                    sender.getParameters().encodings?.some(encoding => encoding.active !== false));
-                const seedCurrent = () => current() && publicationUploadActive(slot, track) === true &&
-                    track.enabled && !transceiver.stopped && transceiver.sender.track === track &&
-                    !policy.lowBandwidth && !state.shareQualityUpdating && capturePreferences.get(track) === seedProfile &&
-                    state.mediaLimits === seedLimits && (state.mediaLimits?.video_max_bitrate ?? 0) === seedBudget &&
-                    !otherVideoActive() && transceiver.sender.getParameters().encodings?.[0]?.active === false;
-                const plan = await startupAttempt({ pc, transceiver, track, profile: seedProfile,
-                    settings: track.getSettings(), limits: seedLimits, current: seedCurrent, otherVideoActive });
-                if (plan && seedCurrent()) {
-                    const profileKey = value => JSON.stringify([value?.width, value?.height, value?.fps, value?.bitrateCeiling ?? 0]);
-                    const limitKey = value => JSON.stringify([value?.video_max_width ?? 0, value?.video_max_height ?? 0, value?.video_max_bitrate ?? 0]);
-                    const ownedProfile = profileKey(seedProfile), ownedLimits = limitKey(seedLimits), ownedHint = track.contentHint;
-                    // Demand pauses and additional viewers retain the identical
-                    // codec parameter. Actual source, codec or cap changes end it.
-                    const stillOwned = () => current() && state.shareVideoTransceiver === transceiver &&
-                        !transceiver.stopped && transceiver.sender.track === track && track.contentHint === ownedHint && !policy.lowBandwidth &&
-                        profileKey(capturePreferences.get(track)) === ownedProfile && limitKey(state.mediaLimits) === ownedLimits;
-                    // Start-rate hints are consumed by the existing transport even
-                    // while this encoding is paused. Activate only after the answer.
-                    // A rejected optional hint must not prevent ordinary streaming.
-                    try { await negotiateOffer(pc, scope.generation, undefined, current, scope.tabID,
-                        { ...plan, stillEligible: seedCurrent, stillOwned }); }
-                    catch { /* negotiateOffer rolls back; ordinary caps remain authoritative. */ }
                 }
             }
             if (current()) await applySendCaps(current);
@@ -216,7 +121,7 @@ export function createVideoPublication({ policy }) {
             state.sessionGeneration === scope.session && state.myClientID === scope.clientID &&
             stillRelevant() && videoLimitUpdates.get(pc) === update;
         const videoTracks = () => new Set([
-            ...(state.localStream?.getVideoTracks() || []), ...(state.shareStream?.getVideoTracks() || []),
+            ...(state.localStream?.getVideoTracks() || []),
             ...pc.getSenders().map(sender => sender.track).filter(track => track?.kind === "video"),
         ].filter(track => track.readyState !== "ended"));
         const pause = track => {
@@ -235,9 +140,7 @@ export function createVideoPublication({ policy }) {
                         const preferred = capturePreferences.get(track) || {
                             width: settings.width || 640, height: settings.height || 360, fps: settings.frameRate || 30,
                         };
-                        await track.applyConstraints({ ...track.getConstraints(), ...(preferred.screen
-                            ? screenShareConstraints(preferred, state.mediaLimits)
-                            : videoConstraints(preferred.width, preferred.height, preferred.fps, state.mediaLimits)) });
+                        await track.applyConstraints({ ...track.getConstraints(), ...videoConstraints(preferred.width, preferred.height, preferred.fps, state.mediaLimits) });
                         if (!current()) return null;
                         // A user can end a source while constraints are pending.
                         if (track.readyState !== "ended" && !trackFitsVideoLimits(track, state.mediaLimits)) {
@@ -273,133 +176,32 @@ export function createVideoPublication({ policy }) {
         const current = () => state.pc === pc && state.serverGeneration === generation && stillRelevant();
         const pending = (capUpdates.get(pc) || Promise.resolve()).catch(() => {}).then(async () => {
             if (!current()) return;
-            const screenSender = state.shareVideoTransceiver?.sender;
-            const screenTrack = state.shareStream?.getVideoTracks()[0];
-            const sources = [videoSenderFor(pc), screenSender].filter(sender => sender &&
-                (sender === screenSender && screenTrack?.readyState === "live" ||
-                    sender === pendingVideoSenders.get(pc)?.sender || (sender.track && sender.track.readyState !== "ended"))).map(sender => {
+            // The camera is the only browser video sender: a native screen share sends from Go.
+            const sources = [videoSenderFor(pc)].filter(sender => sender &&
+                (sender === pendingVideoSenders.get(pc)?.sender || (sender.track && sender.track.readyState !== "ended"))).map(sender => {
                 const parameters = sender.getParameters();
-                if (sender === screenSender) {
-                    // Keep the selected screen/Studio resolution through LTE jitter
-                    // and short loss bursts. WebRTC still controls bitrate and may
-                    // reduce frame rate; do not force a minimum bitrate or reset BWE.
-                    parameters.degradationPreference = "maintain-resolution";
-                }
                 for (const encoding of parameters.encodings || []) {
-                    encoding.priority = sender === screenSender ? "high" : "medium";
+                    encoding.priority = "medium";
                     applyVideoNetworkPriority(encoding); // never in the voice class
-                    if (sender === screenSender) {
-                        const fps = capturePreferences.get(screenTrack)?.fps;
-                        if (fps > 0) encoding.maxFramerate = fps;
-                    }
                 }
-                return { sender, parameters, encodings: parameters.encodings || [],
-                    singleEncoding: true,
-                    uploadActive: publicationUploadActive(sender === screenSender ? "screen" : "cam",
-                        sender === screenSender ? screenTrack : pendingVideoSenders.get(pc)?.sender === sender ? pendingVideoSenders.get(pc).track : sender.track),
-                    bitrateHeadroom: sender === screenSender ? screenBitrateHeadroom(capturePreferences.get(screenTrack), screenTrack?.getSettings()) : Infinity };
+                return { sender, parameters, encodings: parameters.encodings || [], singleEncoding: true,
+                    uploadActive: publicationUploadActive("cam", pendingVideoSenders.get(pc)?.sender === sender ? pendingVideoSenders.get(pc).track : sender.track),
+                    bitrateHeadroom: Infinity };
             });
             capVideoEncodings(sources, state.mediaLimits, policy.lowBandwidth ? policy.lowBandwidthBitrate : 0);
-            for (const { sender, parameters, encodings } of sources) {
+            for (const { sender, encodings } of sources) {
                 if (!current()) return;
-                if (sender === screenSender && screenTrack) {
-                    const scale = screenResolution(sender, screenTrack).scale;
-                    for (const encoding of encodings) encoding.scaleResolutionDownBy = Math.max(encoding.scaleResolutionDownBy || 1, scale);
-                }
                 if (!encodings.length) continue;
                 // Chrome accepts only a getParameters result from the same task;
                 // an earlier sender's await would invalidate a stale read.
                 const fresh = sender.getParameters();
                 fresh.encodings = encodings;
-                if (parameters.degradationPreference) fresh.degradationPreference = parameters.degradationPreference;
                 await sender.setParameters(fresh);
-            }
-            const audioSender = state.shareAudioTransceiver?.sender;
-            if (audioSender && (audioSender.track || state.shareStream?.getAudioTracks().some(track => track.readyState === "live")) && current()) {
-                const parameters = audioSender.getParameters();
-                const active = publicationUploadActive("screen", state.shareStream?.getVideoTracks()[0]) !== false;
-                for (const encoding of parameters.encodings || []) { encoding.active = active; encoding.priority = "high"; }
-                if (parameters.encodings?.length) await audioSender.setParameters(parameters);
             }
         });
         capUpdates.set(pc, pending);
         pending.catch(() => { if (current()) V().sysMsg(tLabel("voice.mediaCapsFailed")); });
         return pending;
-    }
-
-    // A ceiling-only change owns the same cap queue, but never rewrites camera,
-    // audio, capture or adaptation parameters. Compute shared limits on copies.
-    function applyScreenBitrate(track, profile, stillRelevant) {
-        const { state } = V(), pc = state.pc, scope = captureMediaScope();
-        const stream = state.shareStream, transceiver = state.shareVideoTransceiver, sender = transceiver?.sender;
-        const current = () => stillRelevant() && mediaScopeIsCurrent(scope) && state.pc === pc &&
-            state.shareStream === stream && state.shareVideoTransceiver === transceiver && sender?.track === track &&
-            stream?.getVideoTracks()[0] === track && track.readyState === "live";
-        const pending = (capUpdates.get(pc) || Promise.resolve()).catch(() => {}).then(async () => {
-            if (!current()) return false;
-            if (publicationUploadActive("screen", track) === false) {
-                capturePreferences.set(track, { ...profile, screen: true });
-                return true;
-            }
-            const parameters = sender.getParameters(), original = parameters.encodings?.map(encoding => ({ ...encoding }));
-            if (!original?.length) throw new Error(tLabel("voice.mediaCapsFailed"));
-            const limited = budget => {
-                const encodings = original.map(encoding => ({ ...encoding }));
-                const sources = [{ encodings, singleEncoding: true,
-                    bitrateHeadroom: screenBitrateHeadroom(budget, track.getSettings()) }];
-                const camera = videoSenderFor(pc), waiting = pendingVideoSenders.get(pc);
-                const cameraTrack = camera === waiting?.sender ? waiting.track : camera?.track;
-                if (cameraTrack?.readyState === "live") sources.push({ encodings: [],
-                    uploadActive: publicationUploadActive("cam", cameraTrack) });
-                capVideoEncodings(sources, state.mediaLimits, policy.lowBandwidth ? policy.lowBandwidthBitrate : 0);
-                return encodings;
-            };
-            const encodings = limited(profile);
-            if (encodings.some((encoding, i) => (encoding.active !== false) !== (original[i].active !== false))) throw new Error(tLabel("voice.mediaCapsFailed"));
-            parameters.encodings.forEach((encoding, i) => { encoding.maxBitrate = encodings[i].maxBitrate; });
-            try {
-                if (original.some((encoding, i) => encoding.maxBitrate !== encodings[i].maxBitrate)) await sender.setParameters(parameters);
-            } catch (error) {
-                if (!current()) return false;
-                let restored = true;
-                try {
-                    const rollback = sender.getParameters();
-                    if (rollback.encodings?.length !== original.length || rollback.encodings.some((encoding, i) => encoding.rid !== original[i].rid)) throw error;
-                    // A server limit may change while setParameters is pending.
-                    // Restore the previous preference without exceeding fresh caps.
-                    const bounded = limited(capturePreferences.get(track));
-                    if (bounded.some((encoding, i) => (encoding.active !== false) !== (original[i].active !== false))) throw error;
-                    rollback.encodings.forEach((encoding, i) => {
-                        encoding.maxBitrate = Math.min(original[i].maxBitrate ?? Infinity, bounded[i].maxBitrate);
-                    });
-                    await sender.setParameters(rollback);
-                } catch { restored = false; }
-                throw new Error(tLabel(restored ? "share.qualityFailed" : "share.qualityRestoreFailed", { error: error.message || String(error) }));
-            }
-            if (!current()) return false;
-            capturePreferences.set(track, { ...profile, screen: true });
-            return true;
-        });
-        capUpdates.set(pc, pending);
-        return pending;
-    }
-
-    // Apply the same screen ceiling before the first offer, including when the
-    // source starts paused. A live camera still shares any stricter server cap.
-    function initialScreenEncodings(track) {
-        const { state } = V(), pc = state.pc, profile = capturePreferences.get(track);
-        const encodings = [{}], sources = [{ encodings, singleEncoding: true,
-            bitrateHeadroom: screenBitrateHeadroom(profile, track.getSettings()) }];
-        const camera = videoSenderFor(pc), pending = pendingVideoSenders.get(pc);
-        const cameraTrack = camera === pending?.sender ? pending.track : camera?.track;
-        if (cameraTrack?.readyState === "live") sources.push({ encodings: [],
-            uploadActive: publicationUploadActive("cam", cameraTrack) });
-        capVideoEncodings(sources, state.mediaLimits, policy.lowBandwidth ? policy.lowBandwidthBitrate : 0);
-        encodings[0].active = encodings[0].active && publicationUploadActive("screen", track) !== false;
-        encodings[0].priority = "high";
-        applyVideoNetworkPriority(encodings[0]);
-        if (profile?.fps > 0) encodings[0].maxFramerate = profile.fps;
-        return encodings;
     }
 
     // WebRTC reinitializes its encoder on a size change, retrying hardware first.
@@ -411,14 +213,13 @@ export function createVideoPublication({ policy }) {
     // Resolves null when it declines before the pulse, false when the pulse failed.
     function retryVideoHardware(slot, track, stillRelevant = () => true, captureRecovery = null) {
         const { state } = V(), pc = state.pc, scope = captureMediaScope();
-        const transceiver = slot === "screen" ? state.shareVideoTransceiver : pc?.getTransceivers().find(item => item.sender.track === track);
+        // The camera only: a native screen share encodes in Go.
+        const transceiver = slot === "cam" ? pc?.getTransceivers().find(item => item.sender.track === track) : null;
         const sender = transceiver?.sender;
-        if (!pc || !sender || !["screen", "cam"].includes(slot)) return Promise.resolve(null);
+        if (!pc || !sender) return Promise.resolve(null);
         const owns = () => state.pc === pc && mediaScopeIsCurrent(scope) && !transceiver.stopped && sender.track === track &&
-            track?.readyState === "live" && (slot === "screen" ? state.shareVideoTransceiver === transceiver &&
-                state.shareStream?.getVideoTracks()[0] === track : state.localStream?.getVideoTracks().includes(track));
-        const current = () => owns() && track.enabled && !state.shareQualityUpdating && stillRelevant() &&
-            publicationUploadActive(slot, track) !== false;
+            track?.readyState === "live" && state.localStream?.getVideoTracks().includes(track);
+        const current = () => owns() && track.enabled && stillRelevant() && publicationUploadActive(slot, track) !== false;
         return queuePeerNegotiation(pc, () => {
             const pending = (capUpdates.get(pc) || Promise.resolve()).catch(() => {}).then(async () => {
                 if (!current() || !navigator.mediaCapabilities?.encodingInfo) return null;
@@ -525,7 +326,7 @@ export function createVideoPublication({ policy }) {
                             let timer;
                             const restored = await Promise.race([sender.setParameters(restore).then(() => true),
                                 new Promise(resolve => { timer = setTimeout(() => resolve(false), 5000); })]).finally(() => clearTimeout(timer));
-                            if (!restored && owns()) void (slot === "screen" ? doStopShare() : stopCamera());
+                            if (!restored && owns()) void stopCamera();
                         }
                     }
                 }
@@ -547,46 +348,19 @@ export function createVideoPublication({ policy }) {
     // Screen share (69-72, 85)
     // ---------------------------------------------------------------------------
 
-    // Region crops a picked screen or window frame by frame (share-region.js).
-    const regionSupported = regionCropSupported();
-
     let shareDialogID = 0;
     // The Studio program currently published on the screen slot, if any.
     let studioShare = null;
-    const resumeScope = () => { const s = V().state; return { tabID: s.activeTabID, channelID: s.myChannelID, uid: s.myUniqueID }; };
-    const shareResume = createShareResume({ stop: stopDisplayCapture, changed: () => syncShareButton() });
-    globalThis.addEventListener?.("pagehide", () => shareResume.cancel());
-    function pauseShareForReconnect() {
-        const { state } = V();
-        // A native share has no browser source to resume: end it with the connection.
-        if (state.nativeShare) { void doStopShare(); return; }
-        if (!state.screenSharing || !shareResume.pause(state.shareStream)) return;
-        // Detach ownership before teardown, keeping the original region/Studio
-        // source graph alive. Its tracks are disabled throughout the outage.
-        state.shareStream = null;
-        state.screenSharing = false;
-        syncShareButton();
+    // A native share has no source to resume after a reconnect: it ends with the connection.
+    function endShareForReconnect() {
+        if (nativePending) nativePending.ended = true; // a Start still in flight is discarded too
+        if (V().state.nativeShare) void doStopShare();
     }
-    function cancelShareResume() { shareResume.cancel(); }
-    function shareResumePending() { return !!shareResume.pending(); }
-    async function resumeShareAfterReconnect() {
-        const { state } = V();
-        if (!state.pc || state.shareStarting || state.screenSharing || state.myChannelID <= 0) return;
-        const pending = shareResume.take(resumeScope());
-        if (!pending) return;
-        const request = {}; state.shareStarting = request;
-        try {
-            if (!await startShare({ ...pending.options, selectedDisplay: pending.stream })) {
-                stopDisplayCapture(pending.stream); pending.options.studio?.onEnded?.();
-            }
-        } catch { stopDisplayCapture(pending.stream); pending.options.studio?.onEnded?.(); }
-        finally { if (state.shareStarting === request) state.shareStarting = null; syncShareButton(); }
-    }
+    // The settings of the running share for the post-update resume prompt, or null.
     function updateShareSettings() {
-        const { state } = V(), options = state.screenSharing && shareResume.settings(state.shareStream);
-        if (!options) return null;
-        const { surface, preset, custom, bitrateCeiling, audioMode } = options;
-        return { surface, preset, custom, bitrateCeiling, audioMode };
+        const native = V().state.screenSharing && V().state.nativeShare;
+        if (!native) return null;
+        return { surface: native.studio ? "studio" : native.surface, ...native.selection, audioMode: native.audioMode };
     }
     function openResumedShare(settings) {
         if (settings.surface === "studio") { document.getElementById("voice-studio")?.click(); return; }
@@ -596,7 +370,7 @@ export function createVideoPublication({ policy }) {
     function syncShareButton() {
         const btn = V().$("voice-screen");
         if (!btn) return;
-        const sharing = !!V().state.screenSharing || shareResumePending();
+        const sharing = !!V().state.screenSharing;
         if (!sharing) stopShareStatus();
         btn.disabled = !!V().state.shareStarting || !!V().state.shareStopping;
         const label = sharing ? tLabel("voice.stopShare") : tLabel("voice.startShare");
@@ -609,12 +383,12 @@ export function createVideoPublication({ policy }) {
     }
 
     // shareToggle is the voice-screen button handler: stop when sharing
-    // (confirming first, 85), otherwise open the share dialog.
+    // (confirming first, 85), otherwise open the share dialog (which explains
+    // when this device cannot share).
     async function shareToggle() {
         if (updateStartupBlocked()) return;
         const { state } = V();
         if (state.shareStarting || state.shareStopping) return;
-        if (shareResumePending()) { cancelShareResume(); return; }
         if (state.screenSharing) {
             await confirmStopShare();
             return;
@@ -622,30 +396,31 @@ export function createVideoPublication({ policy }) {
         openShareDialog();
     }
 
-    // openCallShareDialog is noXa's picker for a private call's screen share
-    // (Native mode): startNative({source, max_width, max_height, fps,
-    // bitrate, audioMode}) streams natively; on failure (with a notice) or a
-    // Browser pick, startDisplay(stream, audioMode) takes the capture.
-    function openCallShareDialog({ startNative, startDisplay, audio = "none", onClose = () => {} }) {
-        openShareDialog(false, DEFAULT_SHARE_PRESET, audio, "monitor", {}, 0, { startNative, startDisplay, onClose });
+    // openCallShareDialog is noXa's picker for a private call's screen share:
+    // startNative({source, max_width, max_height, fps, bitrate, audioMode})
+    // streams it natively.
+    function openCallShareDialog({ startNative, audio = "none", onClose = () => {} }) {
+        openShareDialog(false, DEFAULT_SHARE_PRESET, audio, "monitor", {}, 0, { startNative, onClose });
     }
 
+    // openShareDialog is noXa's share picker: live thumbnails of every monitor
+    // or window (a running game first, the last shared source preselected),
+    // captured and encoded in Go. A Region is drawn on a still of the picked
+    // monitor and cropped on the GPU. When this device cannot share natively
+    // the dialog says why and Start stays disabled.
     function openShareDialog(replacing = false, initialPreset = DEFAULT_SHARE_PRESET, initialAudio = "none", initialSurface = "monitor", custom = {}, bitrateCeiling = 0, call = null) {
         const dialogID = ++shareDialogID;
-        // A call share needs no server native peer (it is peer-to-peer).
-        const nativeAvailable = status => !!(call ? status?.call_available : status?.available);
+        const nativeAvailable = status => !!status && !nativeUnavailableKey(status, !!call);
         const overlay = document.createElement("div");
         overlay.className = "dlg-overlay";
         const view = createSharePicker({ id: `share-${dialogID}`, preset: initialPreset, custom, bitrateCeiling,
-            surface: initialSurface, audio: initialAudio, regionSupported });
+            surface: initialSurface, audio: initialAudio });
         overlay.appendChild(view.element);
         const { quality, $ } = view;
         const sources = () => overlay.querySelectorAll(`input[name="${view.sourceName}"]`);
         const audioChoices = new Map([[initialSurface, initialAudio]]);
-        if (replacing) audioChoices.set(initialSurface,
-            V().state.shareStream?.getAudioTracks().some(track => track.readyState === "live") ? initialAudio : "none");
         // Keep explicit choices per source so toggling sources cannot undo an override.
-        $(".sh-audio").addEventListener("change", () => { audioChoices.set(view.surface(), view.audio()); discardSelection(); refreshNative(); });
+        $(".sh-audio").addEventListener("change", () => { audioChoices.set(view.surface(), view.audio()); refreshNative(); });
         const syncAudioSource = () => {
             const surface = view.surface();
             const application = surface === "window";
@@ -654,85 +429,32 @@ export function createVideoPublication({ policy }) {
             if (!application && audio === "application") audio = "none";
             view.setAudio(audio);
         };
-        let selectedDisplay = null, picking = false, publishing = false, pickToken = 0;
+        let publishing = false;
         const error = $(".sh-error");
-        const choosers = [$(".sh-choose"), $(".sp-change")];
         const start = $(".dlg-ok"), cancel = $(".dlg-cancel"), close = $(".sp-close");
-        let nativeChoice = () => null; // the native source when Native mode can start
-        let dropNativePreview = () => {}; // a cleared preview also ends the native Region preview
+        let nativeChoice = () => null; // the native source when Start can run
         const update = () => {
-            for (const button of choosers) button.disabled = picking || publishing;
             cancel.disabled = close.disabled = publishing;
-            start.disabled = picking || publishing || (!selectedDisplay && !nativeChoice()) || (view.surface() === "region" && !view.region());
-            for (const input of sources()) input.disabled = publishing || (input.value === "region" && !regionSupported);
+            start.disabled = publishing || !nativeChoice();
+            for (const input of sources()) input.disabled = publishing;
             $(".sh-audio").disabled = publishing; quality.element.inert = publishing;
         };
         view.onRegionChange(update);
-        const discardSelection = () => {
-            ++pickToken;
-            stopDisplayCapture(selectedDisplay); selectedDisplay = null;
-            view.clearPreview();
-            dropNativePreview();
-            update();
-        };
-        const choose = async () => {
-            if (picking || publishing || !isCurrentServerDialog(overlay)) return;
-            const selection = quality.read();
-            if (!selection) { view.closePanels(); $(".sp-quality-toggle").click(); quality.read(); return; }
-            discardSelection(); const token = pickToken;
-            error.textContent = ""; picking = true; update();
-            const surface = view.surface();
-            const profile = shareQuality(selection.preset, selection.custom, selection.bitrateCeiling);
-            // Region crops afterwards, so it captures at the source's own size.
-            const video = surface === "region"
-                ? screenShareConstraints({ width: 0, height: 0, fps: profile.fps, original: true }, null)
-                : screenShareConstraints(profile, V().state.mediaLimits);
-            video.displaySurface = surface === "region" ? "monitor" : surface;
-            const options = { video, ...displayAudioOptions(view.audio()) };
-            try {
-                // Must run directly from the click to retain user activation.
-                let display;
-                try { display = await navigator.mediaDevices.getDisplayMedia(options); }
-                catch (failure) {
-                    if (!options.audio || ["NotAllowedError", "AbortError"].includes(failure.name) || !isCurrentServerDialog(overlay) || token !== pickToken) throw failure;
-                    display = await navigator.mediaDevices.getDisplayMedia({ ...options, ...displayAudioOptions("none") });
-                }
-                if (!isCurrentServerDialog(overlay) || token !== pickToken) { stopDisplayCapture(display); return; }
-                const track = display.getVideoTracks()[0];
-                if (!track || track.readyState === "ended") { stopDisplayCapture(display); throw new Error(tLabel("desktop.screen.capture.produced.no.video.track")); }
-                selectedDisplay = display; retainDisplayCapture(display);
-                view.showPreview(display, track.label || tLabel(surface === "window" ? "polish.window" : "polish.monitor"));
-                track.addEventListener("ended", () => { if (selectedDisplay === display) { discardSelection(); error.textContent = tLabel("share.sourceEnded"); } }, { once: true });
-            } catch (failure) {
-                if (isCurrentServerDialog(overlay) && token === pickToken) error.textContent = tLabel("desktop.screen.capture.failed") + (failure.message || failure.name);
-            } finally { picking = false; if (isCurrentServerDialog(overlay)) update(); }
-        };
-        for (const button of choosers) button.onclick = choose;
-        for (const source of sources()) source.addEventListener("change", () => { syncAudioSource(); discardSelection(); refreshNative(); void pollNative(); });
-        // Screen capture backend (Windows desktop): Native captures and encodes
-        // in Go; Browser is getDisplayMedia. A native Region is drawn on a
-        // still of the picked monitor and cropped on the GPU.
+        for (const source of sources()) source.addEventListener("change", () => { syncAudioSource(); dropNativePreview(); view.clearPreview(); refreshNative(); void pollNative(); });
         let nativeStatus = null;
         const nativeBox = document.createElement("div");
         nativeBox.className = "set-hint sp-native";
         nativeBox.hidden = true;
-        const backendLabel = document.createElement("label");
-        backendLabel.textContent = tLabel("share.captureBackend") + " ";
-        const backend = document.createElement("select");
-        for (const value of ["browser", "native"]) backend.add(new Option(tLabel(`share.captureBackend.${value}`), value, false, screenCaptureBackend() === value));
-        backendLabel.appendChild(backend);
         const nativeNote = document.createElement("span");
-        // noXa's own picker: live thumbnails of every monitor or window,
-        // refreshed while the dialog is open (a running game first, the
-        // last shared source preselected).
+        nativeNote.className = "sp-native-note";
         const nativeGrid = document.createElement("div");
         nativeGrid.className = "sp-native-grid";
         nativeGrid.setAttribute("role", "radiogroup");
         nativeGrid.setAttribute("aria-label", tLabel("share.nativeSource"));
         nativeGrid.hidden = true;
-        nativeBox.append(backendLabel, " ", nativeNote, nativeGrid);
+        nativeBox.append(nativeNote, nativeGrid);
         let nativeOptions = [], nativeValue = "", nativeSurface = "";
-        const nativeUsable = () => backend.value === "native" && nativeAvailable(nativeStatus) && ["monitor", "window", "region"].includes(view.surface());
+        const nativeUsable = () => nativeAvailable(nativeStatus);
         const refreshNative = () => {
             const surface = view.surface();
             const usable = nativeUsable();
@@ -748,12 +470,7 @@ export function createVideoPublication({ policy }) {
             const tiles = new Map([...nativeGrid.querySelectorAll(".sp-native-tile")].map(tile => [tile.querySelector("input").value, tile]));
             const wanted = options.map(o => {
                 let tile = tiles.get(o.value);
-                if (!tile) tile = nativeTile(o, `sp-native-${dialogID}`, () => {
-                    nativeValue = o.value;
-                    // A native monitor replaces a browser pick of a Region.
-                    if (view.surface() === "region" && selectedDisplay) discardSelection();
-                    update(); void showNativePreview();
-                });
+                if (!tile) tile = nativeTile(o, `sp-native-${dialogID}`, () => { nativeValue = o.value; update(); void showNativePreview(); });
                 const title = tile.querySelector(".sp-native-title"), detail = tile.querySelector(".sp-native-detail");
                 if (title.textContent !== o.label) title.textContent = o.label;
                 const info = [o.game ? tLabel("share.nativeGame") : "", o.exe].filter(Boolean).join(" · ");
@@ -769,23 +486,24 @@ export function createVideoPublication({ policy }) {
                 if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
             }
             for (const input of nativeGrid.querySelectorAll("input")) input.checked = input.value === nativeValue;
-            nativeNote.textContent = backend.value !== "native" ? "" : !nativeAvailable(nativeStatus) ? tLabel("share.nativeUnavailable")
-                : usable && !options.length ? tLabel("share.nativeNoSources") : "";
+            nativeNote.textContent = !nativeStatus ? "" : !usable ? tLabel(nativeUnavailableKey(nativeStatus, !!call))
+                : !options.length ? tLabel("share.nativeNoSources") : "";
+            nativeNote.hidden = !nativeNote.textContent;
             update();
             void showNativePreview();
         };
-        // Native Region: the area is drawn on a large still of the picked
-        // monitor, painted at the monitor's pixel size so the size hint and
-        // the minimum size stay right; it refreshes with the thumbnails.
+        // Region: the area is drawn on a large still of the picked monitor,
+        // painted at the monitor's pixel size so the size hint and the minimum
+        // size stay right; it refreshes with the thumbnails.
         let preview = null, previewToken = 0;
-        dropNativePreview = () => {
+        const dropNativePreview = () => {
             previewToken++;
             preview?.stream.getTracks().forEach(track => track.stop());
             preview = null;
         };
         const showNativePreview = async (refresh = false) => {
-            if (view.surface() !== "region" || !nativeUsable() || !nativeValue || selectedDisplay || publishing) {
-                if (preview) { dropNativePreview(); if (!selectedDisplay) view.clearPreview(); update(); }
+            if (view.surface() !== "region" || !nativeUsable() || !nativeValue || publishing) {
+                if (preview) { dropNativePreview(); view.clearPreview(); update(); }
                 return;
             }
             if (!refresh && preview?.value === nativeValue) return;
@@ -795,7 +513,7 @@ export function createVideoPublication({ policy }) {
             const image = new Image();
             image.src = url;
             try { await image.decode(); } catch { return; }
-            if (token !== previewToken || !isCurrentServerDialog(overlay) || value !== nativeValue || view.surface() !== "region" || selectedDisplay) return;
+            if (token !== previewToken || !isCurrentServerDialog(overlay) || value !== nativeValue || view.surface() !== "region") return;
             const option = nativeOption();
             if (preview?.value !== value) {
                 dropNativePreview();
@@ -826,15 +544,15 @@ export function createVideoPublication({ policy }) {
         const nativeOption = () => nativeOptions.find(o => o.value === nativeValue) || null;
         nativeChoice = () => {
             if (!nativeUsable() || !nativeValue) return null;
-            // A browser pick of a Region keeps the browser path.
-            if (view.surface() === "region") return selectedDisplay ? null : nativeRegionSource(nativeValue, view.region());
+            // The drawn area belongs to the monitor whose still is shown, never to one still loading.
+            if (view.surface() === "region") return preview?.shown && preview.value === nativeValue ? nativeRegionSource(nativeValue, view.region()) : null;
             return nativeSource(view.surface(), nativeValue);
         };
-        backend.addEventListener("change", () => { setScreenCaptureBackend(backend.value); refreshNative(); void pollNative(); });
         $(".sp-notes").appendChild(nativeBox);
         void nativeShareStatus(V().state.activeTabID).then(status => {
-            if (!isCurrentServerDialog(overlay) || status.reason === "unsupported_platform") return;
+            if (!isCurrentServerDialog(overlay)) return;
             nativeStatus = status; nativeBox.hidden = false; refreshNative();
+            if (!nativeAvailable(status)) return;
             void pollNative();
             nativeTimer = setInterval(() => { void pollNative(); }, 1500);
         });
@@ -843,99 +561,50 @@ export function createVideoPublication({ policy }) {
         overlay.onclick = (event) => { if (event.target === overlay && !publishing) closeDialog(overlay, "cancel"); };
         start.onclick = async () => {
             const native = nativeChoice();
-            if (!isCurrentServerDialog(overlay) || publishing || (!selectedDisplay && !native)) return;
+            if (!isCurrentServerDialog(overlay) || publishing || !native) return;
             const selected = quality.read();
             if (!selected) { view.closePanels(); $(".sp-quality-toggle").click(); quality.read(); return; }
-            const surface = view.surface(), region = view.region();
-            if (surface === "region" && !region) return;
-            if (call) { void startCallShare(native, selected, surface, region); return; }
+            const surface = view.surface();
+            if (call) { void startCallShare(native, selected, surface); return; }
             const { state } = V();
             if (!state.pc || state.pc.connectionState === "closed" || state.pc.connectionState === "failed") { error.textContent = tLabel("share.connectionRequired"); return; }
             if (state.shareStarting || state.shareStopping || (!!state.screenSharing !== replacing)) { error.textContent = tLabel("share.stateChanged"); return; }
-            let display = selectedDisplay; selectedDisplay = null;
             view.closePanels();
             const request = {}; state.shareStarting = request;
             publishing = true; error.textContent = ""; update(); syncShareButton();
             try {
-                if (surface === "region" && display) {
-                    // The cropped track owns the capture from here; its own lease
-                    // replaces the picker's one in startShare.
-                    const cropped = cropDisplayStream(display, region);
-                    transferDisplayCapture(display, cropped.stream);
-                    display = cropped.stream;
-                }
-                const scope = captureMediaScope();
-                if (native) rememberNativeSource(surface === "region" ? "monitor" : surface, nativeOption());
-                let started = native ? await startNativeShare({ surface, source: native, ...selected, audioMode: view.audio(), replacing }) : false;
-                if (started) { stopDisplayCapture(display); display = null; }
-                // An obsolete native attempt (session or tab changed) is no browser fallback.
-                else if (native && !mediaScopeIsCurrent(scope)) { stopDisplayCapture(display); display = null; return; }
-                // Native unavailable or failed: the browser path, with a notice.
-                if (native && !started) V().toast(tLabel("share.nativeFallback"), "warn");
-                // A native Region falls back cropped to the same area, never whole.
-                if (!started && !(native && V().state.screenSharing)) started = await startShare({ surface, ...selected, audioMode: view.audio(), replacing: replacing && !!V().state.screenSharing, selectedDisplay: display,
-                    region: surface === "region" && !display ? region : null });
-                if (started) closeDialog(overlay, "started");
-                else if (isCurrentServerDialog(overlay)) { view.clearPreview(); error.textContent = tLabel("share.startFailed"); }
+                rememberNativeSource(surface === "region" ? "monitor" : surface, nativeOption());
+                if (await startNativeShare({ surface, source: native, ...selected, audioMode: view.audio(), replacing })) closeDialog(overlay, "started");
+                else if (isCurrentServerDialog(overlay)) error.textContent = tLabel("share.startFailed");
             } catch (failure) {
-                stopDisplayCapture(display);
-                if (isCurrentServerDialog(overlay)) { view.clearPreview(); error.textContent = tLabel("desktop.screen.capture.failed") + (failure.message || failure.name); }
+                if (isCurrentServerDialog(overlay)) error.textContent = tLabel("desktop.screen.capture.failed") + (failure.message || failure.name);
             } finally {
                 publishing = false;
                 if (state.shareStarting === request) { state.shareStarting = null; syncShareButton(); }
                 if (isCurrentServerDialog(overlay)) update();
             }
         };
-        // The call path of Start: native first, else (with a notice) the
-        // browser capture of the same source, cropped to the same Region.
-        async function startCallShare(native, selected, surface, region) {
-            let display = selectedDisplay; selectedDisplay = null;
+        // The call path of Start: native capture to the call's viewers.
+        async function startCallShare(native, selected, surface) {
             view.closePanels();
             publishing = true; error.textContent = ""; update();
             try {
                 const p = shareQuality(selected.preset, selected.custom, selected.bitrateCeiling);
-                const audioMode = view.audio();
                 if (!p) return;
-                let started = false;
-                if (native) {
-                    rememberNativeSource(surface === "region" ? "monitor" : surface, nativeOption());
-                    // Native output is at most 1080p; a call has no server media limits.
-                    const width = Math.min(p.width || 1920, 1920), height = Math.min(p.height || 1080, 1080);
-                    started = await call.startNative({ source: native, max_width: width, max_height: height, fps: p.fps,
-                        bitrate: p.bitrateCeiling || Math.min(8000000, Math.round(width * height * p.fps * 0.07)), audioMode });
-                    if (!started && isCurrentServerDialog(overlay)) {
-                        V().toast(tLabel("share.nativeFallback"), "warn");
-                        const video = screenShareConstraints(surface === "region" ? { width: 0, height: 0, fps: p.fps, original: true } : p, null);
-                        video.displaySurface = surface === "region" ? "monitor" : surface;
-                        display = await navigator.mediaDevices.getDisplayMedia({ video, ...displayAudioOptions(audioMode) });
-                        retainDisplayCapture(display);
-                        if (surface === "region") {
-                            if (!regionSupported) throw new Error(tLabel("polish.cropNeedsUpdate"));
-                            const cropped = cropDisplayStream(display, region);
-                            transferDisplayCapture(display, cropped.stream);
-                            display = cropped.stream;
-                        }
-                    }
-                } else if (display && surface === "region") {
-                    const cropped = cropDisplayStream(display, region);
-                    transferDisplayCapture(display, cropped.stream);
-                    display = cropped.stream;
-                }
-                if (!started && display && isCurrentServerDialog(overlay)) {
-                    const owned = display; display = null; // startDisplay owns it from here
-                    started = await call.startDisplay(owned, audioMode);
-                }
-                if (started) closeDialog(overlay, "started");
-                else if (isCurrentServerDialog(overlay)) { view.clearPreview(); error.textContent = tLabel("share.startFailed"); }
+                rememberNativeSource(surface === "region" ? "monitor" : surface, nativeOption());
+                // Native output is at most 1080p; a call has no server media limits.
+                const width = Math.min(p.width || 1920, 1920), height = Math.min(p.height || 1080, 1080);
+                if (await call.startNative({ source: native, max_width: width, max_height: height, fps: p.fps,
+                    bitrate: p.bitrateCeiling || Math.min(8000000, Math.round(width * height * p.fps * 0.07)), audioMode: view.audio() })) closeDialog(overlay, "started");
+                else if (isCurrentServerDialog(overlay)) error.textContent = tLabel("share.startFailed");
             } catch (failure) {
-                if (isCurrentServerDialog(overlay)) { view.clearPreview(); error.textContent = tLabel("desktop.screen.capture.failed") + (failure.message || failure.name); }
+                if (isCurrentServerDialog(overlay)) error.textContent = tLabel("desktop.screen.capture.failed") + (failure.message || failure.name);
             } finally {
-                stopDisplayCapture(display);
                 publishing = false;
                 if (isCurrentServerDialog(overlay)) update();
             }
         }
-        mountServerDialog(overlay, { onCancel: () => !publishing, onClose: () => { clearInterval(nativeTimer); view.dispose(); discardSelection(); dropNativePreview(); call?.onClose(); } });
+        mountServerDialog(overlay, { onCancel: () => !publishing, onClose: () => { clearInterval(nativeTimer); view.dispose(); dropNativePreview(); call?.onClose(); } });
         const hint = call ? "" : mediaLimitHint();
         if (hint) {
             const note = document.createElement("p");
@@ -943,304 +612,6 @@ export function createVideoPublication({ policy }) {
             note.textContent = hint;
             $(".sp-notes").appendChild(note);
         }
-        if (!regionSupported) {
-            // The tab is disabled, so the dialog has to say why.
-            const note = document.createElement("p");
-            note.className = "set-hint warn";
-            note.textContent = tLabel("polish.cropNeedsUpdate");
-            $(".sp-notes").appendChild(note);
-        }
-    }
-
-    // startShare captures the display (69: displaySurface preference — Chromium's
-    // picker ultimately decides what is shareable), publishes a dedicated screen
-    // track independently of the camera, optionally merges display
-    // audio (70), and applies the quality preset (72).
-    async function startShare({ surface, preset, custom, bitrateCeiling = 0, audioMode, replacing = false, selectedDisplay = null, studio = null, region = null }) {
-        const requestedAudioMode = audioMode;
-        const { state } = V();
-        const generation = state.serverGeneration;
-        const tabID = state.activeTabID;
-        const peerConnection = state.pc;
-        if (!peerConnection) { stopDisplayCapture(selectedDisplay); V().toast(tLabel("share.connectionRequired"), "warn"); return; }
-        const shareScope = captureMediaScope();
-        const current = () => mediaScopeIsCurrent(shareScope) && state.serverGeneration === generation && state.activeTabID === tabID && state.pc === peerConnection;
-        let shareTransceiver = null;
-        const discardDisplay = (stream) => {
-            stopDisplayCapture(stream);
-            shareTransceiver?.stop();
-            if (state.shareVideoTransceiver === shareTransceiver) state.shareVideoTransceiver = null;
-            if (stream?.getTracks().includes(state.shareAudioSender?.track)) {
-                state.shareAudioTransceiver?.stop();
-                state.shareAudioTransceiver = null;
-                state.shareAudioSender = null;
-            }
-        };
-        const previousDisplay = state.shareStream;
-        const p = shareQuality(preset, custom, bitrateCeiling);
-        if (!p) { stopDisplayCapture(selectedDisplay); return; }
-        const selection = { preset, custom, bitrateCeiling };
-        const limits = state.mediaLimits;
-        const video = screenShareConstraints(p, limits);
-        video.displaySurface = surface === "region" ? "monitor" : surface; // 69: "monitor" | "window"
-        const gdm = { video, ...displayAudioOptions(audioMode) };
-        let display;
-        try {
-            display = selectedDisplay || await navigator.mediaDevices.getDisplayMedia(gdm);
-        } catch (e) {
-            if (!current()) return;
-            if (audioMode !== "none" && e.name !== "NotAllowedError" && e.name !== "AbortError") {
-                // A runtime can refuse display audio. Retry without audio, but
-                // never reopen the picker after cancellation or denied access.
-                try {
-                    display = await navigator.mediaDevices.getDisplayMedia({ ...gdm, ...displayAudioOptions("none") });
-                    audioMode = "none";
-                } catch (e2) {
-                    if (!current()) return;
-                    V().sysMsg(tLabel("desktop.screen.capture.failed") + (e2.message || e2.name));
-                    return;
-                }
-            } else {
-                V().sysMsg(tLabel("desktop.screen.capture.failed") + (e.message || e.name));
-                return;
-            }
-        }
-        retainDisplayCapture(display);
-        if (!current()) {
-            discardDisplay(display);
-            return;
-        }
-        audioMode = validateDisplayAudio(display, audioMode);
-        // A Region picked natively (Browser fallback): crop the new capture to
-        // the same area; without crop support nothing is shared.
-        if (surface === "region" && region && !selectedDisplay) {
-            try {
-                if (!regionSupported) throw new Error(tLabel("polish.cropNeedsUpdate"));
-                const cropped = cropDisplayStream(display, region);
-                transferDisplayCapture(display, cropped.stream);
-                display = cropped.stream;
-            } catch (error) { discardDisplay(display); V().sysMsg(tLabel("desktop.screen.capture.failed") + error.message); return; }
-        }
-        // Orientation is known only after capture: a portrait screen or window
-        // turns the preset box before the geometry crop below fixes its size.
-        // Region crops keep the unturned box.
-        const raw = surface !== "region" && surface !== "studio" ? display.getVideoTracks()[0]?.getSettings() : null;
-        if (raw?.height > raw?.width) {
-            p.portrait = true;
-            try { await display.getVideoTracks()[0].applyConstraints(screenShareConstraints(p, limits)); }
-            catch (error) { discardDisplay(display); V().sysMsg(tLabel("desktop.screen.capture.failed") + error.message); return; }
-            if (!current()) { discardDisplay(display); return; }
-        }
-        // Full-window/screen capture needs the same per-frame even geometry as
-        // region capture. GPU textures can change size without honoring the
-        // source adapter's advertised constraints (e.g. 1620 -> 1621 pixels).
-        if (regionSupported && surface !== "region" && surface !== "studio" && !displayStreamHasFrameGeometry(display)) {
-            try {
-                const aligned = cropDisplayStream(display, { x: 0, y: 0, width: 1, height: 1 }, { captureRateMultiplier: 2 });
-                transferDisplayCapture(display, aligned.stream);
-                display = aligned.stream;
-            } catch (error) {
-                discardDisplay(display);
-                V().sysMsg(tLabel("desktop.screen.capture.failed") + error.message);
-                return;
-            }
-        }
-        const screenTrack = display.getVideoTracks()[0];
-        if (!screenTrack) {
-            discardDisplay(display);
-            V().sysMsg(tLabel("desktop.screen.capture.produced.no.video.track"));
-            return;
-        }
-        if (selectedDisplay) {
-            try { await screenTrack.applyConstraints(screenShareConstraints(p, limits)); }
-            catch (error) { discardDisplay(display); V().sysMsg(tLabel("desktop.screen.capture.failed") + error.message); return; }
-            if (!current() || screenTrack.readyState === "ended") { discardDisplay(display); return; }
-        }
-        capturePreferences.set(screenTrack, { ...p, screen: true });
-        rememberVideoSenderProfile(screenTrack, p);
-        screenTrack.contentHint = preset === "text" ? "text" : "motion";
-        let shareEnded = false;
-        screenTrack.onended = () => {
-            shareEnded = true;
-            if (!current() || (state.shareStream && state.shareStream !== display)) { discardDisplay(display); return; }
-            if (state.screenSharing) {
-                doStopShare();
-                return;
-            }
-            if (state.shareStream === display) state.shareStream = null;
-            discardDisplay(display);
-        };
-
-        if (!trackFitsVideoLimits(screenTrack, state.mediaLimits)) {
-            discardDisplay(display);
-            V().sysMsg(tLabel("voice.mediaDimensionsFailed"));
-            return;
-        }
-        // Keep the current source alive while the picker is open or cancelled.
-        if (replacing) {
-            if (state.shareStream !== previousDisplay || !state.screenSharing) { discardDisplay(display); return; }
-            await doStopShare();
-            if (!current() || shareEnded || screenTrack.readyState === "ended") { discardDisplay(display); return; }
-        }
-        state.shareStream = display;
-        if (peerConnection) {
-            // The dedicated screen transceiver survives publication stops.
-            try {
-                if (!await preparePublicationUpload("screen", screenTrack, options => applyPublicationSettings("screen", screenTrack, options))) throw new DOMException("capture ended", "AbortError");
-                await queuePeerNegotiation(peerConnection, async () => {
-                    if (!current() || shareEnded) throw new DOMException("capture ended", "AbortError");
-                    try {
-                        if (!trackFitsVideoLimits(screenTrack, state.mediaLimits)) throw new Error(tLabel("voice.mediaDimensionsFailed"));
-                        shareTransceiver = state.shareVideoTransceiver;
-                        if (shareTransceiver) {
-                            // A reused sender can still be active from the previous
-                            // publication. Pause it before attaching the new source.
-                            await applySendCaps(current);
-                            if (!current() || shareEnded) throw new DOMException("capture ended", "AbortError");
-                            await shareTransceiver.sender.replaceTrack(screenTrack);
-                        }
-                        else {
-                            try {
-                                shareTransceiver = peerConnection.addTransceiver(screenTrack, { direction: "sendonly", streams: [display],
-                                    sendEncodings: initialScreenEncodings(screenTrack) });
-                            } catch {
-                                shareTransceiver = peerConnection.addTransceiver(screenTrack, { direction: "sendonly", streams: [display] });
-                            }
-                        }
-                        state.shareVideoTransceiver = shareTransceiver;
-                        await applySendCaps();
-                        if (!current() || shareEnded) throw new DOMException("capture ended", "AbortError");
-                        if (!trackFitsVideoLimits(screenTrack, state.mediaLimits)) throw new Error(tLabel("voice.mediaDimensionsFailed"));
-                        await negotiateInitialCodec("screen", screenTrack, shareTransceiver, peerConnection, generation, () => !shareEnded && state.pc === peerConnection && state.shareStream === display, tabID);
-                    } catch (error) {
-                        // Remove the candidate before the next queued offer can see it.
-                        discardDisplay(display);
-                        throw error;
-                    }
-                });
-                if (!current()) {
-                    discardDisplay(display);
-                    return;
-                }
-            } catch (e) {
-                if (!current()) {
-                    discardDisplay(display);
-                    return;
-                }
-                V().sysMsg(tLabel("desktop.publishing.screen.share.failed") + (e.message || e.name));
-                // a rollback only drops transceivers created by applying a remote
-                // description, so this one survives with its direction flip and
-                // would be re-offered — stop it to keep the dead m-line out of
-                // videoSender()'s reach.
-                discardDisplay(display);
-                state.shareStream = null;
-                applySendCaps();
-                return;
-            }
-        }
-        // (70) merge display audio as a second published audio track (the server
-        // fans out every publisher audio track) + renegotiate.
-        const displayAudio = display.getAudioTracks()[0];
-        if (displayAudio && peerConnection) {
-            if (!state.shareAudioTransceiver) {
-                let tr = null;
-                try {
-                    // addTrack would recycle one of the server's recvonly audio
-                    // m-lines and publish the share on a subscriber slot, so take a
-                    // dedicated sendonly transceiver.
-                    tr = peerConnection.addTransceiver(displayAudio, { direction: "sendonly", streams: [display],
-                        sendEncodings: [{ active: publicationUploadActive("screen", screenTrack) !== false }] });
-                    state.shareAudioTransceiver = tr;
-                    state.shareAudioSender = tr.sender;
-                    await renegotiate(peerConnection, generation);
-                    if (!current()) {
-                        discardDisplay(display);
-                        return;
-                    }
-                } catch (e) {
-                    if (!current()) {
-                        discardDisplay(display);
-                        return;
-                    }
-                    V().sysMsg(tLabel("desktop.publishing.share.audio.failed") + (e.message || e.name));
-                    // a rollback keeps this transceiver, so without the stop() the
-                    // dead track is re-offered on the next renegotiation.
-                    try { tr?.stop(); } catch { /* nothing left to stop */ }
-                    displayAudio.stop();
-                    state.shareAudioTransceiver = null;
-                    state.shareAudioSender = null;
-                }
-            } else {
-                try {
-                    state.shareAudioSender = state.shareAudioTransceiver.sender;
-                    await applySendCaps(current);
-                    if (!current() || shareEnded) { discardDisplay(display); return; }
-                    await state.shareAudioSender.replaceTrack(displayAudio);
-                    await renegotiate(peerConnection, generation);
-                    if (!current()) {
-                        discardDisplay(display);
-                        return;
-                    }
-                } catch (e) {
-                    if (!current()) {
-                        discardDisplay(display);
-                        return;
-                    }
-                    V().sysMsg(tLabel("desktop.publishing.share.audio.failed") + (e.message || e.name));
-                    displayAudio.stop();
-                }
-            }
-        }
-
-        if (!current() || shareEnded || screenTrack.readyState === "ended") {
-            if (state.shareStream === display) state.shareStream = null;
-            discardDisplay(display);
-            return;
-        }
-        // Set together with screenSharing so a stop in the start-up window
-        // still ends the Studio (doStopShare calls its onEnded).
-        studioShare = studio ? { stream: display, onEnded: studio.onEnded } : null;
-        state.screenSharing = true;
-        let shareErr;
-        try { if (!await startPublication("screen", screenTrack, () => {
-            if (state.shareStream?.getVideoTracks()[0] === screenTrack) void doStopShare();
-        })) shareErr = "capture ended"; }
-        catch (error) { shareErr = String(error); }
-        // A publication that never started is a failed start, not a Stop: the
-        // Studio keeps its session and reports the failure itself.
-        if ((!current() || shareErr) && studioShare?.stream === display) studioShare = null;
-        if (!current()) {
-            discardDisplay(display);
-            return;
-        }
-        if (shareErr) {
-            V().sysMsg(tLabel("desktop.screen.share.permission.failed") + shareErr);
-            await doStopShare();
-            return;
-        }
-        const resumeOptions = { surface, ...selection, audioMode, studio };
-        // Keep the same selection object so live quality changes are retained.
-        Object.defineProperties(resumeOptions, Object.fromEntries(["preset", "custom", "bitrateCeiling"].map(key => [key, { enumerable: true, get: () => selection[key] }])));
-        shareResume.remember(display, resumeOptions, resumeScope());
-        syncShareButton();
-        if (requestedAudioMode !== "none" && audioMode === "none") {
-            V().toast(tLabel(requestedAudioMode === "application" ? "share.applicationUnavailable" : "share.audioNotSelected"), "warn");
-        }
-        startShareStatus({ stream: display, pc: peerConnection, scope: shareScope, preset: p, surface, audioMode,
-            generation: publicationSnapshot().find(p => p.publication.slot === "screen")?.generation,
-            stop: () => { V().$("voice-screen").focus(); void doStopShare(); },
-            change: () => studio ? studio.change() : openShareDialog(true, selection.preset, audioMode, surface, selection.custom, selection.bitrateCeiling),
-            changeQuality: () => openLiveShareQuality(display, peerConnection, shareScope, p, selection),
-            reduction: () => policy.lowBandwidth ? "share.lowBandwidth" : "" });
-        // One client.log line 5 s in: whether the WebView2 encoder produced and sent anything.
-        const diagnosticSender = shareTransceiver?.sender;
-        setTimeout(() => {
-            if (state.shareStream !== display || !diagnosticSender || typeof window.go?.main?.App?.LogScreenShareDiagnostics !== "function") return;
-            diagnosticSender.getStats()
-                .then(stats => window.go.main.App.LogScreenShareDiagnostics(browserShareStatsLine(stats, publicationUploadActive("screen", screenTrack))))
-                .catch(() => {});
-        }, 5000);
-        return true;
     }
 
     let nativePending = null; // the native share whose Start is in flight
@@ -1290,9 +661,10 @@ export function createVideoPublication({ policy }) {
         if (pending.ended || !current() || state.nativeShare || state.screenSharing || track.readyState !== "live") {
             stopDisplayCapture(stream);
             stopNative();
+            if (pending.failure && current()) V().toast(tLabel(nativeFailureKey(pending.failure)), "error");
             return false;
         }
-        const native = { id, tabID, track, generation: "0", surface, audioMode, preset: { ...p, width, height }, region: source.region || null,
+        const native = { id, tabID, track, generation: "0", surface, audioMode, selection: { preset, custom, bitrateCeiling },
             studio, scenes: Promise.resolve() };
         // Go reports an audio fallback while Start is still running.
         if (pending.audio) applyNativeAudioNotice(native, pending.audio);
@@ -1333,10 +705,9 @@ export function createVideoPublication({ policy }) {
     }
 
     // startNativeStudioShare publishes a Studio program composed in Go (the
-    // native D3D11 compositor) through the native share path, with the same
-    // guards as startStudioShare. scene is the program as studio-native.js
+    // native D3D11 compositor) through the native share path. scene is the program as studio-native.js
     // builds it; later Takes go through updateNativeStudio.
-    async function startNativeStudioShare({ width, height, fps, scene, onEnded = () => {}, change = () => {}, onFallback = () => {} }) {
+    async function startNativeStudioShare({ width, height, fps, scene, onEnded = () => {}, change = () => {} }) {
         const { state } = V();
         if (updateStartupBlocked()) return false;
         if (!state.pc || state.pc.connectionState === "closed" || state.pc.connectionState === "failed") throw new Error(tLabel("share.connectionRequired"));
@@ -1346,7 +717,7 @@ export function createVideoPublication({ policy }) {
         syncShareButton();
         try {
             return !!await startNativeShare({ surface: "studio", source: { monitor: 0, window: "0", studio: true }, preset: "custom",
-                custom: { width, height, fps }, studio: { scene, onEnded, change, onFallback } });
+                custom: { width, height, fps }, studio: { scene, onEnded, change } });
         } finally {
             if (state.shareStarting === request) { state.shareStarting = null; syncShareButton(); }
         }
@@ -1368,13 +739,18 @@ export function createVideoPublication({ policy }) {
         V().toast(tLabel(reason === "system" ? "share.nativeAudioSystem" : "share.nativeAudioUnavailable"), "warn");
     }
 
-    // Go reports the native pipeline's own lifecycle: window closed, failure
-    // after one restart, minimized source (the last frame is held).
+    // Go reports the native pipeline's own lifecycle: window closed, a failure
+    // it could not recover from (with the reason), minimized source (the last
+    // frame is held).
     window.runtime?.EventsOn?.("native_share", payload => {
         let event = payload;
         if (typeof payload === "string") { try { event = JSON.parse(payload); } catch { event = null; } }
         const { state } = V();
-        if ((event?.state === "ended" || event?.state === "fallback") && nativeEventIsCurrent(event, nativePending)) { nativePending.ended = true; return; }
+        if ((event?.state === "ended" || event?.state === "failed") && nativeEventIsCurrent(event, nativePending)) {
+            nativePending.ended = true;
+            if (event.state === "failed") nativePending.failure = event.reason || "unknown";
+            return;
+        }
         if (event?.state === "audio" && nativeEventIsCurrent(event, nativePending)) { nativePending.audio = event.reason || "none"; return; }
         // A delayed event of an older share or another tab never touches this one.
         if (!event || !nativeEventIsCurrent(event, state.nativeShare)) return;
@@ -1382,135 +758,15 @@ export function createVideoPublication({ policy }) {
         else if (event.state === "camera") V().toast(tLabel(event.reason === "busy" ? "studio.nativeCameraBusy" : "studio.nativeCameraUnavailable"), "warn");
         else if (event.state === "audio") applyNativeAudioNotice(state.nativeShare, event.reason);
         else if (event.state === "ended") void doStopShare();
-        else if (event.state === "fallback" && state.nativeShare.studio) {
-            // A Studio has no browser captures to fall back to: it ends, and
-            // its next session uses Browser capture.
-            const { studio } = state.nativeShare;
+        else if (event.state === "failed") {
+            // No other capture path: the share (and a Studio with it) ends with the reason.
             void doStopShare();
-            V().toast(tLabel("studio.nativeFallback"), "warn");
-            try { studio.onFallback(); } catch { /* the share already ended */ }
-        } else if (event.state === "fallback") {
-            const { surface, preset, audioMode, region } = state.nativeShare;
-            // Another startup owns the share slot: only end this one.
-            if (state.shareStarting || state.shareStopping) { void doStopShare(); return; }
-            const request = {}; state.shareStarting = request; syncShareButton();
-            const scope = captureMediaScope();
-            void doStopShare().then(() => {
-                if (state.shareStarting !== request || state.screenSharing || !mediaScopeIsCurrent(scope)) return;
-                V().toast(tLabel("share.nativeFallback"), "warn");
-                // Some runtimes need a user gesture for the browser picker; a refusal leaves the share off.
-                return startShare({ surface, preset: "custom", custom: { width: preset.width, height: preset.height, fps: preset.fps },
-                    bitrateCeiling: preset.bitrateCeiling || 0, audioMode, region });
-            }).catch(() => {}).finally(() => { if (state.shareStarting === request) { state.shareStarting = null; syncShareButton(); } });
+            V().toast(tLabel(nativeFailureKey(event.reason)), "error");
         }
     });
 
-    // startStudioShare publishes the Studio's stable program stream through
-    // the same guarded screen publication as an ordinary share: the media
-    // session attached the encrypted transform to the share transceiver, so
-    // encryption happens after encode; capture limits, caps, codec policy and
-    // stop handling are the ordinary ones. The Studio never touches a sender.
-    // A scene change later changes pixels only, never this track.
-    async function startStudioShare(stream, { width, height, fps, onEnded = () => {}, change = () => {} }) {
-        const { state } = V();
-        if (updateStartupBlocked()) return false;
-        if (!state.pc || state.pc.connectionState === "closed" || state.pc.connectionState === "failed") throw new Error(tLabel("share.connectionRequired"));
-        if (state.shareStarting || state.shareStopping || state.screenSharing) throw new Error(tLabel("studio.shareBusy"));
-        const request = {};
-        state.shareStarting = request;
-        syncShareButton();
-        try {
-            return !!await startShare({ surface: "studio", preset: "custom", custom: { width, height, fps }, bitrateCeiling: 0,
-                audioMode: stream.getAudioTracks().length ? "system" : "none", selectedDisplay: stream, studio: { onEnded, change } });
-        } finally {
-            if (state.shareStarting === request) { state.shareStarting = null; syncShareButton(); }
-        }
-    }
-
-    function studioShareActive(stream) {
-        const pending = shareResume.pending();
-        return (!!studioShare && V().state.screenSharing && (!stream || studioShare.stream === stream)) ||
-            (!!pending?.options.studio && (!stream || pending.stream === stream));
-    }
-
-    function openLiveShareQuality(stream, pc, scope, profile, selection) {
-        const { state } = V();
-        const track = stream.getVideoTracks()[0];
-        const current = () => mediaScopeIsCurrent(scope) && state.pc === pc && state.shareStream === stream && track.readyState === "live";
-        if (!current() || state.shareQualityUpdating) return;
-        const overlay = document.createElement("div");
-        overlay.className = "dlg-overlay";
-        overlay.innerHTML = `<div class="dlg share-dlg"><h3>${tLabel("share.changeQuality")}</h3>
-            <p class="set-hint">${tLabel("share.qualityHelp")}</p><div class="live-share-quality"></div>
-            <p class="live-share-quality-error warn" role="alert" hidden></p>
-            <div class="dlg-buttons"><button type="button" class="dlg-cancel">${tLabel("desktop.cancel")}</button>
-            <button type="button" class="dlg-ok primary">${tLabel("share.applyQuality")}</button></div></div>`;
-        const controls = createShareQualityControls(`live-share-quality-${++shareDialogID}`, selection);
-        overlay.querySelector(".live-share-quality").append(controls.element);
-        overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
-        overlay.querySelector(".dlg-ok").onclick = async () => {
-            const selected = controls.read(), next = selected && shareQuality(selected.preset, selected.custom, selected.bitrateCeiling);
-            if (!next || !current() || state.shareQualityUpdating) return;
-            const bitrateOnly = selected.preset === selection.preset &&
-                ["width", "height", "fps", "original"].every(key => next[key] === profile[key]);
-            if (bitrateOnly && (next.bitrateCeiling || 0) === (profile.bitrateCeiling || 0)) { overlay.remove(); return; }
-            const operation = {};
-            state.shareQualityUpdating = operation;
-            const alive = () => current() && state.shareQualityUpdating === operation;
-            overlay.dataset.blocking = "true";
-            const disabledStates = [...overlay.querySelectorAll("button, input, select")].map(control => [control, control.disabled]);
-            for (const [control] of disabledStates) control.disabled = true;
-            refreshShareStatus();
-            try {
-                await queuePeerNegotiation(pc, async () => {
-                    if (!alive()) return;
-                    // The captured source keeps its orientation across every quality update.
-                    if (capturePreferences.get(track)?.portrait) next.portrait = true;
-                    if (bitrateOnly) {
-                        if (!await applyScreenBitrate(track, next, alive) || !alive()) return;
-                        for (const key of Object.keys(profile)) delete profile[key];
-                        Object.assign(profile, next);
-                        Object.assign(selection, selected);
-                        return;
-                    }
-                    const previous = track.getConstraints(), hint = track.contentHint, preferred = capturePreferences.get(track);
-                    try {
-                        await track.applyConstraints({ ...previous, ...screenShareConstraints(next, state.mediaLimits) });
-                        if (!alive()) return;
-                        if (!trackFitsVideoLimits(track, state.mediaLimits)) throw new Error(tLabel("voice.mediaDimensionsFailed"));
-                        capturePreferences.set(track, { ...next, screen: true });
-                        rememberVideoSenderProfile(track, next);
-                        track.contentHint = selected.preset === "text" ? "text" : "motion";
-                        await applySendCaps(alive);
-                    } catch (error) {
-                        if (!alive()) return;
-                        capturePreferences.set(track, preferred);
-                        rememberVideoSenderProfile(track, preferred);
-                        track.contentHint = hint;
-                        let restored = true;
-                        try { await track.applyConstraints(previous); if (alive()) await applySendCaps(alive); }
-                        catch { restored = false; }
-                        throw new Error(tLabel(restored ? "share.qualityFailed" : "share.qualityRestoreFailed", { error: error.message || String(error) }));
-                    }
-                    if (!alive()) return;
-                    for (const key of Object.keys(profile)) delete profile[key];
-                    Object.assign(profile, next);
-                    Object.assign(selection, selected);
-                });
-                overlay.remove();
-            } catch (error) {
-                if (alive() && overlay.isConnected) {
-                    const notice = overlay.querySelector(".live-share-quality-error");
-                    notice.hidden = false; notice.textContent = error.message || String(error);
-                }
-            } finally {
-                if (state.shareQualityUpdating === operation) state.shareQualityUpdating = null;
-                delete overlay.dataset.blocking;
-                for (const [control, disabled] of disabledStates) control.disabled = disabled;
-                refreshShareStatus();
-            }
-        };
-        mountServerDialog(overlay);
+    function studioShareActive() {
+        return !!studioShare && V().state.screenSharing;
     }
 
     // receiverCount is the set of users the SFU could be forwarding my video to:
@@ -1527,7 +783,8 @@ export function createVideoPublication({ policy }) {
     // my video sender means a subscriber's decoder really is consuming this
     // stream; zero only means nobody had to ask, hence the softer wording.
     async function videoIsBeingDecoded(what) {
-        const sender = what === "screen" ? V().state.shareVideoTransceiver?.sender : videoSender();
+        // A native screen share's RTCP reaches Go: only the camera has local evidence.
+        const sender = what === "screen" ? null : videoSender();
         if (!sender || !V().state.pc) return false;
         try {
             const stats = await sender.getStats();
@@ -1592,7 +849,6 @@ export function createVideoPublication({ policy }) {
     // doStopShare stops only display tracks; camera publication is independent.
     async function doStopShare() {
         const { state } = V();
-        cancelShareResume();
         // A native share ends in Go even when another path already reset the share state.
         const native = state.nativeShare;
         state.nativeShare = null;
@@ -1607,26 +863,15 @@ export function createVideoPublication({ policy }) {
         state.shareStopping = true;
         state.screenSharing = false;
         syncShareButton();
-        if (state.shareAudioSender && state.pc) {
-            // The transceiver stays (stopping the track silences it); removing it
-            // would need another renegotiation.
-            state.shareAudioSender.track?.stop();
-            state.shareAudioSender.replaceTrack(null).catch(() => {});
-            state.shareAudioSender = null;
-        }
-        const screenSender = native ? null : state.shareVideoTransceiver?.sender;
-        if (screenSender) void screenSender.replaceTrack(null).catch(() => {});
         if (state.shareStream) {
             stopDisplayCapture(state.shareStream);
             state.shareStream = null;
         }
-        applySendCaps();
         syncCameraButton();
         // The Studio owns its captures: a stopped program ends the Studio.
         try { studio?.onEnded(); } catch { /* the share stop proceeds */ }
         try {
             await stopPublication("screen");
-            if (pc && current() && !native) await renegotiate(pc, generation);
         } catch (error) {
             if (current()) V().sysMsg(tLabel("desktop.stopping.screen.share.failed") + (error.message || error.name));
         } finally {
@@ -1797,6 +1042,6 @@ export function createVideoPublication({ policy }) {
         }
     }
 
-    return { applyVideoLimits, shareToggle, resetCameraState, cameraToggle, applySendCaps, adaptScreenResolution, retryVideoHardware, syncCameraButton, syncShareButton, startStudioShare, startNativeStudioShare, updateNativeStudio, studioShareActive, stopShare: doStopShare,
-        pauseShareForReconnect, cancelShareResume, shareResumePending, resumeShareAfterReconnect, updateShareSettings, openResumedShare, openCallShareDialog };
+    return { applyVideoLimits, shareToggle, resetCameraState, cameraToggle, applySendCaps, retryVideoHardware, syncCameraButton, syncShareButton, startNativeStudioShare, updateNativeStudio, studioShareActive, stopShare: doStopShare,
+        endShareForReconnect, updateShareSettings, openResumedShare, openCallShareDialog };
 }

@@ -26,6 +26,9 @@ func (*Session) Close()              {}
 // SetScene does nothing off Windows.
 func (*Session) SetScene(Scene, []*image.NRGBA) {}
 
+// Supported is false off Windows.
+func Supported() bool { return false }
+
 // Cameras is empty off Windows.
 func Cameras() []Camera { return nil }
 

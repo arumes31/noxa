@@ -90,13 +90,61 @@ func TestNativeFrameDiagLogsEachReasonOnce(t *testing.T) {
 	}
 }
 
-func TestBrowserShareLogLineIsBoundedAndEscaped(t *testing.T) {
-	if got := browserShareLogLine("a\nb"); got != `a\nb` {
-		t.Fatalf("escaped = %q", got)
+func TestNativeStallIdleFollowsTheCurrentKey(t *testing.T) {
+	cases := []struct {
+		name                         string
+		upload, minimized, keyActive bool
+		generation                   uint64
+		idle                         bool
+	}{
+		{"uploading with a key", true, false, true, 3, false},
+		{"no active video key", true, false, false, 3, true},
+		{"paused", false, false, true, 3, true},
+		{"not yet published", true, false, true, 0, true},
+		{"minimized", true, true, true, 3, true},
 	}
-	long := strings.Repeat("é", browserShareLogBytes) // 2 bytes each
-	got := browserShareLogLine(long)
-	if len(got) > browserShareLogBytes+3 || !strings.HasSuffix(got, "é...") {
-		t.Fatalf("cut to %d bytes: %q", len(got), got[len(got)-8:])
+	for _, c := range cases {
+		if got := nativeStallIdle(c.upload, c.generation, c.minimized, c.keyActive); got != c.idle {
+			t.Errorf("%s: idle %v, want %v", c.name, got, c.idle)
+		}
+	}
+	// A key that arrived after an earlier no-key drop keeps the watchdog armed:
+	// video that then stops is a stall, whatever the noKey counter did.
+	keys := framecrypt.NewEncryptor()
+	n := &nativeShare{keys: keys}
+	if _, ok := n.keys.Active(); ok {
+		t.Fatal("key active before any key")
+	}
+	if err := keys.SetKey(1, 1, make([]byte, 32)); err != nil {
+		t.Fatal(err)
+	}
+	if err := keys.Activate(1); err != nil {
+		t.Fatal(err)
+	}
+	_, ok := n.keys.Active()
+	t0 := time.Unix(1000, 0)
+	state := nativeStallState{Offered: t0, Connected: t0, LastVideo: t0, Idle: nativeStallIdle(true, 3, false, ok)}
+	if nativeStallReason(state, t0.Add(nativeVideoTimeout)) == "" {
+		t.Fatal("video stopped with an active key, but no stall")
+	}
+}
+
+func TestNativeStallDecisionIsRevalidated(t *testing.T) {
+	session, sender := &nativecapture.Session{}, &nativesender.Sender{}
+	n := &nativeShare{stop: make(chan struct{}), session: session, sender: sender, upload: true, generation: 4}
+	seen := nativeObserved{session: session, sender: sender, upload: true, generation: 4}
+	for name, change := range map[string]func(){
+		"sender replaced":    func() { n.sender = &nativesender.Sender{} },
+		"session restarted":  func() { n.session = nil }, // zero-size off Windows: distinct values can compare equal
+		"upload paused":      func() { n.upload = false },
+		"paused and resumed": func() { n.uploadRev += 2 },
+		"new publication":    func() { n.generation = 5 },
+	} {
+		n.session, n.sender, n.upload, n.uploadRev, n.generation = session, sender, true, 0, 4
+		change()
+		// n.cm is nil: committing the stale decision would panic in close.
+		if n.failIfCurrent(seen, "stalled") || n.failed.Load() {
+			t.Fatalf("%s: stale stall decision committed", name)
+		}
 	}
 }

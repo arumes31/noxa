@@ -189,26 +189,3 @@ export function videoSenderFrameRateReduced(sample) {
     return expected > 0 && sample?.sample_ms >= 1000 && Number.isFinite(sample.sent_fps) && sample.sent_fps < expected * 0.75;
 }
 
-// One local client.log line about the Browser-mode screen sender a few
-// seconds into a share: did the WebView2 encoder produce and send anything?
-// Unlike the diagnostics rows above it keeps the encoder description (it
-// names the GPU encoder in use); every string is cut and limited to ASCII.
-export function browserShareStatsLine(stats, uploadActive = null) {
-    const text = (value, max = 120) => JSON.stringify(String(value ?? "").replace(/[^\x20-\x7e]/g, "?").slice(0, max));
-    const count = value => counter(value) ?? "?";
-    const head = `screen sender upload=${uploadActive === true ? "on" : uploadActive === false ? "off" : "?"}`;
-    const rows = [];
-    let packets = 0;
-    for (const stat of stats?.values?.() || []) {
-        if (stat?.type !== "outbound-rtp" || (stat.kind || stat.mediaType) !== "video") continue;
-        const codec = stats.get(stat.codecId);
-        packets += counter(stat.packetsSent) ?? 0;
-        rows.push(`rid=${text(stat.rid || "", 8)} framesEncoded=${count(stat.framesEncoded)} framesSent=${count(stat.framesSent)}` +
-            ` packetsSent=${count(stat.packetsSent)} size=${dimension(stat.frameWidth) ?? "?"}x${dimension(stat.frameHeight) ?? "?"}` +
-            ` encoder=${text(stat.encoderImplementation)} limit=${text(stat.qualityLimitationReason, 16)}` +
-            ` codec=${text(codec?.mimeType, 24)} fmtp=${text(codec?.sdpFmtpLine, 160)}`);
-        if (rows.length === 4) break;
-    }
-    if (!rows.length) return `${head} no outbound-rtp`;
-    return `${head}${packets ? "" : " zero packets"} ${rows.join(" | ")}`;
-}

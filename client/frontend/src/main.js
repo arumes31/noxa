@@ -73,8 +73,8 @@ import {
     initVideo, videoTrackAdded, videoTrackRemoved, videoSpeaking,
     videoRefreshNames, clearVideoGrid, shareToggle, setLowBandwidth, isLowBandwidth,
     parseTrackID, SLOT_SCREEN_AUDIO, cameraToggle, resetCameraState,
-    pauseShareForReconnect, cancelShareResume, shareResumePending, resumeShareAfterReconnect,
-    renegotiate, answerRemoteOffer, queuePeerNegotiation, applyVideoLimits, adaptScreenResolution, retryVideoHardware, videoPresentationDiagnostics,
+    endShareForReconnect,
+    renegotiate, answerRemoteOffer, queuePeerNegotiation, applyVideoLimits, retryVideoHardware, videoPresentationDiagnostics,
 } from "./video.js";
 import * as chatUI from "./chat-ui.js";
 import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, removeStreamTrack, receiveShareAudio, removeShareAudio, refreshStreamUploads, streamReceiverRecoveryTarget, noteResumeWatch } from "./stream-controls.js";
@@ -220,14 +220,14 @@ const recoverVoiceTransport = createVoiceTransportRecovery({ state,
     allowed: () => !updateStartupBlocked() && intentionalVoiceDisconnectScope !== voiceConnectionScope(),
     abort: () => {
         // Cancellation releases startup ownership and fences any late capture.
-        pauseShareForReconnect();
+        endShareForReconnect();
         resetVoiceSession({ retainMedia: true });
     },
     rebuild: async (_pc, current) => {
         if (!current()) return;
-        // Retain only the already authorized screen/Studio capture. A fresh
-        // peer refreshes ICE and E2EE; camera capture is never auto-started.
-        pauseShareForReconnect();
+        // A fresh peer refreshes ICE and E2EE; a native share ends with the
+        // old peer and camera capture is never auto-started.
+        endShareForReconnect();
         resetVoiceSession({ retainMedia: true });
         await ensureVoiceForChannel();
     },
@@ -255,8 +255,7 @@ startVoiceDiagnostics({
     state,
     recover: async (pc, stats) => {
         await recoverVoice(pc, stats);
-        await Promise.all([adaptScreenResolution(pc, stats).catch(() => {}),
-            recoverVideoSender(pc, stats), recoverVideoReceiver(pc, stats)]);
+        await Promise.all([recoverVideoSender(pc, stats), recoverVideoReceiver(pc, stats)]);
     },
     output: () => ({ state: remoteChain.ctx?.state || "unavailable", latencyMS: Number.isFinite(remoteChain.ctx?.outputLatency) ? remoteChain.ctx.outputLatency * 1000 : null }),
     bridge: (tabID, report) => window.go?.main?.App.ReportVoiceDiagnosticsForTab?.(tabID, report),
@@ -1034,7 +1033,6 @@ const tabReconnects = createTabReconnects({
     },
 });
 function cancelOverlayRetries() {
-    cancelShareResume();
     const tabID = state.activeTabID;
     if (state.reconnectInFlight) return;
     tabReconnects.cancel(tabID);
@@ -1075,7 +1073,6 @@ function startTabReconnect(tabID) {
 window.runtime.EventsOn("tab_disconnected", startTabReconnect);
 window.runtime.EventsOn("tab_closed", tabID => {
     tabID = String(tabID);
-    if (tabID === state.activeTabID) cancelShareResume();
     tabReconnects.cancel(tabID);
     connectionOverlay.forget(tabID);
     reconnectNotices.delete(tabID);
@@ -1083,11 +1080,9 @@ window.runtime.EventsOn("tab_closed", tabID => {
     state.tabConnects.delete(tabID);
 });
 window.runtime.EventsOn("tab_reconnect_disabled", tabID => {
-    if (String(tabID) === state.activeTabID) cancelShareResume();
     tabReconnects.cancel(String(tabID));
 });
 window.runtime.EventsOn("tab_reset", tabID => {
-    if (String(tabID || "") !== state.activeTabID) cancelShareResume();
     const cue = pendingIntentionalDisconnectCue;
     if (cue) {
         // The native intentional edge precedes its replacement reset. A
@@ -1206,8 +1201,7 @@ window.runtime.EventsOn("intentional_disconnect", (tabID) => {
 window.addEventListener("pagehide", () => { pendingIntentionalDisconnectCue = null; });
 
 window.runtime.EventsOn("disconnected", () => {
-    if (state.lastConnect && autoReconnectEnabled()) pauseShareForReconnect();
-    else cancelShareResume();
+    endShareForReconnect();
     // A selected server that drops takes over the one foreground retry
     // timer. Otherwise the previous server's callback can cancel this new
     // timer and keep spending its budget on the wrong connection.
@@ -2333,7 +2327,6 @@ let intentionalVoiceDisconnectScope = "";
 const voiceConnectionScope = () => JSON.stringify([state.activeTabID, state.serverGeneration, state.sessionGeneration]);
 
 function stopVoiceForDisconnect() {
-    cancelShareResume();
     intentionalVoiceDisconnectScope = voiceConnectionScope();
     resetVoiceSession();
 }
@@ -2448,7 +2441,6 @@ function ensureVoiceForChannel() {
     if (voiceStartPromise) return voiceStartPromise;
     if (state.pc) {
         if (!streamSessionIsCurrent(state.pc)) {
-            cancelShareResume();
             // A channel move retains microphone voice, but publication and
             // viewing consent belong to the channel that granted them.
             for (const track of state.localStream?.getVideoTracks() || []) { track.stop(); state.localStream.removeTrack(track); }
@@ -2784,7 +2776,6 @@ async function startVoiceAttempt(expectedEpoch, startup) {
     startMicMeter(state.localStream);
     applyVoiceState();
     setVoiceStatus("voice on");
-    void resumeShareAfterReconnect();
     return true;
 }
 
@@ -3063,9 +3054,9 @@ function teardownVoice({ retainMedia = false } = {}) {
     state.shareVideoTransceiver = null;
     state.shareStarting = null;
     state.shareStopping = false;
-    // Studio captures, audio graph, timers and canvases end with the session
-    // (its published clone was stopped with the share stream above).
-    if (!shareResumePending()) disposeStudio();
+    // Studio captures, timers and canvases end with the session (its native
+    // share was stopped with the share stream above).
+    disposeStudio();
     detachRemoteAudio();
     const closingPeer = state.pc;
     if (closingPeer) { closingPeer.close(); state.pc = null; }

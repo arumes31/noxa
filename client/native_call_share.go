@@ -64,7 +64,9 @@ func (m *connManager) callKeys(callID, slot string) *framecrypt.Encryptor {
 
 // nativeCallAvailable: a call share needs no server peer, only Windows
 // capture and the session's encrypted media.
-func nativeCallAvailable(e2ee bool) bool { return runtime.GOOS == "windows" && e2ee }
+func nativeCallAvailable(e2ee bool) bool {
+	return runtime.GOOS == "windows" && nativecapture.Supported() && e2ee
+}
 
 // callRelayServers is the relay-only ICE configuration of a call's screen
 // sub-connection, the webview's privateCallRTCConfiguration: TURN entries
@@ -338,7 +340,7 @@ func (c *nativeCall) connect(p *nativeCallPeer) error {
 
 // lost reconnects a viewer whose connection failed (its webview closed the
 // sub-connection, a relay failure); nativeReconnectLimit consecutive
-// failures fall back to Browser capture.
+// failures end the share.
 func (c *nativeCall) lost(p *nativeCallPeer, link *nativeCallLink) {
 	c.mu.Lock()
 	if c.closed || p.closed || p.link != link {
@@ -355,7 +357,7 @@ func (c *nativeCall) lost(p *nativeCallPeer, link *nativeCallLink) {
 			_ = sender.Close()
 		}
 		if attempt > nativeReconnectLimit {
-			c.share.fallback("peer")
+			c.share.fail("peer")
 			return
 		}
 		select {

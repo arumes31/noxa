@@ -5,7 +5,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"unsafe"
 
@@ -35,34 +34,6 @@ type boostedProcess struct {
 	gpu int32
 }
 
-// webViewProcesses returns this process and every msedgewebview2.exe below it
-// (browser, GPU, utility/capture and the renderer running the E2EE worker).
-func webViewProcesses() ([]uint32, error) {
-	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = windows.CloseHandle(snapshot) }()
-	children := map[uint32][]uint32{}
-	names := map[uint32]string{}
-	entry := windows.ProcessEntry32{Size: uint32(unsafe.Sizeof(windows.ProcessEntry32{}))}
-	for err = windows.Process32First(snapshot, &entry); err == nil; err = windows.Process32Next(snapshot, &entry) {
-		children[entry.ParentProcessID] = append(children[entry.ParentProcessID], entry.ProcessID)
-		names[entry.ProcessID] = strings.ToLower(windows.UTF16ToString(entry.ExeFile[:]))
-	}
-	self := windows.GetCurrentProcessId()
-	out := []uint32{self}
-	for queue := []uint32{self}; len(queue) > 0; queue = queue[1:] {
-		for _, child := range children[queue[0]] {
-			if names[child] == "msedgewebview2.exe" && child != self {
-				out = append(out, child)
-				queue = append(queue, child)
-			}
-		}
-	}
-	return out, nil
-}
-
 func applyCaptureBoost(on bool) error {
 	captureBoostRestoreMu.Lock()
 	defer captureBoostRestoreMu.Unlock()
@@ -74,12 +45,8 @@ func applyCaptureBoost(on bool) error {
 		}
 		return errors.Join(errs...)
 	}
-	pids, err := webViewProcesses()
-	if err != nil {
-		return err
-	}
 	var errs []error
-	for _, pid := range pids {
+	for _, pid := range []uint32{windows.GetCurrentProcessId()} {
 		if _, done := captureBoostRestoreState[pid]; done {
 			continue
 		}
@@ -110,9 +77,9 @@ func boostProcess(pid uint32) (boostedProcess, error) {
 	var gpuErr error
 	// #nosec G103 -- the call writes one D3DKMT_SCHEDULINGPRIORITYCLASS.
 	if status, _, _ := procGetGPUPriorityClass.Call(uintptr(handle), uintptr(unsafe.Pointer(&gpu))); status != 0 {
-		// Sandboxed WebView2 processes (renderer, storage utility) answer
-		// STATUS_INVALID_PARAMETER: they have no GPU scheduling context. They
-		// still get the CPU boost; only other statuses are worth a log line.
+		// A process without a GPU scheduling context answers
+		// STATUS_INVALID_PARAMETER. It still gets the CPU boost; only other
+		// statuses are worth a log line.
 		if uint32(status) != statusInvalidParameter {
 			gpuErr = fmt.Errorf("D3DKMTGetProcessSchedulingPriorityClass pid %d: NTSTATUS 0x%08X", pid, uint32(status))
 		}

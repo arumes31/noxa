@@ -3,9 +3,8 @@ import { t } from "./i18n.js";
 import { icon } from "./icons.js";
 import { getUserShareVolume, isUserShareMuted, onShareAudioChange, setUserShareMuted, setUserShareVolume } from "./audio.js";
 import { applyCameraPreview } from "./camera-capture.js";
-import { displayAudioOptions, validateDisplayAudio } from "./display-audio.js";
 import { CALL_E2EE_MARKER, announcesCallE2EE } from "./call-media-e2ee.js";
-import { nativeStandInStream, screenCaptureBackend } from "./native-share.js";
+import { nativeStandInStream, nativeFailureKey } from "./native-share.js";
 
 const sources = ["camera", "screen"];
 const liveTrack = (capture, kind) => capture?.stream.getTracks().find(track => track.kind === kind && track.readyState === "live") || null;
@@ -13,6 +12,17 @@ const liveTrack = (capture, kind) => capture?.stream.getTracks().find(track => t
 // screen sub-connections (Go), never the main connection's screen slots.
 const sentTrack = (capture, kind) => capture?.native ? null : liveTrack(capture, kind);
 const app = () => window.go?.main?.App;
+
+/**
+ * Why a screen share into the call is refused, as an i18n key, or "": every
+ * accepted participant must view native shares, which arrive on a screen
+ * sub-connection only apps advertising "screen-sub" open.
+ * peers: the accepted participants' peer objects.
+ */
+export function callShareRefusal(peers) {
+    if (peers.some(peer => peer.screenSubSupported === false)) return "call.media.viewerTooOld";
+    return peers.length && peers.every(peer => peer.screenSubSupported === true) ? "" : "call.media.shareNotReady";
+}
 
 // Reserve separate slots in the first offer. Later camera/screen toggles use
 // replaceTrack, avoiding concurrent renegotiation across a group-call mesh.
@@ -38,7 +48,7 @@ export function createCallMedia(owner, { current, acceptedPeer, label, report, r
     const grid = document.createElement("div"); grid.className = "call-media-grid";
     window.addEventListener("noxa-camera-preferences-changed", updateGrid);
     let audioMode = "none";
-    let picking = false; // noXa's picker is open (Native mode)
+    let picking = false; // noXa's share picker is open
     let pendingNative = null; // the native share whose Start is in flight
     let nativeTargets = "";
     const offNative = window.runtime?.EventsOn?.("native_share", nativeEvent);
@@ -141,30 +151,24 @@ export function createCallMedia(owner, { current, acceptedPeer, label, report, r
     // isActive reports a live or pending capture for source.
     const isActive = source => !!captures[source] || !!requests[source] || (source === "screen" && picking);
     const acceptedPeers = () => [...owner.peers].filter(([uid]) => acceptedPeer(owner, uid));
-    // Native only when every accepted peer's negotiation advertised the
-    // screen sub-connection; older peers keep the Browser path.
-    const nativeEligible = () => {
-        const peers = acceptedPeers();
-        return screenCaptureBackend() === "native" && typeof app()?.StartNativeCallShareForTab === "function"
-            && peers.length > 0 && peers.every(([, peer]) => peer.screenSubSupported === true);
-    };
+    const refusal = () => callShareRefusal(acceptedPeers().map(([, peer]) => peer));
     // Follows membership: a joiner gets a sub-connection once its support is
-    // known; a joiner without it could not see the share (Browser fallback).
+    // known; a joiner whose app cannot view native shares ends the share.
     function syncNativeTargets() {
         const native = captures.screen?.native;
         if (!native || !canPublish()) return;
         const peers = acceptedPeers();
-        if (peers.some(([, peer]) => peer.screenSubSupported === false)) { fallbackNative(); return; }
+        if (peers.some(([, peer]) => peer.screenSubSupported === false)) { stopNative("call.media.viewerTooOld"); return; }
         const targets = peers.filter(([, peer]) => peer.screenSubSupported).map(([uid]) => uid).sort();
         if (targets.join(" ") === nativeTargets) return;
         nativeTargets = targets.join(" ");
         void Promise.resolve().then(() => app().UpdateNativeCallShareTargetsForTab(native.tabID, native.id, targets)).catch(() => {});
     }
-    function fallbackNative() {
+    // stopNative ends the native share with a notice (an i18n key).
+    function stopNative(notice) {
         if (!captures.screen?.native) return;
         stop("screen");
-        window.__noxa.toast(t("share.nativeFallback"), "warn");
-        void start("screen", { browser: true });
+        window.__noxa.toast(t(notice), "error");
     }
     // Go's lifecycle events of this call's native share.
     function nativeEvent(payload) {
@@ -172,7 +176,7 @@ export function createCallMedia(owner, { current, acceptedPeer, label, report, r
         if (typeof payload === "string") { try { event = JSON.parse(payload); } catch { return; } }
         const ours = capture => !!capture?.native && event?.share === capture.native.id && event.tab === capture.native.tabID;
         if (ours(pendingNative)) {
-            if (event.state === "ended" || event.state === "fallback") pendingNative.ended = true;
+            if (event.state === "ended" || event.state === "failed") { pendingNative.ended = true; pendingNative.failure = event.state === "failed" ? event.reason || "unknown" : ""; }
             else if (event.state === "audio") pendingNative.audio = event.reason || "none";
             return;
         }
@@ -180,7 +184,7 @@ export function createCallMedia(owner, { current, acceptedPeer, label, report, r
         if (event.state === "minimized") window.__noxa.toast(t("share.nativeMinimized"), "warn");
         else if (event.state === "audio") nativeAudioNotice(event.reason);
         else if (event.state === "ended") stop("screen");
-        else if (event.state === "fallback") fallbackNative();
+        else if (event.state === "failed") stopNative(nativeFailureKey(event.reason));
     }
     function nativeAudioNotice(reason) {
         window.__noxa.toast(t(reason === "system" ? "share.nativeAudioSystem" : "share.nativeAudioUnavailable"), "warn");
@@ -209,22 +213,27 @@ export function createCallMedia(owner, { current, acceptedPeer, label, report, r
         if (capture.ended || requests.screen !== request || !canPublish()) {
             capture.stop();
             if (requests.screen === request) { requests.screen = null; if (current(owner)) render(owner); }
+            if (capture.failure && current(owner)) window.__noxa.toast(t(nativeFailureKey(capture.failure)), "error");
             return false;
         }
         captures.screen = capture; requests.screen = null; nativeTargets = targets.join(" ");
+        // A participant who joined while Start was pending gets its sub-connection now.
+        syncNativeTargets();
         if (capture.audio) nativeAudioNotice(capture.audio);
         await syncPeers().catch(report);
         if (captures.screen === capture) { updateGrid(); render(owner); }
         return true;
     }
-    // Native mode: noXa's picker (one confirmation, no WebView2 picker).
+    // noXa's share picker (one confirmation); refused while a participant
+    // cannot view native shares.
     async function pickNative() {
+        const reason = refusal();
+        if (reason) { window.__noxa.toast(t(reason), "warn"); return; }
         picking = true; render(owner);
         try {
             const { openCallShareDialog } = await import("./video.js");
             if (!canPublish()) { picking = false; return; }
             openCallShareDialog({ audio: audioMode, startNative,
-                startDisplay: (stream, chosen) => start("screen", { stream, audioMode: chosen }),
                 onClose: () => { picking = false; if (current(owner)) render(owner); } });
         } catch (error) { picking = false; if (current(owner)) { render(owner); report(error); } }
     }
@@ -234,54 +243,26 @@ export function createCallMedia(owner, { current, acceptedPeer, label, report, r
         await start(source);
     }
     // start only ever turns source on: an active or pending capture is kept,
-    // so a repeated "start video" intent cannot switch the camera off.
-    // stream: a capture noXa's picker already took, with its audio choice;
-    // browser skips the picker (a native share's Browser fallback).
-    async function start(source, { stream: picked = null, audioMode: chosen, browser = false } = {}) {
-        if (!canPublish() || captures[source] || requests[source] || (!picked && isActive(source))) { stopDisplayCapture(picked); return false; }
-        if (source === "screen" && !picked && !browser && nativeEligible()) { await pickNative(); return false; }
-        if (chosen) audioMode = chosen;
+    // so a repeated "start video" intent cannot switch the camera off. The
+    // screen opens noXa's picker, which starts the share natively.
+    async function start(source) {
+        if (!canPublish() || isActive(source)) return false;
+        if (source === "screen") { await pickNative(); return false; }
         const request = { controller: new AbortController() }; requests[source] = request; render(owner);
-        const requestedAudioMode = audioMode;
-        let captureAudioMode = requestedAudioMode;
         let capture;
         try {
-            if (source === "camera") {
-                const { captureCamera } = await import("./camera-capture.js");
-                if (!canPublish() || requests[source] !== request) return;
-                capture = await captureCamera(window.__noxa.state.settings || {}, undefined, { signal: request.controller.signal });
-            } else {
-                const video = { frameRate: { ideal: 15, max: 30 } };
-                if (captureAudioMode === "application") video.displaySurface = "window";
-                let stream = picked;
-                try {
-                    stream ||= await navigator.mediaDevices.getDisplayMedia({ video, ...displayAudioOptions(captureAudioMode) });
-                } catch (error) {
-                    if (!canPublish() || requests[source] !== request) return;
-                    if (captureAudioMode === "none" || error.name === "NotAllowedError" || error.name === "AbortError") throw error;
-                    stream = await navigator.mediaDevices.getDisplayMedia({ video, ...displayAudioOptions("none") });
-                    captureAudioMode = "none";
-                }
-                retainDisplayCapture(stream);
-                capture = { stream, stop: () => stopDisplayCapture(stream) };
-                if (!canPublish() || requests[source] !== request) { capture.stop(); return; }
-                audioMode = validateDisplayAudio(stream, captureAudioMode);
-            }
-            if (!canPublish() || requests[source] !== request) { capture.stop(); return; }
+            const { captureCamera } = await import("./camera-capture.js");
+            if (!canPublish() || requests[source] !== request) return false;
+            capture = await captureCamera(window.__noxa.state.settings || {}, undefined, { signal: request.controller.signal });
+            if (!canPublish() || requests[source] !== request) { capture.stop(); return false; }
             const track = liveTrack(capture, "video");
             if (!track) throw new Error(t("call.media.noVideo"));
             captures[source] = capture; requests[source] = null;
             track.addEventListener("ended", () => { if (captures[source] === capture) stop(source); }, { once: true });
             await syncPeers();
-            if (canPublish() && captures[source] === capture) {
-                updateGrid(); render(owner);
-                if (source === "screen" && requestedAudioMode !== "none" && audioMode === "none") {
-                    window.__noxa.toast(t(requestedAudioMode === "application" ? "share.applicationUnavailable" : "share.audioNotSelected"), "warn");
-                }
-            }
+            if (canPublish() && captures[source] === capture) { updateGrid(); render(owner); }
         } catch (error) {
             capture?.stop();
-            if (!capture) stopDisplayCapture(picked);
             if (requests[source] === request || captures[source] === capture) {
                 requests[source] = null; captures[source] = null;
                 if (current(owner)) { updateGrid(); render(owner); void syncPeers().catch(report); report(error); }

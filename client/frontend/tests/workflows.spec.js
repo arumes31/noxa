@@ -9405,18 +9405,13 @@ test("labels screen-share controls and explains low-bandwidth data use", async (
     await page.screenshot({ path: testInfo.outputPath("custom-share-quality-narrow.png") });
     await page.setViewportSize({ width: 1280, height: 720 });
 
-    await page.evaluate(() => {
-        navigator.mediaDevices.getDisplayMedia = async () => document.createElement("canvas").captureStream(1);
-    });
-    await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
-    await shareDialog.getByRole("button", { name: "Start sharing" }).click();
-    await expect(shareButton).toHaveAttribute("title", "Stop sharing");
-    await expect(shareButton).toHaveAccessibleName("Stop sharing");
-    expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].maxBitrate)).toBe(150000);
-
-    await shareButton.click();
+    // Sharing is native only: without the desktop bridge the dialog says why
+    // and Start stays disabled; there is no browser picker to fall back to.
+    await expect(shareDialog.locator(".sp-native-note")).toContainText("Screen sharing");
+    await expect(shareDialog.getByRole("button", { name: "Start sharing" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Choose screen or window…", exact: true })).toHaveCount(0);
+    await shareDialog.getByRole("button", { name: "Cancel" }).click();
     await expect(shareButton).toHaveAttribute("title", "Start sharing");
-    await expect(shareButton).toHaveAccessibleName("Start sharing");
 });
 
 test("switches active server tabs without retaining stale identity", async ({ page }) => {

@@ -247,50 +247,6 @@ test(`real peer call captures only after acceptance and tears down without joini
                 await expect(page.locator('.call-media-tile[data-local="false"][data-source="camera"] video')).toHaveCount(participantIDs.length - 1);
                 await expect.poll(() => page.evaluate(() => [...document.querySelectorAll('.call-media-tile[data-local="false"] video')].every(video => video.videoWidth > 0))).toBe(true);
             }
-            await alice.evaluate(() => {
-                navigator.mediaDevices.getDisplayMedia = async options => {
-                    window.__displayOptions = options;
-                    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-                    window.__displayStream = stream;
-                    return stream;
-                };
-            });
-            await alice.getByRole("combobox", { name: "Share audio", exact: true }).selectOption("system");
-            await alice.getByRole("button", { name: "Share screen", exact: true }).click();
-            await expect(bob.locator('.call-media-tile[data-local="false"][data-source="screen"] video')).toBeVisible();
-            await expect.poll(() => bob.evaluate(async () => [...(await window.__peers[0].getStats()).values()].filter(stat => stat.type === "inbound-rtp" && stat.kind === "video" && stat.bytesReceived > 0).length)).toBe(2);
-            expect(await alice.evaluate(() => window.__displayOptions.audio)).toBe(true);
-            expect(await alice.evaluate(() => window.__peers[0].getSenders().filter(sender => sender.track?.kind === "audio").length)).toBe(2);
-            if (signalingMode === "normal") {
-                const screen = bob.locator('.call-media-tile[data-local="false"][data-source="screen"]');
-                await screen.getByRole("slider", { name: "Shared audio", exact: true }).fill("35");
-                await expect.poll(() => bob.evaluate(() => window.__savedSettings?.user_share_volumes?.alice)).toBe(35);
-                await bob.evaluate(() => { window.__noxa.state.settings.muted_users = ["alice"]; });
-                await expect.poll(() => bob.evaluate(() => window.__callGains.slice(0, 2).map(gain => Number(gain.gain.value.toFixed(2))))).toEqual([0, 0.12]);
-                // A real tone on the separate negotiated share-audio sender must
-                // remain audible when the same member's microphone is muted.
-                await alice.evaluate(async () => {
-                    const context = new AudioContext(); await context.resume();
-                    const tone = context.createOscillator(), gain = context.createGain(), output = context.createMediaStreamDestination();
-                    gain.gain.value = 0.1; tone.connect(gain); gain.connect(output); tone.start();
-                    const sender = window.__peers[0].getSenders().find(sender => sender.track === window.__displayStream.getAudioTracks()[0]);
-                    window.__shareTone = { context, tone, output, sender, original: sender.track }; await sender.replaceTrack(output.stream.getAudioTracks()[0]);
-                });
-                await bob.evaluate(async () => {
-                    const context = new AudioContext(); await context.resume();
-                    const source = context.createMediaStreamSource(document.querySelector("audio").srcObject);
-                    const analyser = context.createAnalyser(); source.connect(analyser); window.__playbackMeter = { context, source, analyser };
-                });
-                await expect.poll(async () => Math.abs(await playbackLevel() - unityLevel * 10 * 0.35 ** 2)).toBeLessThan(0.002);
-                await screen.getByRole("button", { name: "Mute shared audio", exact: true }).click();
-                await expect.poll(playbackLevel).toBeLessThan(0.00001);
-                await screen.getByRole("button", { name: "Unmute shared audio", exact: true }).click();
-                await expect.poll(playbackLevel).toBeGreaterThan(0.008);
-                await bob.evaluate(() => { window.__noxa.state.settings.muted_users = []; return window.__playbackMeter.context.close(); });
-                await alice.evaluate(async () => {
-                    const tone = window.__shareTone; await tone.sender.replaceTrack(tone.original); tone.tone.stop(); tone.output.stream.getTracks().forEach(track => track.stop()); await tone.context.close();
-                });
-            }
             if (signalingMode.endsWith("renewal")) {
                 for (let generation = 1; generation <= 3; generation++) {
                     const previous = await Promise.all([...pages.values()].map(page => page.evaluate(() => window.__peers.map(peer => peer.localDescription.sdp.match(/a=ice-ufrag:([^\r\n]+)/)?.[1]))));
@@ -304,10 +260,6 @@ test(`real peer call captures only after acceptance and tears down without joini
             }
             await alice.getByRole("button", { name: "Stop camera", exact: true }).click();
             await expect(bob.locator('.call-media-tile[data-local="false"][data-source="camera"]')).toHaveCount(participantIDs.length - 2);
-            await expect(bob.locator('.call-media-tile[data-local="false"][data-source="screen"]')).toHaveCount(1);
-            await alice.getByRole("button", { name: "Stop sharing", exact: true }).click();
-            await expect(bob.locator('.call-media-tile[data-local="false"][data-source="screen"]')).toHaveCount(0);
-            expect(await alice.evaluate(() => window.__displayStream.getTracks().every(track => track.readyState === "ended"))).toBe(true);
         }
         await alice.getByRole("button", { name: "Mute microphone", exact: true }).click();
         await expect(alice.getByRole("button", { name: "Unmute microphone", exact: true })).toHaveAttribute("aria-pressed", "true");
@@ -440,71 +392,8 @@ test("a call peer without the media key decodes nothing", async ({ newIsolatedPa
     } finally { await Promise.all([...pages.values()].map(page => page.close())); }
 });
 
-for (const audioLabel of ["Application Audio", "System Audio"]) {
-    test(`private-call application audio validates the captured source (${audioLabel})`, async ({ page }) => {
-        await mountCallRaceFixture(page);
-        await page.evaluate(async audioLabel => {
-            await window.__callsModule.startPrivateCall("alice");
-            navigator.mediaDevices.getDisplayMedia = async options => {
-                window.__displayOptions = options;
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-                const video = stream.getVideoTracks()[0], settings = video.getSettings();
-                video.getSettings = () => ({ ...settings, displaySurface: "window" });
-                Object.defineProperty(stream.getAudioTracks()[0], "label", { value: audioLabel });
-                window.__displayStream = stream;
-                return stream;
-            };
-        }, audioLabel);
-        await page.getByRole("combobox", { name: "Share audio", exact: true }).selectOption("application");
-        await page.getByRole("button", { name: "Share screen", exact: true }).click();
-        await expect(page.locator('.call-media-tile[data-local="true"][data-source="screen"]')).toBeVisible();
-        await expect(page.getByRole("combobox", { name: "Share audio", exact: true })).toBeDisabled();
-        if (audioLabel !== "Application Audio") {
-            await expect.poll(() => page.evaluate(() => window.__warnings.join(" "))).toContain("Application audio unavailable. Sharing without audio.");
-            expect(await page.evaluate(() => window.__displayStream.getAudioTracks().length)).toBe(0);
-        }
-        await page.getByRole("button", { name: "Stop sharing", exact: true }).click();
-        expect(await page.evaluate(() => window.__displayStream.getTracks().every(t => t.readyState === "ended"))).toBe(true);
-        await expect.poll(() => page.evaluate(() => window.__captureLeases.released)).toEqual(["lease-0"]);
-        expect(await page.evaluate(() => window.__displayOptions)).toMatchObject({ video: { displaySurface: "window" }, windowAudio: "window", systemAudio: "exclude" });
-        await expect(page.getByRole("combobox", { name: "Share audio", exact: true })).toHaveValue(audioLabel === "Application Audio" ? "application" : "none");
-    });
-}
-
-for (const captureError of ["NotReadableError", "NotSupportedError", "NotAllowedError", "AbortError"]) {
-    test(`private-call application audio handles ${captureError}`, async ({ page }) => {
-        await mountCallRaceFixture(page);
-        await page.evaluate(async captureError => {
-            await window.__callsModule.startPrivateCall("alice");
-            window.__displayAttempts = [];
-            navigator.mediaDevices.getDisplayMedia = async options => {
-                window.__displayAttempts.push(options);
-                if (options.audio) throw new DOMException("audio unavailable", captureError);
-                window.__displayStream = await navigator.mediaDevices.getUserMedia({ video: true });
-                return window.__displayStream;
-            };
-        }, captureError);
-        await page.getByRole("combobox", { name: "Share audio", exact: true }).selectOption("application");
-        await page.getByRole("button", { name: "Share screen", exact: true }).click();
-        const cancelled = ["NotAllowedError", "AbortError"].includes(captureError);
-        if (cancelled) {
-            await expect(page.getByRole("button", { name: "Share screen", exact: true })).toBeVisible();
-            await expect(page.locator('.call-media-tile[data-source="screen"]')).toHaveCount(0);
-            expect(await page.evaluate(() => window.__displayAttempts.length)).toBe(1);
-            expect(await page.evaluate(() => window.__warnings.join(" "))).not.toContain("Sharing without audio");
-        } else {
-            await expect(page.locator('.call-media-tile[data-local="true"][data-source="screen"]')).toBeVisible();
-            expect(await page.evaluate(() => window.__displayAttempts.length)).toBe(2);
-            expect(await page.evaluate(() => window.__displayAttempts[1])).toMatchObject({ audio: false, windowAudio: "exclude", systemAudio: "exclude" });
-            expect(await page.evaluate(() => window.__warnings)).toEqual(["Application audio unavailable. Sharing without audio."]);
-            await expect(page.getByRole("combobox", { name: "Share audio", exact: true })).toHaveValue("none");
-            await page.getByRole("button", { name: "Stop sharing", exact: true }).click();
-            expect(await page.evaluate(() => window.__displayStream.getTracks().every(track => track.readyState === "ended"))).toBe(true);
-        }
-    });
-}
-
-for (const source of ["camera", "screen"]) {
+// The screen share is native (Go); only the camera has a late browser capture.
+for (const source of ["camera"]) {
     test(`late private-call ${source} capture after ending a call is released`, async ({ page }) => {
         await mountCallRaceFixture(page);
         await page.evaluate(async source => {

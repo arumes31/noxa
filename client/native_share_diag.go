@@ -12,7 +12,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	"noxa/client/internal/nativecapture"
 	"noxa/internal/framecrypt"
@@ -27,34 +26,6 @@ const (
 	// nativeReasonLimit bounds the distinct first-occurrence reasons kept.
 	nativeReasonLimit = 16
 )
-
-// Browser-mode share diagnostics from the webview: lines per process, bytes per line.
-const (
-	browserShareLogMax   = 64
-	browserShareLogBytes = 1024
-)
-
-var browserShareLogs atomic.Int32
-
-// LogScreenShareDiagnostics writes one Browser-mode screen share stats line
-// (built by the webview) to client.log: bounded, cut and escaped.
-func (a *App) LogScreenShareDiagnostics(line string) {
-	if browserShareLogs.Add(1) > browserShareLogMax {
-		return
-	}
-	log.Printf("browser share %s", browserShareLogLine(line))
-}
-
-func browserShareLogLine(line string) string {
-	if len(line) > browserShareLogBytes {
-		cut := browserShareLogBytes
-		for cut > 0 && !utf8.RuneStart(line[cut]) {
-			cut--
-		}
-		line = line[:cut] + "..."
-	}
-	return escapeLogRecord(line)
-}
 
 // nativeStatsAt is when the i-th (0-based) stats line is due after start.
 func nativeStatsAt(i int) time.Duration {

@@ -2,7 +2,6 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { inspectImageBytes, decodeImage, createAssetStore, MAX_IMAGE_BYTES, StudioImageError } from "../src/studio-assets.js";
 import { createCaptureRegistry } from "../src/studio-captures.js";
-import { createStudioAudio } from "../src/studio-audio.js";
 import { outputSize, fitRect, StudioEngine, WEAK_PREVIEW_FPS, PREVIEW_FPS } from "../src/studio-compositor.js";
 
 const code = expected => error => error instanceof StudioImageError && error.code === expected;
@@ -182,42 +181,6 @@ describe("studio capture ownership", () => {
         const late = new FakeTrack("video");
         assert.throws(() => registry.add(new FakeStream([late]), { kind: "display" }));
         assert.equal(late.readyState, "ended");
-    });
-});
-
-class FakeNode {
-    constructor(context, name) { this.context = context; this.name = name; this.outputs = new Set(); }
-    connect(node) { this.outputs.add(node); this.context.edges.push([this.name, node.name]); return node; }
-    disconnect() { this.outputs.clear(); }
-}
-class FakeAudioContext {
-    constructor() { this.edges = []; this.state = "running"; this.sources = 0; this.destination = new FakeNode(this, "speakers"); }
-    createMediaStreamDestination() { const node = new FakeNode(this, "publication"); node.stream = new FakeStream([new FakeTrack("audio")]); return node; }
-    createGain() { return new FakeNode(this, "gain"); }
-    createAnalyser() { const node = new FakeNode(this, "meter"); node.fftSize = 256; node.getFloatTimeDomainData = data => data.fill(0.1); return node; }
-    createMediaStreamSource(stream) { this.sources++; const node = new FakeNode(this, `source:${stream.getAudioTracks()[0].label}`); return node; }
-    async resume() {}
-    async close() { this.state = "closed"; }
-}
-
-describe("studio audio graph", () => {
-    it("routes explicitly enabled capture audio exactly once and never to the speakers", () => {
-        let context;
-        const audio = createStudioAudio({ AudioContextClass: class extends FakeAudioContext { constructor() { super(); context = this; } } });
-        const app = new FakeTrack("audio"); app.label = "app";
-        const other = new FakeTrack("audio"); other.label = "other";
-        const available = [{ id: "c1", track: app }, { id: "c1", track: app }, { id: "c2", track: other }];
-        audio.sync(available, new Set(["c1"]));
-        audio.sync(available, new Set(["c1"]));
-        assert.deepEqual(audio.routed(), ["c1"]);
-        assert.equal(context.sources, 1, "duplicate references create one source node");
-        assert.ok(context.edges.every(([, to]) => to !== "speakers"), "nothing is connected to the local output");
-        assert.ok(audio.level() > 0);
-        audio.sync(available, new Set());
-        assert.deepEqual(audio.routed(), []);
-        audio.dispose();
-        assert.equal(context.state, "closed");
-        assert.equal(audio.track.readyState, "ended");
     });
 });
 

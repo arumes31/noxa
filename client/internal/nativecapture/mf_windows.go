@@ -3,7 +3,6 @@
 package nativecapture
 
 import (
-	"cmp"
 	"errors"
 	"fmt"
 	"log"
@@ -18,6 +17,7 @@ var (
 	mfplat                       = windows.NewLazySystemDLL("mfplat.dll")
 	procMFStartup                = mfplat.NewProc("MFStartup")
 	procMFTEnumEx                = mfplat.NewProc("MFTEnumEx")
+	procMFTEnum2                 = mfplat.NewProc("MFTEnum2")
 	procMFCreateMediaType        = mfplat.NewProc("MFCreateMediaType")
 	procMFCreateSample           = mfplat.NewProc("MFCreateSample")
 	procMFCreateDXGISurfaceBuf   = mfplat.NewProc("MFCreateDXGISurfaceBuffer")
@@ -78,8 +78,8 @@ const (
 	h264ProfileBaseline   = 66
 )
 
-// ErrNoHardwareEncoder means no hardware H.264 encoder MFT accepted the device.
-var ErrNoHardwareEncoder = errors.New("no hardware H.264 encoder")
+// errNoEncoder means no H.264 encoder MFT accepted the device.
+var errNoEncoder = errors.New("no H.264 encoder")
 
 func mfStartup() error {
 	mfStartOnce.Do(func() {
@@ -87,25 +87,6 @@ func mfStartup() error {
 		mfStartErr = hresult(r).err("MFStartup")
 	})
 	return mfStartErr
-}
-
-type encoderInfo struct {
-	name, vendor string
-	hardware     bool
-	async        bool
-	luid         uint64 // MFT_ENUM_ADAPTER_LUID when the activate carries it
-}
-
-func (i encoderInfo) String() string {
-	kind := "sw"
-	if i.hardware {
-		kind = "hw"
-	}
-	s := fmt.Sprintf("%q vendor=%s %s async=%v", i.name, cmp.Or(i.vendor, "?"), kind, i.async)
-	if i.luid != 0 {
-		s += fmt.Sprintf(" luid=%016X", i.luid)
-	}
-	return s
 }
 
 // encoder is one Media Foundation H.264 encoder MFT fed with NV12 D3D11
@@ -167,53 +148,89 @@ func vendorOf(id, name string) string {
 	return ""
 }
 
-// newEncoder opens the first H.264 encoder MFT that accepts the device.
-// Hardware only unless allowSoftware (tests on GPU-less runners). report
-// lists the adapter, every MFT tried with the step that failed, and the choice.
-func newEncoder(d *device, width, height, fps, bitrate uint32, allowSoftware bool) (_ *encoder, report []string, _ error) {
+// enumEncoders lists H.264 encoder activates and their infos: the hardware
+// MFTs of the device's adapter (MFTEnum2 with MFT_ENUM_ADAPTER_LUID, Windows
+// 10 1703+), every hardware MFT, then the software MFTs. free releases them.
+func enumEncoders(d *device, report *[]string) (activates []uintptr, infos []encoderInfo, free func()) {
+	in := registerTypeInfo{mfMediaTypeVideo, mfVideoFormatNV12}
+	out := registerTypeInfo{mfMediaTypeVideo, mfVideoFormatH264}
+	var lists []uintptr
+	// byVendor: without the adapter enumeration, an activate without a LUID
+	// is matched to the device by its PCI vendor ID.
+	byVendor := true
+	add := func(what string, flags, attrs uintptr) bool {
+		var list uintptr
+		var count uint32
+		var r uintptr
+		// #nosec G103 -- the category GUID by reference (x64 by-value struct), CoTaskMem array out.
+		if attrs != 0 {
+			r, _, _ = procMFTEnum2.Call(uintptr(unsafe.Pointer(&mftCategoryVideoEncoder)), flags,
+				uintptr(unsafe.Pointer(&in)), uintptr(unsafe.Pointer(&out)), attrs, uintptr(unsafe.Pointer(&list)), uintptr(unsafe.Pointer(&count)))
+		} else {
+			r, _, _ = procMFTEnumEx.Call(uintptr(unsafe.Pointer(&mftCategoryVideoEncoder)), flags,
+				uintptr(unsafe.Pointer(&in)), uintptr(unsafe.Pointer(&out)), uintptr(unsafe.Pointer(&list)), uintptr(unsafe.Pointer(&count)))
+		}
+		if hresult(r).failed() || count == 0 {
+			*report = append(*report, fmt.Sprintf("%s: %d encoders, HRESULT 0x%08X", what, count, uint32(r)))
+			return hresult(r).succeeded()
+		}
+		lists = append(lists, list)
+		for _, activate := range unsafe.Slice((*uintptr)(unsafe.Pointer(list)), count) { //nolint:govet // #nosec G103 -- CoTaskMem array from MFTEnum2/MFTEnumEx
+			info := encoderInfo{name: activateString(activate, &mftFriendlyName), vendorID: activateString(activate, &mftHardwareVendorID),
+				hardware: flags&mftEnumHardware != 0}
+			info.vendor = vendorOf(info.vendorID, info.name)
+			var size uint32
+			vcall(activate, 15, uintptr(unsafe.Pointer(&mftEnumAdapterLUID)), uintptr(unsafe.Pointer(&info.luid)), 8, uintptr(unsafe.Pointer(&size))) // #nosec G103 -- GetBlob: a LUID
+			info.onAdapter = attrs != 0 || matchesAdapter(info, d.luid, d.vendorID, byVendor)
+			activates, infos = append(activates, activate), append(infos, info)
+		}
+		return true
+	}
+	if d.luid != 0 && procMFTEnum2.Find() == nil {
+		if attrs, err := newAttributes(1); err == nil {
+			luid := d.luid
+			vcall(attrs, 26, uintptr(unsafe.Pointer(&mftEnumAdapterLUID)), uintptr(unsafe.Pointer(&luid)), 8) // #nosec G103 -- SetBlob: a LUID
+			byVendor = !add("adapter hardware MFTs (MFTEnum2)", mftEnumHardware|mftEnumSortAndFilter, attrs)
+			release(attrs)
+		}
+	}
+	add("hardware MFTs", mftEnumHardware|mftEnumSortAndFilter, 0)
+	add("software MFTs", mftEnumSyncMFT|mftEnumSortAndFilter, 0)
+	return activates, infos, func() {
+		for _, activate := range activates {
+			release(activate)
+		}
+		for _, list := range lists {
+			_, _, _ = procCoTaskMemFree.Call(list)
+		}
+	}
+}
+
+// newEncoder opens the first H.264 encoder MFT that accepts the device, in
+// rankEncoders order: hardware on the device's adapter, other hardware, then
+// software. report lists the adapter, every MFT tried with the step that
+// failed, and the choice.
+func newEncoder(d *device, width, height, fps, bitrate uint32) (_ *encoder, report []string, _ error) {
 	report = []string{fmt.Sprintf("adapter %s; %dx%d@%d %d bps", d.adapter, width, height, fps, bitrate)}
 	if err := mfStartup(); err != nil {
 		return nil, append(report, err.Error()), err
 	}
-	in := registerTypeInfo{mfMediaTypeVideo, mfVideoFormatNV12}
-	out := registerTypeInfo{mfMediaTypeVideo, mfVideoFormatH264}
-	flags := []uintptr{mftEnumHardware | mftEnumSortAndFilter}
-	if allowSoftware {
-		flags = append(flags, mftEnumSyncMFT|mftEnumSortAndFilter)
+	activates, infos, free := enumEncoders(d, &report)
+	defer free()
+	for _, info := range infos {
+		if multiSliceRejected(info) {
+			report = append(report, "skipped "+info.String()+": wrote multi-slice keyframes earlier")
+		}
 	}
-	lastErr := ErrNoHardwareEncoder
-	for _, flag := range flags {
-		var list uintptr
-		var count uint32
-		// #nosec G103 -- MFTEnumEx takes the category GUID by value (passed by reference on x64) and returns a CoTaskMem array.
-		r, _, _ := procMFTEnumEx.Call(uintptr(unsafe.Pointer(&mftCategoryVideoEncoder)), flag,
-			uintptr(unsafe.Pointer(&in)), uintptr(unsafe.Pointer(&out)), uintptr(unsafe.Pointer(&list)), uintptr(unsafe.Pointer(&count)))
-		if hresult(r).failed() || count == 0 {
-			report = append(report, fmt.Sprintf("MFTEnumEx flags 0x%X: %d encoders, HRESULT 0x%08X", flag, count, uint32(r)))
-			continue
+	lastErr := errNoEncoder
+	for _, i := range rankEncoders(infos, multiSliceRejected) {
+		info := infos[i]
+		enc, err := openEncoder(d, activates[i], &info, width, height, fps, bitrate)
+		if err == nil {
+			return enc, append(report, "chosen "+info.String()+enc.notes), nil
 		}
-		activates := unsafe.Slice((*uintptr)(unsafe.Pointer(list)), count) //nolint:govet // #nosec G103 -- CoTaskMem array from MFTEnumEx
-		var opened *encoder
-		for _, activate := range activates {
-			if opened == nil {
-				info := encoderInfo{name: activateString(activate, &mftFriendlyName), hardware: flag&mftEnumHardware != 0}
-				info.vendor = vendorOf(activateString(activate, &mftHardwareVendorID), info.name)
-				vcall(activate, 8, uintptr(unsafe.Pointer(&mftEnumAdapterLUID)), uintptr(unsafe.Pointer(&info.luid))) // #nosec G103 -- GetUINT64
-				enc, err := openEncoder(d, activate, &info, width, height, fps, bitrate)
-				if err == nil {
-					opened = enc
-					report = append(report, "chosen "+info.String()+enc.notes)
-				} else {
-					lastErr = err
-					report = append(report, "skipped "+info.String()+": "+err.Error())
-				}
-			}
-			release(activate)
-		}
-		_, _, _ = procCoTaskMemFree.Call(list)
-		if opened != nil {
-			return opened, report, nil
-		}
+		lastErr = err
+		report = append(report, "skipped "+info.String()+": "+err.Error())
 	}
 	return nil, append(report, "none chosen: "+lastErr.Error()), lastErr
 }
@@ -429,7 +446,8 @@ func (e *encoder) collect() ([]byte, bool, int64, bool, error) {
 	}
 	data := append([]byte(nil), unsafe.Slice(p, cur)...) // #nosec G103
 	vcall(contiguous, 4)
-	if e.seqHeader == nil {
+	// Some encoders report SPS/PPS only after the first outputs: retry until one arrives.
+	if len(e.seqHeader) == 0 {
 		e.seqHeader = e.sequenceHeader()
 	}
 	var ts int64
@@ -448,6 +466,7 @@ func (e *encoder) renegotiateOutput() error {
 		return hr.err("GetOutputAvailableType")
 	}
 	defer release(t)
+	e.seqHeader = nil // the new output type brings its own parameter sets
 	return vcall(e.mft, 16, 0, t, 0).err("SetOutputType")
 }
 

@@ -74,6 +74,10 @@ func TestSenderStreamsEncryptedFramesToReceiver(t *testing.T) {
 		t.Fatal("native peer did not connect")
 	}
 	start := time.Now()
+	// A new stream starts in the key gap: no delta frame before the first keyframe.
+	if err := sender.WriteFrame(encoderAU(false, []byte{7}), false, nil, start); !errors.Is(err, ErrDropped) || errors.Is(err, framecrypt.ErrNoKey) {
+		t.Fatalf("leading delta frame: %v", err)
+	}
 	// Fail closed: without an active key nothing is sent.
 	if err := sender.WriteFrame(encoderAU(true, []byte{1, 2, 3}), true, nil, start); !errors.Is(err, ErrDropped) || !errors.Is(err, framecrypt.ErrNoKey) {
 		t.Fatalf("keyless frame: %v", err)
@@ -137,7 +141,7 @@ func TestSenderStreamsEncryptedFramesToReceiver(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("PLI did not request a keyframe")
 	}
-	if st := sender.Stats(); st.FramesSent != 30 || st.KeyframesSent != 3 || st.FramesDropped != 2 || st.PacketsSent < 30 || st.BytesSent == 0 {
+	if st := sender.Stats(); st.FramesSent != 30 || st.KeyframesSent != 3 || st.FramesDropped != 3 || st.PacketsSent < 30 || st.BytesSent == 0 {
 		t.Fatalf("stats: %+v", st)
 	}
 }

@@ -5,10 +5,10 @@ import (
 	"sync"
 )
 
-// captureBoost raises the GPU scheduling and CPU priority of the processes
-// that capture, encrypt and encode a screen share while one is running: the
-// WebView2 process tree in Browser mode, this process for native capture.
-// Each holder is a named reason; the boost is restored when the last ends.
+// captureBoost raises the GPU scheduling and CPU priority of this process,
+// which captures, encodes and encrypts a native screen share, while a display
+// capture lease is held. Each holder is a named reason; the boost is restored
+// when the last ends.
 type captureBoost struct {
 	mu      sync.Mutex
 	holders map[string]bool
@@ -51,7 +51,7 @@ func (b *captureBoost) set(reason string, on bool) {
 	} else {
 		delete(b.holders, reason)
 	}
-	// A refresh while held re-applies: the WebView2 GPU process can restart.
+	// A refresh while held re-applies (applyCaptureBoost skips boosted processes).
 	if now := len(b.holders) > 0; now || was {
 		if err := b.apply(now); err != nil {
 			b.logOnce(err)

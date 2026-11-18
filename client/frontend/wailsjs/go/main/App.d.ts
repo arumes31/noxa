@@ -333,8 +333,6 @@ export function ListTabs():Promise<Array<main.TabInfo>>;
 
 export function LogChat(arg1:string):Promise<void>;
 
-export function LogScreenShareDiagnostics(arg1:string):Promise<void>;
-
 export function MOTD():Promise<string>;
 
 export function MOTDForTab(arg1:string):Promise<string>;

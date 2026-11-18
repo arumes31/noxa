@@ -14,7 +14,6 @@ import { initConversations } from "./conversations.js";
 import { retainPresenceTabs } from "./presence.js";
 import { offerUpdateShareResume } from "./update-share-resume.js";
 import { beginQuietRestore, endQuietRestore } from "./update-announcement.js";
-import { cancelShareResume } from "./video.js";
 
 const V = () => window.__noxa;
 const App = () => window.go.main.App;
@@ -233,7 +232,6 @@ async function refreshTabIdentity(tabID) {
 function onTabReset(tabID) {
     clearSpeech();
     const { state, $ } = V();
-    if (String(tabID || "") !== state.activeTabID) cancelShareResume();
     activeTabID = tabID || "";
     state.activeTabID = activeTabID;
     const restoringKnownTab = state.tabConnects.has(tabID);

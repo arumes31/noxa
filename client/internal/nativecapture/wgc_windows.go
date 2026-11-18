@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"unsafe"
@@ -18,6 +19,7 @@ var (
 	iidIGraphicsCaptureItem          = mustGUID("79c3f95b-31f7-4ec2-a464-632ef5d30760")
 	iidIFramePoolStatics2            = mustGUID("589b103f-6bbc-5df5-a991-02e28b3b66d5")
 	iidIGraphicsCaptureSession2      = mustGUID("2c39ae40-7d2e-5044-804e-8b6799d4cf9e")
+	iidIGraphicsCaptureSessionStatic = mustGUID("2224a540-5974-49aa-b232-0882536f4cb5")
 	iidIGraphicsCaptureSession3      = mustGUID("f2cdd966-22ae-5ea1-9596-3a289344c3be")
 	user32                           = windows.NewLazySystemDLL("user32.dll")
 	procEnumDisplayMonitors          = user32.NewProc("EnumDisplayMonitors")
@@ -123,6 +125,55 @@ func monitors() []monitorInfo {
 	enumMonitors = nil
 	_, _, _ = procEnumDisplayMonitors.Call(0, 0, monitorCallback, 0)
 	return append([]monitorInfo(nil), enumMonitors...)
+}
+
+var (
+	supportOnce sync.Once
+	supported   bool
+)
+
+// Supported reports whether this Windows can share natively: Windows
+// Graphics Capture (Windows 10 1903 and later) and Media Foundation (absent
+// on N editions without the Media Feature Pack). Probed once.
+func Supported() bool {
+	supportOnce.Do(func() {
+		done := make(chan bool)
+		go func() {
+			runtime.LockOSThread() // never unlocked: the MTA thread exits with this goroutine
+			initThread()
+			done <- probeSupport()
+		}()
+		supported = <-done
+	})
+	return supported
+}
+
+func probeSupport() bool {
+	if procMFStartup.Find() != nil || procMFTEnumEx.Find() != nil {
+		return false
+	}
+	statics, err := activationFactory("Windows.Graphics.Capture.GraphicsCaptureSession", &iidIGraphicsCaptureSessionStatic)
+	if err != nil {
+		return false
+	}
+	defer release(statics)
+	var ok uint8
+	return vcall(statics, 6, uintptr(unsafe.Pointer(&ok))).succeeded() && ok != 0 // #nosec G103 -- IsSupported
+}
+
+// sourceMonitor is the monitor src is shown on (0 for a Studio or an unknown monitor).
+func sourceMonitor(src Source) uintptr {
+	switch {
+	case src.Studio:
+		return 0
+	case src.Window != 0:
+		monitor, _, _ := procMonitorFromWindow.Call(uintptr(src.Window), 2) // MONITOR_DEFAULTTONEAREST
+		return monitor
+	}
+	if list := monitors(); src.Monitor >= 0 && src.Monitor < len(list) {
+		return list[src.Monitor].handle
+	}
+	return 0
 }
 
 // Monitors lists the displays that can be shared.

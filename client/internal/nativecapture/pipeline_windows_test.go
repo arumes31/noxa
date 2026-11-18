@@ -3,16 +3,21 @@
 package nativecapture
 
 import (
+	"fmt"
 	"os"
+	"runtime"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"noxa/internal/framecrypt"
 )
 
 // TestMonitorCaptureEncodes runs the full pipeline on the primary monitor.
-// NOXA_NATIVE_CAPTURE=1 enables it (needs an interactive desktop);
-// NOXA_NATIVE_SOFTWARE=1 admits the software MFT (GPU-less CI runners).
+// NOXA_NATIVE_CAPTURE=1 enables it (needs an interactive desktop).
 func TestMonitorCaptureEncodes(t *testing.T) {
 	if os.Getenv("NOXA_NATIVE_CAPTURE") == "" {
 		t.Skip("set NOXA_NATIVE_CAPTURE=1 on an interactive Windows desktop")
@@ -38,8 +43,7 @@ func TestMonitorCaptureEncodes(t *testing.T) {
 		}
 		defer func() { _ = dump.Close() }()
 	}
-	s, err := Start(Config{Source: Source{Monitor: monitor}, MaxWidth: 1920, MaxHeight: 1080, FPS: fps, Bitrate: 8_000_000,
-		AllowSoftware: os.Getenv("NOXA_NATIVE_SOFTWARE") != ""}, func(f Frame) {
+	s, err := Start(Config{Source: Source{Monitor: monitor}, MaxWidth: 1920, MaxHeight: 1080, FPS: fps, Bitrate: 8_000_000}, func(f Frame) {
 		mu.Lock()
 		frames = append(frames, Frame{Keyframe: f.Keyframe, Width: f.Width, Height: f.Height, SeqHeader: f.SeqHeader, Data: f.Data[:min(len(f.Data), 64)]})
 		mu.Unlock()
@@ -82,8 +86,7 @@ func TestMonitorCaptureEncodes(t *testing.T) {
 
 func runCapture(t *testing.T, src Source, fps int, d time.Duration) (Stats, EncoderInfo, *Session) {
 	t.Helper()
-	s, err := Start(Config{Source: src, MaxWidth: 1920, MaxHeight: 1080, FPS: fps, Bitrate: 8_000_000,
-		AllowSoftware: os.Getenv("NOXA_NATIVE_SOFTWARE") != ""}, func(Frame) {})
+	s, err := Start(Config{Source: src, MaxWidth: 1920, MaxHeight: 1080, FPS: fps, Bitrate: 8_000_000}, func(Frame) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,8 +158,7 @@ func TestLadderControlsMidStream(t *testing.T) {
 	var mu sync.Mutex
 	var bytes, frames int
 	var lastW, lastH int
-	s, err := Start(Config{Source: Source{Window: uint64(win.hwnd.Load())}, MaxWidth: 1920, MaxHeight: 1080, FPS: 30, Bitrate: 4_000_000,
-		AllowSoftware: os.Getenv("NOXA_NATIVE_SOFTWARE") != ""}, func(f Frame) {
+	s, err := Start(Config{Source: Source{Window: uint64(win.hwnd.Load())}, MaxWidth: 1920, MaxHeight: 1080, FPS: 30, Bitrate: 4_000_000}, func(f Frame) {
 		mu.Lock()
 		bytes += len(f.Data)
 		frames++
@@ -226,8 +228,7 @@ func TestWindowResizeRebuildsAfterItSettles(t *testing.T) {
 	var mu sync.Mutex
 	var keysAfter int
 	var resized bool
-	s, err := Start(Config{Source: Source{Window: uint64(win.hwnd.Load())}, MaxWidth: 1920, MaxHeight: 1080, FPS: 30, Bitrate: 2_000_000,
-		AllowSoftware: os.Getenv("NOXA_NATIVE_SOFTWARE") != ""}, func(f Frame) {
+	s, err := Start(Config{Source: Source{Window: uint64(win.hwnd.Load())}, MaxWidth: 1920, MaxHeight: 1080, FPS: 30, Bitrate: 2_000_000}, func(f Frame) {
 		mu.Lock()
 		if resized && f.Keyframe {
 			keysAfter++
@@ -307,8 +308,7 @@ func TestStudioSessionEncodes(t *testing.T) {
 	}}
 	var mu sync.Mutex
 	keys, frames := 0, 0
-	s, err := Start(Config{Source: Source{Studio: true}, Scene: scene, MaxWidth: 1280, MaxHeight: 720, FPS: 30, Bitrate: 4_000_000,
-		AllowSoftware: os.Getenv("NOXA_NATIVE_SOFTWARE") != ""}, func(f Frame) {
+	s, err := Start(Config{Source: Source{Studio: true}, Scene: scene, MaxWidth: 1280, MaxHeight: 720, FPS: 30, Bitrate: 4_000_000}, func(f Frame) {
 		mu.Lock()
 		frames++
 		if f.Keyframe {
@@ -335,5 +335,198 @@ func TestStudioSessionEncodes(t *testing.T) {
 		st.EncodeTime/time.Duration(max(st.Encoded, 1)))
 	if st.Width != 1280 || st.Height != 720 || frames < 45 || keys < 1 {
 		t.Fatalf("studio %dx%d frames=%d keyframes=%d", st.Width, st.Height, frames, keys)
+	}
+}
+
+func TestSupportedOnThisDesktop(t *testing.T) {
+	if os.Getenv("NOXA_NATIVE_CAPTURE") == "" {
+		t.Skip("set NOXA_NATIVE_CAPTURE=1 on an interactive Windows desktop")
+	}
+	if !Supported() {
+		t.Fatal("Windows Graphics Capture or Media Foundation reported unsupported on a capture-capable desktop")
+	}
+}
+
+// The software H.264 MFT, the last step of the encoder chain: with every
+// hardware encoder rejected (as after multi-slice keyframes) a real session
+// opens it, encodes the NV12 ring textures and writes single-slice
+// keyframes the sender admits.
+func TestSoftwareEncoderIsTheLastResort(t *testing.T) {
+	if os.Getenv("NOXA_NATIVE_CAPTURE") == "" {
+		t.Skip("set NOXA_NATIVE_CAPTURE=1 on an interactive Windows desktop")
+	}
+	var report []string
+	var hardware []string
+	func() {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		initThread()
+		d, err := newDevice(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.close()
+		if err := mfStartup(); err != nil {
+			t.Fatal(err)
+		}
+		_, infos, free := enumEncoders(d, &report)
+		defer free()
+		order := rankEncoders(infos, func(encoderInfo) bool { return false })
+		if len(order) == 0 || infos[order[len(order)-1]].hardware {
+			t.Fatalf("no software encoder last: %v %v", infos, report)
+		}
+		for _, info := range infos {
+			if info.hardware {
+				hardware = append(hardware, info.name)
+			}
+		}
+		t.Logf("adapter %s; chain %v; enumeration notes %v", d.adapter, infos, report)
+	}()
+	for _, name := range hardware {
+		multiSliceEncoders.Store(name, true)
+	}
+	t.Cleanup(func() {
+		for _, name := range hardware {
+			multiSliceEncoders.Delete(name)
+		}
+	})
+	var mu sync.Mutex
+	var encoded, keyframes int
+	var keyErr error
+	s, err := Start(Config{Source: Source{Monitor: 0}, MaxWidth: 1280, MaxHeight: 720, FPS: 30, Bitrate: 2_000_000}, func(f Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		encoded++
+		if !f.Keyframe {
+			return
+		}
+		keyframes++
+		var sps, pps []byte
+		for _, nal := range framecrypt.SplitAnnexB(f.SeqHeader) {
+			switch nal[0] & 31 {
+			case 7:
+				sps = nal
+			case 8:
+				pps = nal
+			}
+		}
+		if _, key, err := framecrypt.CanonicalH264(f.Data, sps, pps); err != nil || !key {
+			keyErr = fmt.Errorf("keyframe rejected (key=%v): %w", key, err)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Second)
+	s.Close()
+	info := s.Info()
+	mu.Lock()
+	defer mu.Unlock()
+	t.Logf("encoder %q hardware=%v encoded=%d keyframes=%d", info.Name, info.Hardware, encoded, keyframes)
+	if info.Hardware || encoded == 0 || keyframes == 0 || keyErr != nil {
+		t.Fatalf("software encoder: hardware=%v encoded=%d keyframes=%d err=%v", info.Hardware, encoded, keyframes, keyErr)
+	}
+}
+
+// MFTEnum2 really filters by adapter: the device's LUID lists its hardware
+// MFTs, a LUID no adapter has lists none (an ignored attribute would list
+// them all); the vendor fallback then decides instead.
+func TestAdapterEnumerationFiltersByLUID(t *testing.T) {
+	if os.Getenv("NOXA_NATIVE_CAPTURE") == "" {
+		t.Skip("set NOXA_NATIVE_CAPTURE=1 on an interactive Windows desktop")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	initThread()
+	d, err := newDevice(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.close()
+	if err := mfStartup(); err != nil {
+		t.Fatal(err)
+	}
+	onAdapter := func(luid uint64) (n int, report []string) {
+		probe := *d // only the adapter identity is read
+		probe.luid = luid
+		_, infos, free := enumEncoders(&probe, &report)
+		defer free()
+		for _, info := range infos {
+			if info.onAdapter {
+				n++
+			}
+		}
+		return n, report
+	}
+	own, report := onAdapter(d.luid)
+	foreign, foreignReport := onAdapter(0x7FFF_FFFF_0000_0001)
+	t.Logf("own adapter: %d on-adapter MFTs %v; foreign LUID: %d %v", own, report, foreign, foreignReport)
+	failed := func(report []string) bool {
+		return slices.ContainsFunc(report, func(line string) bool { return strings.Contains(line, "(MFTEnum2): 0 encoders") })
+	}
+	if own == 0 || failed(report) || !failed(foreignReport) {
+		t.Fatalf("MFTEnum2 adapter filter: own %d %v, foreign %d %v", own, report, foreign, foreignReport)
+	}
+}
+
+// A hardware encoder found to write multi-slice keyframes mid-stream is
+// replaced at once by the next candidate (here the software MFT), keeping
+// the converter, ring and last picture: frames resume well inside the
+// 10 s stall watchdog even from a static source.
+func TestMultiSliceEncoderIsReplacedMidStream(t *testing.T) {
+	if os.Getenv("NOXA_NATIVE_CAPTURE") == "" {
+		t.Skip("set NOXA_NATIVE_CAPTURE=1 on an interactive Windows desktop")
+	}
+	var mu sync.Mutex
+	var rejected []string
+	keyframeSlices = func([]byte) int { return 2 } // every hardware keyframe "has two slices"
+	t.Cleanup(func() {
+		keyframeSlices = sliceCount
+		mu.Lock()
+		defer mu.Unlock()
+		for _, name := range rejected {
+			multiSliceEncoders.Delete(name)
+		}
+	})
+	var software, hardware int
+	var swapped time.Time
+	var s *Session
+	start := time.Now()
+	sess, err := Start(Config{Source: Source{Monitor: 0}, MaxWidth: 1280, MaxHeight: 720, FPS: 30, Bitrate: 2_000_000}, func(f Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		if s == nil {
+			return
+		}
+		if info := s.Info(); info.Hardware {
+			hardware++
+		} else {
+			if software == 0 {
+				swapped = time.Now()
+			}
+			software++
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	s = sess
+	mu.Unlock()
+	time.Sleep(3 * time.Second)
+	s.Close()
+	multiSliceEncoders.Range(func(key, _ any) bool {
+		mu.Lock()
+		rejected = append(rejected, key.(string))
+		mu.Unlock()
+		return true
+	})
+	info := s.Info()
+	mu.Lock()
+	defer mu.Unlock()
+	t.Logf("final encoder %q hardware=%v; frames: %d hardware (dropped by the check), %d software, first software after %v; rejected %v",
+		info.Name, info.Hardware, hardware, software, swapped.Sub(start), rejected)
+	if info.Hardware || software == 0 || len(rejected) == 0 || swapped.Sub(start) > 2*time.Second {
+		t.Fatalf("no mid-stream swap: hardware=%v software frames=%d rejected=%v after %v", info.Hardware, software, rejected, swapped.Sub(start))
 	}
 }

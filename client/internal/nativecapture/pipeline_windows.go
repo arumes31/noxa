@@ -19,6 +19,9 @@ const nv12Ring = 4
 
 var procSetThreadPriority = windows.NewLazySystemDLL("kernel32.dll").NewProc("SetThreadPriority")
 
+// keyframeSlices counts a keyframe's slices for the multi-slice check (a test seam).
+var keyframeSlices = sliceCount
+
 // Session is one running capture → convert → encode pipeline. Its OS thread
 // owns all D3D11/WGC/MF calls except the blocking MFT event wait.
 type Session struct {
@@ -42,9 +45,10 @@ type Session struct {
 	studio *studioInbox // Source.Studio only
 
 	encoderLog string // the last logged encoder selection (pipeline thread only)
+	ringBind   uint32 // NV12 ring bind flags that worked (pipeline thread only)
 }
 
-// Start opens the capture and a hardware encoder and begins delivering frames
+// Start opens the capture and an encoder and begins delivering frames
 // to out (from the pipeline thread; out must not block for long).
 func Start(cfg Config, out func(Frame)) (*Session, error) {
 	if cfg.FPS <= 0 {
@@ -123,21 +127,22 @@ type ringSlot struct {
 
 // pipeline holds the GPU objects that depend on the output size.
 type pipeline struct {
-	d          *device
-	conv       *converter
-	enc        *encoder
-	ring       [nv12Ring]ringSlot
-	next       int
-	outW, outH int
-	srcW, srcH int
-	events     chan uint32
-	eventErr   chan error
-	needInput  int
-	pending    []int // ring slots converted but not yet submitted
-	inFlight   []flight
-	last       int // ring slot of the newest converted frame, -1 none
-	openedAt   time.Time
-	size       sizeHold
+	d            *device
+	conv         *converter
+	enc          *encoder
+	ring         [nv12Ring]ringSlot
+	next         int
+	outW, outH   int
+	srcW, srcH   int
+	events       chan uint32
+	eventErr     chan error
+	needInput    int
+	pending      []int // ring slots converted but not yet submitted
+	inFlight     []flight
+	last         int // ring slot of the newest converted frame, -1 none
+	openedAt     time.Time
+	size         sizeHold
+	sliceChecked bool // the encoder's first keyframe was inspected for slices
 	// held is a frame (AddRef'd) whose size differs from the pipeline's: a
 	// window that stops repainting after a resize still gets its rebuild.
 	held         uintptr
@@ -162,7 +167,9 @@ func (s *Session) run(ready chan<- error) {
 	initThread()
 	// Capture is latency critical: keep its thread ahead of the game's.
 	_, _, _ = procSetThreadPriority.Call(uintptr(windows.CurrentThread()), 2) // THREAD_PRIORITY_HIGHEST
-	d, err := newDevice()
+	// The GPU scanning out the captured screen captures, converts and (by
+	// preference, newEncoder) encodes: no cross-adapter copies on hybrid systems.
+	d, err := newDevice(sourceMonitor(s.cfg.Source))
 	if err != nil {
 		ready <- err
 		return
@@ -240,16 +247,27 @@ func (s *Session) ensureSized(p *pipeline, w, h int) error {
 		return err
 	}
 	for i := range p.ring {
-		if p.ring[i].tex, err = p.d.createTexture(uint32(ow), uint32(oh), dxgiFormatNV12, bindRenderTarget); err != nil {
-			return err
-		}
-		if p.ring[i].view, err = p.conv.outputView(p.ring[i].tex); err != nil {
+		if p.ring[i].tex, p.ring[i].view, err = s.ringTexture(p, uint32(ow), uint32(oh)); err != nil {
 			return err
 		}
 	}
+	p.outW, p.outH, p.last = ow, oh, -1
+	if err := s.openEncoder(p); err != nil {
+		return err
+	}
+	p.srcW, p.srcH = w, h
+	s.mu.Lock()
+	s.stats.Width, s.stats.Height = ow, oh
+	s.mu.Unlock()
+	return nil
+}
+
+// openEncoder opens an encoder for the pipeline's output size, from a
+// rebuild or (keeping converter, ring and the last picture) after the
+// previous encoder wrote multi-slice keyframes.
+func (s *Session) openEncoder(p *pipeline) error {
 	fps := int(s.fps.Load())
-	var report []string
-	p.enc, report, err = newEncoder(p.d, uint32(ow), uint32(oh), uint32(max(fps, 30)), uint32(s.bitrate.Load()), s.cfg.AllowSoftware)
+	enc, report, err := newEncoder(p.d, uint32(p.outW), uint32(p.outH), uint32(max(fps, 30)), uint32(s.bitrate.Load()))
 	// Once per session and outcome: size/bitrate reopens repeat the same selection.
 	if outcome := strings.Join(report[1:], "\n"); outcome != s.encoderLog {
 		s.encoderLog = outcome
@@ -260,9 +278,9 @@ func (s *Session) ensureSized(p *pipeline, w, h int) error {
 	if err != nil {
 		return err
 	}
-	p.srcW, p.srcH, p.outW, p.outH = w, h, ow, oh
+	p.enc = enc
 	p.openedAt = time.Now()
-	p.needInput, p.pending, p.inFlight, p.last = 0, nil, nil, -1
+	p.needInput, p.pending, p.inFlight, p.sliceChecked = 0, nil, nil, false
 	if !p.enc.async {
 		p.needInput = 1 << 30 // Synchronous MFT: input is always accepted.
 	} else {
@@ -272,10 +290,37 @@ func (s *Session) ensureSized(p *pipeline, w, h int) error {
 	}
 	s.mu.Lock()
 	s.info = EncoderInfo{Name: p.enc.info.name, Vendor: p.enc.info.vendor, Hardware: p.enc.info.hardware}
-	s.stats.Width, s.stats.Height = ow, oh
 	s.mu.Unlock()
 	s.keyframe.Store(true)
 	return nil
+}
+
+// ringTexture creates one NV12 encoder input and its video processor
+// output view: a render target and, where the driver takes it (D3D 11.1),
+// a video encoder input.
+func (s *Session) ringTexture(p *pipeline, w, h uint32) (tex, view uintptr, err error) {
+	if s.ringBind == 0 {
+		s.ringBind = bindRenderTarget | bindVideoEncoder
+	}
+	create := func() (uintptr, uintptr, error) {
+		tex, err := p.d.createTexture(w, h, dxgiFormatNV12, s.ringBind)
+		if err != nil {
+			return 0, 0, err
+		}
+		view, err := p.conv.outputView(tex)
+		if err != nil {
+			release(tex)
+			return 0, 0, err
+		}
+		return tex, view, nil
+	}
+	tex, view, err = create()
+	if err != nil && s.ringBind != bindRenderTarget {
+		log.Printf("native encoder: NV12 input without D3D11_BIND_VIDEO_ENCODER: %v", err)
+		s.ringBind = bindRenderTarget
+		tex, view, err = create()
+	}
+	return tex, view, err
 }
 
 // waitEvents forwards async MFT events; it ends when the MFT shuts down.
@@ -294,7 +339,7 @@ func waitEvents(generator uintptr, events chan<- uint32, errs chan<- error) {
 	}
 }
 
-func (p *pipeline) closeSized() {
+func (p *pipeline) closeEncoder() {
 	if p.enc != nil {
 		p.enc.close() // Shuts down the event generator, ending waitEvents.
 		if p.events != nil {
@@ -303,6 +348,10 @@ func (p *pipeline) closeSized() {
 		}
 		p.enc, p.events = nil, nil
 	}
+}
+
+func (p *pipeline) closeSized() {
+	p.closeEncoder()
 	for i := range p.ring {
 		release(p.ring[i].view)
 		release(p.ring[i].tex)
@@ -483,6 +532,17 @@ func (s *Session) drain(p *pipeline) error {
 		var ok bool
 		if p.inFlight, captured, ok = takeFlight(p.inFlight, ts, hasTS); !ok {
 			captured = time.Now()
+		}
+		if key && !p.sliceChecked {
+			p.sliceChecked = true
+			// H.264 slices cannot be merged and the sender admits one per access
+			// unit: an encoder that ignored the slice setting is replaced at once
+			// by the next candidate; the keyframe resend feeds it the last picture.
+			if n := keyframeSlices(data); n > 1 && rejectMultiSlice(p.enc.info) {
+				log.Printf("native encoder: %s wrote %d slices per keyframe; opening the next encoder", p.enc.info, n)
+				p.closeEncoder()
+				return s.openEncoder(p)
+			}
 		}
 		s.mu.Lock()
 		s.stats.Encoded++

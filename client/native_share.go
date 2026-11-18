@@ -147,7 +147,7 @@ type NativeShareStatus struct {
 }
 
 // nativeShareEventData is emitted as "native_share": started, minimized,
-// restored, ended (window closed / stopped), fallback (with reason) or audio
+// restored, ended (window closed / stopped), failed (with reason) or audio
 // (reason: the audio actually captured when it differs from the request:
 // "system" or "none").
 // Studio shares also emit camera (reason "busy" or "unavailable") when a
@@ -174,7 +174,7 @@ func nativeBitrateCap(requested int, limits netproto.MediaLimits) int {
 	return bitrate
 }
 
-// nativeShareDecision is the pure fallback policy: what a failure leads to.
+// nativeShareDecision is the pure failure policy: what a capture failure leads to.
 func nativeShareDecision(err error, restarts int) string {
 	switch {
 	case errors.Is(err, nativecapture.ErrSourceClosed):
@@ -182,7 +182,7 @@ func nativeShareDecision(err error, restarts int) string {
 	case restarts < 1:
 		return "restart"
 	default:
-		return "fallback"
+		return "failed"
 	}
 }
 
@@ -194,8 +194,8 @@ func nativeCameraReason(msg string) string {
 	return "unavailable"
 }
 
-// nativeShareCodecFallback: the native encoder only produces H.264.
-func nativeShareCodecFallback(codec string) bool { return codec != "" && codec != "h264" }
+// nativeShareCodecUnsupported: the native encoder only produces H.264.
+func nativeShareCodecUnsupported(codec string) bool { return codec != "" && codec != "h264" }
 
 type nativeShare struct {
 	cm        *connManager
@@ -211,6 +211,7 @@ type nativeShare struct {
 	level      nativesender.Level
 	generation uint64
 	upload     bool
+	uploadRev  uint64 // counts upload transitions: a pause and resume in one generation still changes it
 	running    bool
 	// Studio: the scene on air (re-applied after a restart); the audio plan.
 	scene       nativecapture.Scene
@@ -225,7 +226,7 @@ type nativeShare struct {
 	prev        nativeSample
 	badFrames   atomic.Int32
 	frames      nativeFrameDiag
-	fellBack    atomic.Bool // fallback runs once: onFrame, peerLost and watch can all trigger it
+	failed      atomic.Bool // fail runs once: onFrame, peerLost and watch can all trigger it
 	// Server candidates that arrive while an offer is still in flight.
 	pending []netproto.ICECandidate
 	// call: a private call share (native_call_share.go) sends to its viewers
@@ -265,6 +266,8 @@ func (m *connManager) nativeStatus() NativeShareStatus {
 	switch {
 	case runtime.GOOS != "windows":
 		st.Reason = "unsupported_platform"
+	case !nativecapture.Supported():
+		st.Reason = "unsupported_windows"
 	case !supported:
 		st.Reason = "server_outdated"
 	case !e2ee:
@@ -436,14 +439,17 @@ func (n *nativeShare) applyUpdate(update NativeShareUpdate) error {
 		n.mu.Unlock()
 		return errors.New("stale native share generation")
 	}
-	if nativeShareCodecFallback(update.Codec) {
+	if nativeShareCodecUnsupported(update.Codec) {
 		n.mu.Unlock()
 		log.Printf("native share publication codec %q is not H.264", update.Codec)
-		n.fallback("codec")
+		n.fail("codec")
 		return errors.New("publication codec is not H.264")
 	}
 	n.generation = update.Generation
 	resume := update.UploadActive && !n.upload
+	if update.UploadActive != n.upload {
+		n.uploadRev++
+	}
 	n.upload = update.UploadActive
 	// Under n.mu (atomic stores): overlapping bridge calls reach the session
 	// in the order they adopted their state.
@@ -776,10 +782,10 @@ func (n *nativeShare) onFrame(f nativecapture.Frame) {
 		return
 	}
 	// The encoder ignores the one-slice/parameter-set rules: never publish
-	// such frames; a second of them falls back to Browser capture.
+	// such frames; a second of them ends the share.
 	if n.badFrames.Add(1) == 30 {
 		log.Printf("native share encoder output rejected: %v", err)
-		go n.fallback("encoder")
+		go n.fail("encoder")
 	}
 }
 
@@ -799,14 +805,18 @@ func (n *nativeShare) onEstimate(bps int) {
 	}
 }
 
-// peerConnected restarts the reconnect budget: only consecutive failures
-// count towards nativeReconnectLimit.
+// peerConnected restarts the reconnect budget (only consecutive failures
+// count towards nativeReconnectLimit) and starts the stream on a keyframe.
 func (n *nativeShare) peerConnected(s *nativesender.Sender) {
 	n.mu.Lock()
-	if n.sender == s {
+	current := n.sender == s
+	if current {
 		n.reconnects = 0
 	}
 	n.mu.Unlock()
+	if current {
+		n.requestKeyframe()
+	}
 }
 
 // peerLost re-offers while the share is active: the server closes the native
@@ -824,7 +834,7 @@ func (n *nativeShare) peerLost(lost *nativesender.Sender) {
 	go func() {
 		_ = lost.Close()
 		if attempt > nativeReconnectLimit {
-			n.fallback("peer")
+			n.fail("peer")
 			return
 		}
 		select {
@@ -892,7 +902,7 @@ func (n *nativeShare) watch() {
 				if decision != "restart" {
 					log.Printf("native share capture failed again: %v", err)
 				}
-				n.fallback("capture")
+				n.fail("capture")
 				return
 			}
 		case <-tick.C:
@@ -918,14 +928,18 @@ func (n *nativeShare) watch() {
 				n.emit(state, "")
 			}
 			now := time.Now()
-			snap, reason := n.observe(&stall, session, stats, now.Sub(started), now)
+			snap, seen, reason := n.observe(&stall, session, stats, now.Sub(started), now)
 			if now.Sub(started) >= nativeStatsAt(logged) {
 				logged++
 				log.Printf("native share stats %s", snap)
 			}
 			if reason != "" {
+				if !n.failIfCurrent(seen, "stalled") {
+					// Stale: the share changed meanwhile; its new state gets a fresh window.
+					stall.Fired, stall.Resumed = false, now
+					continue
+				}
 				log.Printf("native share stalled (%s): %s", reason, snap)
-				n.fallback("stalled")
 				return
 			}
 		}
@@ -938,14 +952,30 @@ type nativeStallWatch struct {
 	session *nativecapture.Session
 	sender  *nativesender.Sender
 	packets uint64
-	noKey   uint64
+}
+
+// nativeObserved is the share state one watchdog decision was made on.
+type nativeObserved struct {
+	session    *nativecapture.Session
+	sender     *nativesender.Sender
+	upload     bool
+	uploadRev  uint64
+	generation uint64
+}
+
+// nativeStallIdle: paused (no viewer demand), not yet published, minimized,
+// or without an active video key (frames are withheld until it arrives).
+// Only the current key counts: video that stops while a key is active stalls.
+func nativeStallIdle(upload bool, generation uint64, minimized, keyActive bool) bool {
+	return !upload || generation == 0 || minimized || !keyActive
 }
 
 // observe takes one stats snapshot and advances the stall watchdog.
-func (n *nativeShare) observe(w *nativeStallWatch, session *nativecapture.Session, cs nativecapture.Stats, elapsed time.Duration, now time.Time) (nativeShareSnapshot, string) {
+func (n *nativeShare) observe(w *nativeStallWatch, session *nativecapture.Session, cs nativecapture.Stats, elapsed time.Duration, now time.Time) (nativeShareSnapshot, nativeObserved, string) {
 	n.mu.Lock()
-	sender, upload, generation := n.sender, n.upload, n.generation
+	sender, upload, uploadRev, generation := n.sender, n.upload, n.uploadRev, n.generation
 	n.mu.Unlock()
+	seen := nativeObserved{session: session, sender: sender, upload: upload, uploadRev: uploadRev, generation: generation}
 	snap := nativeShareSnapshot{elapsed: elapsed, peer: "none", upload: upload, generation: generation, cs: cs, encoder: session.Info(),
 		unsent: n.frames.unsent.Load(), rejected: n.frames.rejected.Load(), dropped: n.frames.dropped.Load(), noKey: n.frames.noKey.Load()}
 	n.frames.mu.Lock()
@@ -953,11 +983,11 @@ func (n *nativeShare) observe(w *nativeStallWatch, session *nativecapture.Sessio
 	n.frames.mu.Unlock()
 	if n.call != nil {
 		snap.peer = "call"
-		return snap, "" // call viewers come and go; their links recover themselves
+		return snap, seen, "" // call viewers come and go; their links recover themselves
 	}
 	if sender == nil {
 		w.sender = nil // between re-offers: peerLost owns the recovery
-		return snap, ""
+		return snap, seen, ""
 	}
 	state := sender.ConnectionState()
 	snap.peer, snap.ss = state.String(), sender.Stats()
@@ -972,12 +1002,9 @@ func (n *nativeShare) observe(w *nativeStallWatch, session *nativecapture.Sessio
 	if snap.ss.VideoPackets != w.packets {
 		w.packets, w.LastVideo = snap.ss.VideoPackets, now
 	}
-	// Paused (no viewer demand), minimized, or without an active media key
-	// (Browser capture would wait for the same key): idle by design. A
-	// restarted capture session gets a fresh window too.
-	keyless := snap.noKey != w.noKey
-	w.noKey = snap.noKey
-	w.Idle = !upload || generation == 0 || cs.Minimized || keyless
+	// Idle by design (nativeStallIdle); a restarted capture session gets a fresh window too.
+	_, keyActive := n.keys.Active()
+	w.Idle = nativeStallIdle(upload, generation, cs.Minimized, keyActive)
 	if w.Idle || session != w.session {
 		w.session, w.Resumed = session, now
 	}
@@ -985,7 +1012,7 @@ func (n *nativeShare) observe(w *nativeStallWatch, session *nativecapture.Sessio
 	if reason != "" {
 		w.Fired = true
 	}
-	return snap, reason
+	return snap, seen, reason
 }
 
 func (n *nativeShare) end(reason string) {
@@ -994,13 +1021,32 @@ func (n *nativeShare) end(reason string) {
 	n.emit("ended", reason)
 }
 
-func (n *nativeShare) fallback(reason string) {
-	if !n.fellBack.CompareAndSwap(false, true) {
-		return
+// fail ends the share after a failure the pipeline cannot recover from;
+// the webview stops the publication and names the reason.
+func (n *nativeShare) fail(reason string) {
+	if n.failed.CompareAndSwap(false, true) {
+		n.finishFail(reason)
 	}
-	log.Printf("native share falling back to Browser capture: %s", reason)
+}
+
+// failIfCurrent fails the share only while it still has the capture
+// session, sender and publication state the decision was made on (observe
+// released n.mu in between); a stale decision is discarded.
+func (n *nativeShare) failIfCurrent(seen nativeObserved, reason string) bool {
+	n.mu.Lock()
+	current := n.session == seen.session && n.sender == seen.sender && n.upload == seen.upload && n.uploadRev == seen.uploadRev && n.generation == seen.generation &&
+		n.failed.CompareAndSwap(false, true)
+	n.mu.Unlock()
+	if current {
+		n.finishFail(reason)
+	}
+	return current
+}
+
+func (n *nativeShare) finishFail(reason string) {
+	log.Printf("native share failed: %s", reason)
 	n.close()
-	n.emit("fallback", reason)
+	n.emit("failed", reason)
 }
 
 // close stops capture and closes the native peer (an empty-SDP native offer

@@ -9,15 +9,35 @@ globalThis.window = { __noxa: { state: { activeTabID: "t1" } }, go: { main: { Ap
     NativeScreenKeyForTab: async (tab, body) => { calls.push([tab, body]); await new Promise(r => setTimeout(r, body.op === "key" ? 5 : 0)); },
     NativeScreenThumbnails: async values => Object.fromEntries(values.filter(v => v !== "w:9").map(v => [v, `data:image/jpeg;base64,${v}`])),
 } } } };
-const { screenCaptureBackend, setScreenCaptureBackend, nativeSource, nativeSourceOptions, mirrorNativeKey, nativeEventIsCurrent,
+store.set("noxa.screenCaptureBackend", "browser"); // the former Browser/Native choice
+globalThis.localStorage.removeItem = k => store.delete(k);
+const { nativeSource, nativeSourceOptions, mirrorNativeKey, nativeEventIsCurrent, nativeUnavailableKey, nativeFailureKey,
     rememberNativeSource, rememberedNativeSource, nativeThumbnails, nativeRegionSource } = await import("../src/native-share.js");
 
-test("capture backend defaults to Browser and remembers Native", () => {
-    assert.equal(screenCaptureBackend(), "browser");
-    setScreenCaptureBackend("native");
-    assert.equal(screenCaptureBackend(), "native");
-    setScreenCaptureBackend("bogus");
-    assert.equal(screenCaptureBackend(), "browser");
+test("the former capture backend setting is dropped and ignored", () => {
+    assert.equal(store.has("noxa.screenCaptureBackend"), false);
+});
+
+test("an unavailable native share explains why; the dialog keeps Start disabled", () => {
+    assert.equal(nativeUnavailableKey({ available: true }), "");
+    assert.equal(nativeUnavailableKey({ available: false, reason: "unsupported_platform" }), "share.unavailable.unsupported_platform");
+    assert.equal(nativeUnavailableKey({ available: false, reason: "unsupported_windows" }), "share.unavailable.unsupported_windows");
+    assert.equal(nativeUnavailableKey({ available: false, reason: "server_outdated" }), "share.unavailable.server_outdated");
+    assert.equal(nativeUnavailableKey({ available: false, reason: "unavailable" }), "share.unavailable");
+    assert.equal(nativeUnavailableKey(null), "share.unavailable");
+    // A call share needs no server peer: an old server does not block it.
+    assert.equal(nativeUnavailableKey({ available: false, reason: "server_outdated", call_available: true }, true), "");
+    assert.equal(nativeUnavailableKey({ available: false, reason: "server_outdated", call_available: false }, true), "share.unavailable.media_e2ee_unavailable");
+    assert.equal(nativeFailureKey("stalled"), "share.failed.stalled");
+    assert.equal(nativeFailureKey("bogus"), "share.failed");
+});
+
+test("every unavailable and failure notice exists in English and German", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const text = await readFile(new URL("../src/stream-messages.js", import.meta.url), "utf8");
+    const keys = ["share.unavailable", ...["unsupported_platform", "unsupported_windows", "server_outdated", "media_e2ee_unavailable"].map(r => `share.unavailable.${r}`),
+        "share.failed", ...["capture", "encoder", "peer", "stalled", "codec"].map(r => `share.failed.${r}`)];
+    for (const key of keys) assert.equal(text.split(`"${key}":`).length, 3, key);
 });
 
 test("native sources validate the picker value against the surface", () => {

@@ -69,8 +69,7 @@ func TestNativeCaptureStreamsToReceiver(t *testing.T) {
 	if os.Getenv("NOXA_NATIVE_TESTDATA") != "" {
 		maxW, maxH = 640, 360 // Small committed fixtures.
 	}
-	s, err := Start(Config{Source: Source{Monitor: monitor}, MaxWidth: maxW, MaxHeight: maxH, FPS: 30, Bitrate: 1_000_000,
-		AllowSoftware: os.Getenv("NOXA_NATIVE_SOFTWARE") != ""}, func(f Frame) {
+	s, err := Start(Config{Source: Source{Monitor: monitor}, MaxWidth: maxW, MaxHeight: maxH, FPS: 30, Bitrate: 1_000_000}, func(f Frame) {
 		if err := sender.WriteFrame(f.Data, f.Keyframe, f.SeqHeader, f.Captured); err != nil {
 			t.Errorf("WriteFrame: %v", err)
 		}
