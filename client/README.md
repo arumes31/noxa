@@ -52,7 +52,13 @@ the current user's voice controls.
   crops the browser capture to the same area. **Studio** in Native mode
   composes its screens, windows and cameras (Media Foundation) with a
   Direct3D 11 compositor in Go; text and images arrive from the webview as
-  transparent overlay PNGs, uploaded only on change.
+  transparent overlay PNGs, uploaded only on change. In a **private call**,
+  Native mode opens the same picker from the call's screen button; Go then
+  opens one relay-only peer-to-peer connection per participant (the call's
+  `screen` sub-connection, signaled with the call's sealed signals) and
+  encrypts with the call's media keys. It needs no server support, only
+  participants whose apps advertise `screen-sub` (older apps keep Browser
+  capture).
   Share audio follows the dialog's audio choice: a window share sends only
   that application's audio, a monitor share sends system audio without
   noXa's own voices (WASAPI process loopback, Windows build 20348 or later, i.e. Windows 11). If

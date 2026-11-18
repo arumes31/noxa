@@ -16,6 +16,46 @@ type PrivateCallDescription struct {
 	To     string `json:"to"`
 	Type   string `json:"type"`
 	SDP    string `json:"sdp"`
+	// Sub names a sub-connection: callSubScreen from a native screen sender
+	// (offer, candidates), callSubScreenReply from its viewer (answer,
+	// candidates). Empty is the call's main connection.
+	Sub string `json:"sub,omitempty"`
+	// Features is what the sender of a main offer or answer can receive.
+	Features []string `json:"features,omitempty"`
+}
+
+// Native screen sub-connection (one per sharing peer and viewer). Only sent
+// to a peer whose main offer or answer listed callFeatureScreenSub: older
+// apps would apply a sub-connection offer to the main connection.
+const (
+	callFeatureScreenSub = "screen-sub"
+	callSubScreen        = "screen"
+	callSubScreenReply   = "screen-reply"
+)
+
+// callFeatures is what this app advertises in main offers and answers.
+var callFeatures = []string{callFeatureScreenSub}
+
+// validCallDescriptionShape checks the sub-connection and feature fields.
+func validCallDescriptionShape(d PrivateCallDescription) bool {
+	if len(d.Features) > 8 {
+		return false
+	}
+	for _, f := range d.Features {
+		if f == "" || len(f) > 32 {
+			return false
+		}
+	}
+	switch d.Sub {
+	case "":
+		return true
+	case callSubScreen:
+		return len(d.Features) == 0 && (d.Type == "offer" || d.Type == "candidates")
+	case callSubScreenReply:
+		return len(d.Features) == 0 && (d.Type == "answer" || d.Type == "candidates")
+	default:
+		return false
+	}
 }
 
 func validPrivateCallPayload(kind, payload string) bool {
@@ -147,12 +187,33 @@ func (a *App) StopPrivateCallForTab(tabID, callID string) error {
 }
 
 func (a *App) SendPrivateCallDescriptionForTab(tabID, callID, target, kind, sdp string) error {
-	if !validPrivateCallPayload(kind, sdp) {
-		return errors.New("invalid call description")
-	}
+	return a.sendPrivateCallDescription(tabID, callID, target, "", kind, sdp)
+}
+
+// SendPrivateCallScreenReplyForTab answers a peer's native screen
+// sub-connection (this side views it): answer and candidates.
+func (a *App) SendPrivateCallScreenReplyForTab(tabID, callID, target, kind, sdp string) error {
+	return a.sendPrivateCallDescription(tabID, callID, target, callSubScreenReply, kind, sdp)
+}
+
+func (a *App) sendPrivateCallDescription(tabID, callID, target, sub, kind, sdp string) error {
 	m, err := a.requireTabCM(tabID)
 	if err != nil {
 		return err
+	}
+	description := PrivateCallDescription{Type: kind, SDP: sdp, Sub: sub}
+	if sub == "" && (kind == "offer" || kind == "answer") {
+		description.Features = callFeatures
+	}
+	return m.sendPrivateCallDescription(callID, target, description)
+}
+
+// sendPrivateCallDescription seals one description to the target's call key
+// and relays it. Call signals of the webview and of a native screen sender
+// share one pace: the server's signal allowance is per account.
+func (m *connManager) sendPrivateCallDescription(callID, target string, description PrivateCallDescription) error {
+	if !validPrivateCallPayload(description.Type, description.SDP) || !validCallDescriptionShape(description) {
+		return errors.New("invalid call description")
 	}
 	id, err := m.identity()
 	if err != nil {
@@ -169,7 +230,8 @@ func (a *App) SendPrivateCallDescriptionForTab(tabID, callID, target, kind, sdp 
 	m.mu.Lock()
 	uid := m.uniqueID
 	m.mu.Unlock()
-	plain, err := json.Marshal(PrivateCallDescription{CallID: callID, From: uid, To: target, Type: kind, SDP: sdp})
+	description.CallID, description.From, description.To = callID, uid, target
+	plain, err := json.Marshal(description)
 	if err != nil {
 		return err
 	}
@@ -177,6 +239,7 @@ func (a *App) SendPrivateCallDescriptionForTab(tabID, callID, target, kind, sdp 
 	if err != nil {
 		return err
 	}
+	m.paceCallSignal()
 	_, err = m.privateCallRequest(netproto.CallRequest{Action: "signal", ID: callID, Target: target, Signal: sealed})
 	return err
 }
@@ -194,7 +257,7 @@ func openPrivateCallDescription(signal netproto.CallSignal, uid string, pub, pri
 		return description, err
 	}
 	if description.CallID != signal.CallID || description.From != signal.From || description.To != uid ||
-		!validPrivateCallPayload(description.Type, description.SDP) {
+		!validPrivateCallPayload(description.Type, description.SDP) || !validCallDescriptionShape(description) {
 		return PrivateCallDescription{}, errors.New("call description authentication failed")
 	}
 	return description, nil
@@ -220,7 +283,25 @@ func (a *App) OpenPrivateCallDescriptionForTab(tabID string, signal netproto.Cal
 	m.mu.Lock()
 	uid := m.uniqueID
 	m.mu.Unlock()
-	return openPrivateCallDescription(signal, uid, pub, priv)
+	description, err := openPrivateCallDescription(signal, uid, pub, priv)
+	if err == nil && description.Sub == callSubScreenReply {
+		// The viewer's reply belongs to this side's native screen sender.
+		m.routeCallScreenReply(description)
+	}
+	return description, err
+}
+
+// callSignalSpacing keeps call signals of one session under the server's
+// per-account allowance (32/s) even when the webview and Go both signal.
+const callSignalSpacing = 55 * time.Millisecond
+
+func (m *connManager) paceCallSignal() {
+	m.callSignalMu.Lock()
+	defer m.callSignalMu.Unlock()
+	if wait := time.Until(m.callSignalNext); wait > 0 {
+		time.Sleep(wait)
+	}
+	m.callSignalNext = time.Now().Add(callSignalSpacing)
 }
 
 // Call membership pins one device per account. Resolve its immutable key from

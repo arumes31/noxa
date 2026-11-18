@@ -622,8 +622,18 @@ export function createVideoPublication({ policy }) {
         openShareDialog();
     }
 
-    function openShareDialog(replacing = false, initialPreset = DEFAULT_SHARE_PRESET, initialAudio = "none", initialSurface = "monitor", custom = {}, bitrateCeiling = 0) {
+    // openCallShareDialog is noXa's picker for a private call's screen share
+    // (Native mode): startNative({source, max_width, max_height, fps,
+    // bitrate, audioMode}) streams natively; on failure (with a notice) or a
+    // Browser pick, startDisplay(stream, audioMode) takes the capture.
+    function openCallShareDialog({ startNative, startDisplay, audio = "none", onClose = () => {} }) {
+        openShareDialog(false, DEFAULT_SHARE_PRESET, audio, "monitor", {}, 0, { startNative, startDisplay, onClose });
+    }
+
+    function openShareDialog(replacing = false, initialPreset = DEFAULT_SHARE_PRESET, initialAudio = "none", initialSurface = "monitor", custom = {}, bitrateCeiling = 0, call = null) {
         const dialogID = ++shareDialogID;
+        // A call share needs no server native peer (it is peer-to-peer).
+        const nativeAvailable = status => !!(call ? status?.call_available : status?.available);
         const overlay = document.createElement("div");
         overlay.className = "dlg-overlay";
         const view = createSharePicker({ id: `share-${dialogID}`, preset: initialPreset, custom, bitrateCeiling,
@@ -722,7 +732,7 @@ export function createVideoPublication({ policy }) {
         nativeGrid.hidden = true;
         nativeBox.append(backendLabel, " ", nativeNote, nativeGrid);
         let nativeOptions = [], nativeValue = "", nativeSurface = "";
-        const nativeUsable = () => backend.value === "native" && !!nativeStatus?.available && ["monitor", "window", "region"].includes(view.surface());
+        const nativeUsable = () => backend.value === "native" && nativeAvailable(nativeStatus) && ["monitor", "window", "region"].includes(view.surface());
         const refreshNative = () => {
             const surface = view.surface();
             const usable = nativeUsable();
@@ -759,7 +769,7 @@ export function createVideoPublication({ policy }) {
                 if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
             }
             for (const input of nativeGrid.querySelectorAll("input")) input.checked = input.value === nativeValue;
-            nativeNote.textContent = backend.value !== "native" ? "" : !nativeStatus?.available ? tLabel("share.nativeUnavailable")
+            nativeNote.textContent = backend.value !== "native" ? "" : !nativeAvailable(nativeStatus) ? tLabel("share.nativeUnavailable")
                 : usable && !options.length ? tLabel("share.nativeNoSources") : "";
             update();
             void showNativePreview();
@@ -806,7 +816,7 @@ export function createVideoPublication({ policy }) {
             try {
                 const status = await nativeShareStatus(V().state.activeTabID);
                 if (!isCurrentServerDialog(overlay)) return;
-                if (status.available) { nativeStatus = status; refreshNative(); }
+                if (nativeAvailable(status)) { nativeStatus = status; refreshNative(); }
                 const thumbs = await nativeThumbnails(nativeOptions.map(o => o.value));
                 if (!isCurrentServerDialog(overlay)) return;
                 for (const img of nativeGrid.querySelectorAll("img[data-value]")) if (thumbs[img.dataset.value]) img.src = thumbs[img.dataset.value];
@@ -838,6 +848,7 @@ export function createVideoPublication({ policy }) {
             if (!selected) { view.closePanels(); $(".sp-quality-toggle").click(); quality.read(); return; }
             const surface = view.surface(), region = view.region();
             if (surface === "region" && !region) return;
+            if (call) { void startCallShare(native, selected, surface, region); return; }
             const { state } = V();
             if (!state.pc || state.pc.connectionState === "closed" || state.pc.connectionState === "failed") { error.textContent = tLabel("share.connectionRequired"); return; }
             if (state.shareStarting || state.shareStopping || (!!state.screenSharing !== replacing)) { error.textContent = tLabel("share.stateChanged"); return; }
@@ -875,8 +886,57 @@ export function createVideoPublication({ policy }) {
                 if (isCurrentServerDialog(overlay)) update();
             }
         };
-        mountServerDialog(overlay, { onCancel: () => !publishing, onClose: () => { clearInterval(nativeTimer); view.dispose(); discardSelection(); dropNativePreview(); } });
-        const hint = mediaLimitHint();
+        // The call path of Start: native first, else (with a notice) the
+        // browser capture of the same source, cropped to the same Region.
+        async function startCallShare(native, selected, surface, region) {
+            let display = selectedDisplay; selectedDisplay = null;
+            view.closePanels();
+            publishing = true; error.textContent = ""; update();
+            try {
+                const p = shareQuality(selected.preset, selected.custom, selected.bitrateCeiling);
+                const audioMode = view.audio();
+                if (!p) return;
+                let started = false;
+                if (native) {
+                    rememberNativeSource(surface === "region" ? "monitor" : surface, nativeOption());
+                    // Native output is at most 1080p; a call has no server media limits.
+                    const width = Math.min(p.width || 1920, 1920), height = Math.min(p.height || 1080, 1080);
+                    started = await call.startNative({ source: native, max_width: width, max_height: height, fps: p.fps,
+                        bitrate: p.bitrateCeiling || Math.min(8000000, Math.round(width * height * p.fps * 0.07)), audioMode });
+                    if (!started && isCurrentServerDialog(overlay)) {
+                        V().toast(tLabel("share.nativeFallback"), "warn");
+                        const video = screenShareConstraints(surface === "region" ? { width: 0, height: 0, fps: p.fps, original: true } : p, null);
+                        video.displaySurface = surface === "region" ? "monitor" : surface;
+                        display = await navigator.mediaDevices.getDisplayMedia({ video, ...displayAudioOptions(audioMode) });
+                        retainDisplayCapture(display);
+                        if (surface === "region") {
+                            if (!regionSupported) throw new Error(tLabel("polish.cropNeedsUpdate"));
+                            const cropped = cropDisplayStream(display, region);
+                            transferDisplayCapture(display, cropped.stream);
+                            display = cropped.stream;
+                        }
+                    }
+                } else if (display && surface === "region") {
+                    const cropped = cropDisplayStream(display, region);
+                    transferDisplayCapture(display, cropped.stream);
+                    display = cropped.stream;
+                }
+                if (!started && display && isCurrentServerDialog(overlay)) {
+                    const owned = display; display = null; // startDisplay owns it from here
+                    started = await call.startDisplay(owned, audioMode);
+                }
+                if (started) closeDialog(overlay, "started");
+                else if (isCurrentServerDialog(overlay)) { view.clearPreview(); error.textContent = tLabel("share.startFailed"); }
+            } catch (failure) {
+                if (isCurrentServerDialog(overlay)) { view.clearPreview(); error.textContent = tLabel("desktop.screen.capture.failed") + (failure.message || failure.name); }
+            } finally {
+                stopDisplayCapture(display);
+                publishing = false;
+                if (isCurrentServerDialog(overlay)) update();
+            }
+        }
+        mountServerDialog(overlay, { onCancel: () => !publishing, onClose: () => { clearInterval(nativeTimer); view.dispose(); discardSelection(); dropNativePreview(); call?.onClose(); } });
+        const hint = call ? "" : mediaLimitHint();
         if (hint) {
             const note = document.createElement("p");
             note.className = "set-hint media-limit-hint";
@@ -1730,5 +1790,5 @@ export function createVideoPublication({ policy }) {
     }
 
     return { applyVideoLimits, shareToggle, resetCameraState, cameraToggle, applySendCaps, adaptScreenResolution, retryVideoHardware, syncCameraButton, syncShareButton, startStudioShare, startNativeStudioShare, updateNativeStudio, studioShareActive, stopShare: doStopShare,
-        pauseShareForReconnect, cancelShareResume, shareResumePending, resumeShareAfterReconnect, updateShareSettings, openResumedShare };
+        pauseShareForReconnect, cancelShareResume, shareResumePending, resumeShareAfterReconnect, updateShareSettings, openResumedShare, openCallShareDialog };
 }

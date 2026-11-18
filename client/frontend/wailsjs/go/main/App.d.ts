@@ -469,6 +469,7 @@ export function SendICECandidateForTab(arg1:string,arg2:string,arg3:string,arg4:
 
 export function SendPrivateCallDescriptionForTab(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<void>;
 
+export function SendPrivateCallScreenReplyForTab(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<void>;
 export function SendTyping(arg1:number,arg2:string):Promise<string>;
 
 export function SendTypingForTab(arg1:string,arg2:number,arg3:string):Promise<string>;
@@ -571,6 +572,7 @@ export function StartConnectionBenchmark(arg1:string):Promise<main.ConnectionBen
 
 export function StartDirectDisappearingForTab(arg1:string,arg2:string):Promise<Array<main.DMExpiry>>;
 
+export function StartNativeCallShareForTab(arg1:string,arg2:any):Promise<void>;
 export function StartNativeScreenShareForTab(arg1:string,arg2:any):Promise<void>;
 
 export function StartedAfterUpdate():Promise<boolean>;
@@ -613,6 +615,7 @@ export function TrustServerFingerprint(arg1:string,arg2:string):Promise<string>;
 
 export function UpdateGamingOverlay(arg1:main.GamingOverlaySnapshot):Promise<string>;
 
+export function UpdateNativeCallShareTargetsForTab(arg1:string,arg2:string,arg3:Array<string>):Promise<void>;
 export function UpdateNativeScreenShareForTab(arg1:string,arg2:any):Promise<void>;
 
 export function UploadChatAttachment(arg1:number,arg2:string,arg3:string):Promise<string>;

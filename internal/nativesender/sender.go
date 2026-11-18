@@ -76,6 +76,9 @@ type Config struct {
 	MaxBitrate     int
 	// SettingEngine lets tests restrict ICE to loopback; zero value is fine.
 	SettingEngine *webrtc.SettingEngine
+	// ICETransportPolicy "relay" keeps private-call peers off host and
+	// reflexive addresses (the zero value gathers all candidates).
+	ICETransportPolicy webrtc.ICETransportPolicy
 }
 
 // Stats are cumulative sender counters plus transport snapshots.
@@ -180,7 +183,7 @@ func New(cfg Config) (*Sender, error) {
 	if cfg.SettingEngine != nil {
 		options = append(options, webrtc.WithSettingEngine(*cfg.SettingEngine))
 	}
-	pc, err := webrtc.NewAPI(options...).NewPeerConnection(webrtc.Configuration{ICEServers: cfg.ICEServers, BundlePolicy: webrtc.BundlePolicyMaxBundle})
+	pc, err := webrtc.NewAPI(options...).NewPeerConnection(webrtc.Configuration{ICEServers: cfg.ICEServers, ICETransportPolicy: cfg.ICETransportPolicy, BundlePolicy: webrtc.BundlePolicyMaxBundle})
 	if err != nil {
 		return nil, err
 	}

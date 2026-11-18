@@ -104,9 +104,20 @@ test("key operations go to the owning session's tab, never the active one", asyn
     calls.length = 0;
     window.__noxa.state.activeTabID = "t2";
     mirrorNativeKey("self|screen", { op: "forget" }, "t1");
-    mirrorNativeKey("self|screen", { op: "activate", epoch: 4 }); // no owner (a call session): not mirrored
+    mirrorNativeKey("self|screen", { op: "activate", epoch: 4 }); // no owner: not mirrored
     await new Promise(r => setTimeout(r, 10));
     assert.deepEqual(calls.map(([tab, body]) => [tab, body.op]), [["t1", "forget"]]);
+    assert.equal(calls[0][1].call, undefined, "channel keys carry no call");
+});
+
+test("a private call session's keys go to that call's keyring on its tab", async () => {
+    calls.length = 0;
+    mirrorNativeKey("self|screen", { op: "activate", epoch: 5 }, { tabID: "t1", callID: "c1" });
+    mirrorNativeKey("self|screenaudio", { op: "retire", epoch: 4 }, { tabID: "t1", callID: "c1" });
+    mirrorNativeKey("self|mic", { op: "activate", epoch: 5 }, { tabID: "t1", callID: "c1" });
+    mirrorNativeKey("self|screen", { op: "activate", epoch: 5 }, { tabID: "t1" }); // an object owner without a call
+    await new Promise(r => setTimeout(r, 10));
+    assert.deepEqual(calls.map(([tab, body]) => [tab, body.slot, body.op, body.call]), [["t1", "screen", "activate", "c1"], ["t1", "screenaudio", "retire", "c1"]]);
 });
 
 test("native share events match their share and tab", () => {
