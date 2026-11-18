@@ -13,6 +13,27 @@ type captureBoost struct {
 	mu      sync.Mutex
 	holders map[string]bool
 	apply   func(on bool) error
+	// logged: failures already written; a refresh every 15 s must not repeat them.
+	logged map[string]bool
+}
+
+// logOnce writes each distinct boost failure once per process (bounded).
+func (b *captureBoost) logOnce(err error) {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, e := range joined.Unwrap() {
+			b.logOnce(e)
+		}
+		return
+	}
+	msg := err.Error()
+	if b.logged[msg] || len(b.logged) >= 32 {
+		return
+	}
+	if b.logged == nil {
+		b.logged = make(map[string]bool)
+	}
+	b.logged[msg] = true
+	log.Printf("capture priority boost: %s", msg)
 }
 
 func (b *captureBoost) set(reason string, on bool) {
@@ -33,7 +54,7 @@ func (b *captureBoost) set(reason string, on bool) {
 	// A refresh while held re-applies: the WebView2 GPU process can restart.
 	if now := len(b.holders) > 0; now || was {
 		if err := b.apply(now); err != nil {
-			log.Printf("capture priority boost: %v", err)
+			b.logOnce(err)
 		}
 	}
 }

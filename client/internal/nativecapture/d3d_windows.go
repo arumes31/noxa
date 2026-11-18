@@ -4,6 +4,7 @@ package nativecapture
 
 import (
 	"errors"
+	"fmt"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -43,6 +44,31 @@ type d3dBox struct{ Left, Top, Front, Right, Bottom, Back uint32 }
 type device struct {
 	dev, ctx, videoDev, videoCtx uintptr
 	winrt                        uintptr // WinRT IDirect3DDevice for the frame pool
+	adapter                      string  // DXGI adapter description, vendor/device ID and LUID (diagnostics)
+}
+
+// dxgiAdapterDesc is DXGI_ADAPTER_DESC.
+type dxgiAdapterDesc struct {
+	Description                                   [128]uint16
+	VendorID, DeviceID, SubSysID, Revision        uint32
+	DedicatedVideo, DedicatedSystem, SharedSystem uintptr
+	LUIDLow                                       uint32
+	LUIDHigh                                      int32
+}
+
+// adapterString describes the adapter behind an IDXGIDevice ("" when unknown).
+func adapterString(dxgi uintptr) string {
+	var adapter uintptr
+	if hr := vcall(dxgi, 7, uintptr(unsafe.Pointer(&adapter))); hr.failed() { // #nosec G103 -- IDXGIDevice::GetAdapter
+		return "unknown"
+	}
+	defer release(adapter)
+	var desc dxgiAdapterDesc
+	if hr := vcall(adapter, 8, uintptr(unsafe.Pointer(&desc))); hr.failed() { // #nosec G103 -- IDXGIAdapter::GetDesc
+		return "unknown"
+	}
+	return fmt.Sprintf("%q vendor=0x%04X device=0x%04X luid=%08X%08X", windows.UTF16ToString(desc.Description[:]),
+		desc.VendorID, desc.DeviceID, uint32(desc.LUIDHigh), desc.LUIDLow) // #nosec G115 -- LUID bits
 }
 
 func newDevice() (*device, error) {
@@ -74,6 +100,7 @@ func newDevice() (*device, error) {
 		return nil, err
 	}
 	defer release(dxgi)
+	d.adapter = adapterString(dxgi)
 	// Capture is latency critical; positive values may be refused without
 	// privilege, which keeps the default.
 	vcall(dxgi, 10, 7) // IDXGIDevice::SetGPUThreadPriority

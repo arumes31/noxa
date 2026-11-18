@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"log"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -39,5 +43,21 @@ func TestDisplayCaptureLeaseDrivesBrowserBoost(t *testing.T) {
 	}
 	if states[len(states)-1] {
 		t.Fatalf("shutdown did not restore: %v", states)
+	}
+}
+
+// A failure repeated by the 15 s refresh is logged once per process.
+func TestCaptureBoostLogsEachFailureOnce(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	t.Cleanup(func() { log.SetOutput(prev) })
+	log.SetOutput(&buf)
+	failure := errors.Join(errors.New("D3DKMTGetProcessSchedulingPriorityClass pid 7: NTSTATUS 0xC0000022"), errors.New("OpenProcess pid 9: Access is denied."))
+	b := captureBoost{apply: func(bool) error { return failure }}
+	for range 3 {
+		b.set("browser", true)
+	}
+	if got := strings.Count(buf.String(), "\n"); got != 2 {
+		t.Fatalf("logged %d lines:\n%s", got, buf.String())
 	}
 }

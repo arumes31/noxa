@@ -5,7 +5,9 @@ package nativecapture
 import (
 	"errors"
 	"image"
+	"log"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,6 +40,8 @@ type Session struct {
 	info  EncoderInfo
 
 	studio *studioInbox // Source.Studio only
+
+	encoderLog string // the last logged encoder selection (pipeline thread only)
 }
 
 // Start opens the capture and a hardware encoder and begins delivering frames
@@ -244,7 +248,16 @@ func (s *Session) ensureSized(p *pipeline, w, h int) error {
 		}
 	}
 	fps := int(s.fps.Load())
-	if p.enc, err = newEncoder(p.d, uint32(ow), uint32(oh), uint32(max(fps, 30)), uint32(s.bitrate.Load()), s.cfg.AllowSoftware); err != nil {
+	var report []string
+	p.enc, report, err = newEncoder(p.d, uint32(ow), uint32(oh), uint32(max(fps, 30)), uint32(s.bitrate.Load()), s.cfg.AllowSoftware)
+	// Once per session and outcome: size/bitrate reopens repeat the same selection.
+	if outcome := strings.Join(report[1:], "\n"); outcome != s.encoderLog {
+		s.encoderLog = outcome
+		for _, line := range report {
+			log.Printf("native encoder: %s", line)
+		}
+	}
+	if err != nil {
 		return err
 	}
 	p.srcW, p.srcH, p.outW, p.outH = w, h, ow, oh
@@ -320,6 +333,9 @@ func (s *Session) convert(p *pipeline, tex uintptr, r pixelRect) {
 	}
 	p.ring[slot].queued = time.Now()
 	p.last = slot
+	s.mu.Lock()
+	s.stats.Converted++
+	s.mu.Unlock()
 	// Keep only the newest unsubmitted frame: never encode stale content.
 	p.pending = append(p.pending[:0], slot)
 }
@@ -345,6 +361,9 @@ func (s *Session) loop(p *pipeline, capt frameSource) {
 		}
 		lastTS = ts
 		p.needInput--
+		s.mu.Lock()
+		s.stats.Submitted++
+		s.mu.Unlock()
 		queued := p.ring[slot].queued
 		if !queued.After(lastSubmit) {
 			queued = now // A resent picture: measure from the resend.
@@ -368,6 +387,9 @@ func (s *Session) loop(p *pipeline, capt frameSource) {
 			switch kind {
 			case meTransformNeedInput:
 				p.needInput++
+				s.mu.Lock()
+				s.stats.NeedInput++
+				s.mu.Unlock()
 				// A frame converted while the encoder was busy goes out now.
 				if err := submit(time.Now()); err != nil {
 					s.fail(err)

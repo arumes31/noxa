@@ -273,3 +273,16 @@ test("local recording identity distinguishes RTC lifetimes without exporting raw
     assert.equal(videoSenderRecordingIdentity(geometry), identity);
     assert.equal(videoSenderRecordingIdentity([{ ...baseline[0] }]), null, "unbound copies must not invent an identity");
 });
+
+test("the Browser share log line reports encoder output and flags a silent sender", async () => {
+    const { browserShareStatsLine } = await import("../src/video-sender-stats.js");
+    const stats = new Map([["out", { type: "outbound-rtp", kind: "video", codecId: "c", framesEncoded: 0, framesSent: 0, packetsSent: 0,
+        frameWidth: 1920, frameHeight: 1080, encoderImplementation: "MediaFoundationVideoEncodeAccelerator (AMD™ \"x\")", qualityLimitationReason: "none" }],
+        ["c", { type: "codec", mimeType: "video/H264", sdpFmtpLine: "packetization-mode=1;profile-level-id=42e01f" }]]);
+    assert.equal(browserShareStatsLine(stats, true), 'screen sender upload=on zero packets rid="" framesEncoded=0 framesSent=0 packetsSent=0 size=1920x1080' +
+        ' encoder="MediaFoundationVideoEncodeAccelerator (AMD? \\"x\\")" limit="none" codec="video/H264" fmtp="packetization-mode=1;profile-level-id=42e01f"');
+    stats.get("out").packetsSent = 12;
+    assert.doesNotMatch(browserShareStatsLine(stats, false), /zero packets/);
+    assert.match(browserShareStatsLine(stats, false), /^screen sender upload=off rid=/);
+    assert.equal(browserShareStatsLine(new Map(), undefined), "screen sender upload=? no outbound-rtp");
+});
