@@ -1,16 +1,15 @@
-// share-picker.js — the share-screen dialog view (P02): source tabs, a large
-// preview stage (a still of the picked monitor with an area selector for
-// Region), and a bar whose quality and audio buttons open small panels. The
-// source tiles, capture and publication stay in video-publication.js.
+// share-picker.js — the share-screen dialog view (design "B · Split"): a
+// source list on the left (screens, then windows), and on the right a large
+// preview of the picked source with an Area toggle for Region, and buttons
+// whose quality and audio panels open above them. The source rows, capture
+// and publication stay in video-publication.js.
 import { t } from "./i18n.js";
 import { createShareQualityControls, shareSummary } from "./screen-share-quality.js";
 import { normalizeRegion, regionLargeEnough } from "./share-frame-geometry.js";
 
 const icon = path => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${path}</svg>`;
 const ICONS = {
-    monitor: icon('<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>'),
-    window: icon('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/>'),
-    region: icon('<path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/><rect x="8" y="8" width="8" height="8" rx="1"/>'),
+    region: icon('<path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/>'),
     chevron: icon('<path d="M6 15l6-6 6 6"/>'),
     audio: icon('<path d="M11 5L6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/>'),
     muted: icon('<path d="M11 5L6 9H3v6h3l5 4z"/><path d="M22 9l-6 6M16 9l6 6"/>'),
@@ -37,54 +36,57 @@ export function createSharePicker({ id, preset, custom, bitrateCeiling, surface 
     dialog.className = "dlg share-dlg share-picker";
     const sourceName = `${id}-source`;
     dialog.innerHTML = `
-        <div class="sp-head">
-            <h3>${t("polish.shareTitle")}</h3>
-            <button type="button" class="sp-close" aria-label="${t("share.close")}">${icon('<path d="M6 6l12 12M18 6L6 18"/>')}</button>
+        <div class="sp-side">
+            <h3>${t("share.pickerTitle")}</h3>
+            <div class="sp-sources" role="radiogroup" aria-label="${t("polish.source")}">
+                ${["screens", "windows"].map(group => `
+                <div class="sp-group" role="group" aria-labelledby="${id}-${group}" hidden>
+                    <div class="sp-group-label" id="${id}-${group}">${t(`share.${group}`)}</div>
+                    <div class="sp-list sp-${group}"></div>
+                </div>`).join("")}
+            </div>
+            <p class="set-hint sp-native-note" hidden></p>
         </div>
-        <fieldset class="share-sources sp-tabs">
-            <legend class="sr-only">${t("polish.source")}</legend>
-            ${["monitor", "window", "region"].map(value => `
-            <label class="sp-tab"${value === "region" ? ` title="${t("polish.cropHelp")}"` : ""}>
-                <input type="radio" name="${sourceName}" value="${value}" />
-                ${ICONS[value]}<span>${t(`polish.${value}`)}</span>
-            </label>`).join("")}
-        </fieldset>
-        <div class="sp-stage">
-            <div class="sp-empty">
-                <p class="set-hint sp-choose-help" id="${id}-choose-help"></p>
+        <div class="sp-main">
+            <div class="sp-head">
+                <span class="sp-preview-title">${t("share.preview")}<span class="sp-source-label"></span></span>
+                <button type="button" class="sp-close" aria-label="${t("share.close")}" title="${t("share.close")}">${icon('<path d="M6 6l12 12M18 6L6 18"/>')}</button>
             </div>
-            <div class="sp-preview" hidden>
-                <video class="sh-preview" autoplay muted playsinline aria-label="${t("share.selectionPreview")}"></video>
-                <div class="sp-region" hidden tabindex="0" role="group" aria-label="${t("share.regionArea")}" aria-describedby="${id}-region-help">
-                    <div class="sp-region-box"><span class="sp-region-handle" aria-hidden="true"></span></div>
+            <div class="sp-stage">
+                <div class="sp-empty">
+                    <p class="set-hint sp-choose-help" id="${id}-choose-help"></p>
                 </div>
-                <div class="sp-preview-meta">
-                    <span class="sh-source-label sp-source-label"></span>
+                <div class="sp-preview" hidden>
+                    <video class="sh-preview" autoplay muted playsinline aria-label="${t("share.selectionPreview")}"></video>
+                    <div class="sp-region" hidden tabindex="0" role="group" aria-label="${t("share.regionArea")}" aria-describedby="${id}-region-help">
+                        <div class="sp-region-box"><span class="sp-region-handle" aria-hidden="true"></span></div>
+                    </div>
                 </div>
             </div>
-        </div>
-        <p class="set-hint sp-region-help" id="${id}-region-help" hidden></p>
-        <div class="sp-notes"></div>
-        <p class="sh-error" role="alert"></p>
-        <div class="sp-bar">
-            <div class="sp-anchor">
-                <button type="button" class="sp-toggle sp-quality-toggle" aria-expanded="false" aria-controls="${id}-quality-panel">
-                    <span class="sp-toggle-text"><span class="sp-q-name"></span><span class="sp-q-spec"></span></span>${ICONS.chevron}
-                </button>
-                <div class="sp-panel sp-quality-panel" id="${id}-quality-panel" hidden></div>
-            </div>
-            <div class="sp-anchor">
-                <button type="button" class="sp-toggle sp-audio-toggle" aria-expanded="false" aria-controls="${id}-audio-panel">
-                    <span class="sp-audio-icon"></span><span class="sp-audio-text"></span>${ICONS.chevron}
-                </button>
-                <div class="sp-panel sp-audio-panel" id="${id}-audio-panel" hidden>
-                    <fieldset class="sh-audio sq-presets" aria-describedby="${id}-audio-help">
-                        <legend class="dlg-label">${t("share.audio")}</legend>
-                        ${AUDIO.map(([value, key]) => `<label class="sq-option"><input type="radio" name="${id}-audio" value="${value}" /><span class="sq-name">${t(key)}</span></label>`).join("")}
-                    </fieldset>
-                    <p class="set-hint" id="${id}-audio-help">${t("share.applicationHelp")}</p>
+            <p class="set-hint sp-region-help" id="${id}-region-help" hidden></p>
+            <div class="sp-bar">
+                <button type="button" class="sp-pick sp-area" aria-pressed="false">${ICONS.region}<span class="sp-area-text"></span></button>
+                <div class="sp-anchor">
+                    <button type="button" class="sp-pick sp-toggle sp-quality-toggle" aria-expanded="false" aria-controls="${id}-quality-panel">
+                        <span class="sp-q-name sr-only"></span><span class="sp-q-spec"></span>${ICONS.chevron}
+                    </button>
+                    <div class="sp-panel sp-quality-panel" id="${id}-quality-panel" hidden></div>
+                </div>
+                <div class="sp-anchor">
+                    <button type="button" class="sp-pick sp-toggle sp-audio-toggle" aria-expanded="false" aria-controls="${id}-audio-panel">
+                        <span class="sp-audio-icon"></span><span class="sp-audio-text"></span>${ICONS.chevron}
+                    </button>
+                    <div class="sp-panel sp-audio-panel" id="${id}-audio-panel" hidden>
+                        <fieldset class="sh-audio sq-presets" aria-describedby="${id}-audio-help">
+                            <legend class="dlg-label">${t("share.audio")}</legend>
+                            ${AUDIO.map(([value, key]) => `<label class="sq-option"><input type="radio" name="${id}-audio" value="${value}" /><span class="sq-name">${t(key)}</span></label>`).join("")}
+                        </fieldset>
+                        <p class="set-hint" id="${id}-audio-help">${t("share.applicationHelp")}</p>
+                    </div>
                 </div>
             </div>
+            <div class="sp-notes"></div>
+            <p class="sh-error" role="alert"></p>
             <div class="dlg-buttons">
                 <button type="button" class="dlg-cancel">${t("polish.cancel")}</button>
                 <button type="button" class="dlg-ok primary">${t("voice.startShare")}</button>
@@ -130,14 +132,14 @@ export function createSharePicker({ id, preset, custom, bitrateCeiling, surface 
     });
     quality.onChange(selection => {
         const summary = shareSummary(selection);
-        $(".sp-q-name").textContent = summary.name;
+        $(".sp-q-name").textContent = `${summary.name} `;
         $(".sp-q-spec").textContent = summary.spec;
     });
 
-    // ---- source tabs
-    const selectedSurface = () => dialog.querySelector(`input[name="${sourceName}"]:checked`)?.value || "monitor";
-    (dialog.querySelector(`input[name="${sourceName}"][value="${surface}"]:not(:disabled)`) ||
-        dialog.querySelector(`input[name="${sourceName}"][value="monitor"]`)).checked = true;
+    // ---- source: the picked row (radios named sourceName, filled by the caller) and the Area toggle
+    let area = surface === "region";
+    const selectedSurface = () => dialog.querySelector(`input[name="${sourceName}"]:checked`)?.value.startsWith("w:") ? "window"
+        : area ? "region" : "monitor";
 
     // ---- audio
     const audioInput = value => dialog.querySelector(`input[name="${id}-audio"][value="${value}"]`);
@@ -220,8 +222,17 @@ export function createSharePicker({ id, preset, custom, bitrateCeiling, surface 
     const syncChooseHelp = () => {
         $(".sp-choose-help").textContent = t(selectedSurface() === "region" ? "share.chooseRegionHelp" : "share.chooseHelp");
     };
-    syncChooseHelp();
-    dialog.querySelector(".sp-tabs").addEventListener("change", () => { syncChooseHelp(); drawRegion(); });
+    const areaListeners = new Set();
+    // A Region is cut from a screen: the caller disables Area while a window is picked.
+    const setArea = on => {
+        area = on;
+        $(".sp-area").setAttribute("aria-pressed", String(area));
+        $(".sp-area-text").textContent = t(area ? "share.areaOn" : "share.area");
+        syncChooseHelp();
+        drawRegion();
+    };
+    setArea(area);
+    $(".sp-area").onclick = () => { setArea(!area); for (const listener of areaListeners) listener(); };
 
     return {
         element: dialog,
@@ -234,12 +245,14 @@ export function createSharePicker({ id, preset, custom, bitrateCeiling, surface 
         setApplicationAudio(enabled) { audioInput("application").disabled = !enabled; },
         region: () => regionMode() && regionLargeEnough(region, sourceSize.width, sourceSize.height) ? { ...region } : null,
         onRegionChange: listener => changeListeners.add(listener),
-        showPreview(stream, label) {
+        onAreaChange: listener => areaListeners.add(listener),
+        setArea,
+        setSourceLabel(label) { $(".sp-source-label").textContent = label; },
+        showPreview(stream) {
             const settings = stream.getVideoTracks()[0]?.getSettings?.() || {};
             sourceSize = { width: settings.width || 0, height: settings.height || 0 };
             region = { ...DEFAULT_REGION };
             video.srcObject = stream;
-            $(".sp-source-label").textContent = label;
             $(".sp-empty").hidden = true;
             $(".sp-preview").hidden = false;
             void video.play().catch(() => {});

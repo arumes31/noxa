@@ -21,7 +21,7 @@ import { hardwareVideoEncodeAvailable, videoSenderCaptureSample, hardwareStartup
 import { sampleSenderStats } from "./peer-stats.js";
 import { nativeShareStatus, nativeSource, nativeSourceOptions, nativeStandInStream, nativeEventIsCurrent, nativeUnavailableKey, nativeFailureKey,
     nativeRegionSource, nativeScreenPreview, nativeTile,
-    nativeThumbnails, rememberNativeSource } from "./native-share.js";
+    nativeThumbnails, rememberNativeSource, rememberedNativeSource } from "./native-share.js";
 import { negotiateOffer, queuePeerNegotiation } from "./video-negotiation.js";
 const V = () => window.__noxa;
 
@@ -400,25 +400,30 @@ export function createVideoPublication({ policy }) {
     // startNative({source, max_width, max_height, fps, bitrate, audioMode})
     // streams it natively.
     function openCallShareDialog({ startNative, audio = "none", onClose = () => {} }) {
-        openShareDialog(false, DEFAULT_SHARE_PRESET, audio, "monitor", {}, 0, { startNative, onClose });
+        openShareDialog(false, DEFAULT_SHARE_PRESET, audio, null, {}, 0, { startNative, onClose });
     }
 
-    // openShareDialog is noXa's share picker: live thumbnails of every monitor
-    // or window (a running game first, the last shared source preselected),
-    // captured and encoded in Go. A Region is drawn on a still of the picked
-    // monitor and cropped on the GPU. When this device cannot share natively
-    // the dialog says why and Start stays disabled.
-    function openShareDialog(replacing = false, initialPreset = DEFAULT_SHARE_PRESET, initialAudio = "none", initialSurface = "monitor", custom = {}, bitrateCeiling = 0, call = null) {
+    // openShareDialog is noXa's share picker: every screen and window as a row
+    // with a live thumbnail (a running game first among the windows), and a
+    // preview of the picked one. The source preselected is the one of
+    // initialSurface (a reopen), else the last shared one's. A Region is drawn
+    // on a still of the picked screen and cropped on the GPU. When this device
+    // cannot share natively the dialog says why and Start stays disabled.
+    function openShareDialog(replacing = false, initialPreset = DEFAULT_SHARE_PRESET, initialAudio = "none", initialSurface = null, custom = {}, bitrateCeiling = 0, call = null) {
         const dialogID = ++shareDialogID;
         const nativeAvailable = status => !!status && !nativeUnavailableKey(status, !!call);
         const overlay = document.createElement("div");
         overlay.className = "dlg-overlay";
+        // The visible title is just "Share"; the dialog keeps its full name.
+        overlay.setAttribute("aria-label", tLabel("polish.shareTitle"));
         const view = createSharePicker({ id: `share-${dialogID}`, preset: initialPreset, custom, bitrateCeiling,
-            surface: initialSurface, audio: initialAudio });
+            surface: initialSurface || "monitor", audio: initialAudio });
         overlay.appendChild(view.element);
         const { quality, $ } = view;
+        const initialKind = (initialSurface || rememberedNativeSource()?.surface) === "window" ? "window" : "monitor";
         const sources = () => overlay.querySelectorAll(`input[name="${view.sourceName}"]`);
-        const audioChoices = new Map([[initialSurface, initialAudio]]);
+        // The given audio belongs to the surface opened with; a fresh open's "none" is no choice (a window still defaults to its application).
+        const audioChoices = new Map(initialSurface || initialAudio !== "none" ? [[initialSurface || initialKind, initialAudio]] : []);
         // Keep explicit choices per source so toggling sources cannot undo an override.
         $(".sh-audio").addEventListener("change", () => { audioChoices.set(view.surface(), view.audio()); refreshNative(); });
         const syncAudioSource = () => {
@@ -431,70 +436,81 @@ export function createVideoPublication({ policy }) {
         };
         let publishing = false;
         const error = $(".sh-error");
-        const start = $(".dlg-ok"), cancel = $(".dlg-cancel"), close = $(".sp-close");
+        const start = $(".dlg-ok"), cancel = $(".dlg-cancel"), close = $(".sp-close"), area = $(".sp-area");
         let nativeChoice = () => null; // the native source when Start can run
+        let nativeStatus = null, nativeOptions = [], nativeValue = "", thumbs = {};
         const update = () => {
             cancel.disabled = close.disabled = publishing;
             start.disabled = publishing || !nativeChoice();
             for (const input of sources()) input.disabled = publishing;
+            area.disabled = publishing || !nativeValue || nativeValue.startsWith("w:");
             $(".sh-audio").disabled = publishing; quality.element.inert = publishing;
         };
         view.onRegionChange(update);
-        for (const source of sources()) source.addEventListener("change", () => { syncAudioSource(); dropNativePreview(); view.clearPreview(); refreshNative(); void pollNative(); });
-        let nativeStatus = null;
-        const nativeBox = document.createElement("div");
-        nativeBox.className = "set-hint sp-native";
-        nativeBox.hidden = true;
-        const nativeNote = document.createElement("span");
-        nativeNote.className = "sp-native-note";
-        const nativeGrid = document.createElement("div");
-        nativeGrid.className = "sp-native-grid";
-        nativeGrid.setAttribute("role", "radiogroup");
-        nativeGrid.setAttribute("aria-label", tLabel("share.nativeSource"));
-        nativeGrid.hidden = true;
-        nativeBox.append(nativeNote, nativeGrid);
-        let nativeOptions = [], nativeValue = "", nativeSurface = "";
+        view.onAreaChange(() => { syncAudioSource(); update(); });
+        const nativeNote = $(".sp-native-note");
+        const lists = { monitor: $(".sp-screens"), window: $(".sp-windows") };
         const nativeUsable = () => nativeAvailable(nativeStatus);
-        const refreshNative = () => {
-            const surface = view.surface();
-            const usable = nativeUsable();
-            nativeGrid.hidden = !usable;
-            // A Region is cut from a monitor.
-            const options = usable ? nativeSourceOptions(nativeStatus, surface === "region" ? "monitor" : surface) : [];
-            // A refresh keeps the user's pick while that source still exists.
-            if (surface !== nativeSurface || !options.some(o => o.value === nativeValue)) nativeValue = options.find(o => o.selected)?.value || "";
-            nativeSurface = surface;
-            nativeOptions = options;
-            // Tiles are reused by source value: a refresh never replaces the tile
-            // (or the radio) that has keyboard focus, and it keeps thumbnails.
-            const tiles = new Map([...nativeGrid.querySelectorAll(".sp-native-tile")].map(tile => [tile.querySelector("input").value, tile]));
+        const pick = value => {
+            nativeValue = value;
+            if (value.startsWith("w:")) view.setArea(false);
+            dropNativePreview(); view.clearPreview(); refreshNative();
+        };
+        // A row's name and detail: "Screen 2" / "1920 × 1080 · Primary"; a window's title / "Game · running" or its executable.
+        const rowText = o => o.value.startsWith("m:")
+            ? [tLabel("share.screenName", { n: Number(o.value.slice(2)) + 1 }), [o.size.replace("x", " × "), o.primary ? tLabel("share.primary") : ""].filter(Boolean).join(" · ")]
+            : [o.label, o.game ? tLabel("share.nativeGameRunning") : o.exe];
+        // Rows are reused by source value: a refresh never replaces the row
+        // (or the radio) that has keyboard focus, and it keeps thumbnails.
+        const fillList = (list, options) => {
+            const rows = new Map([...list.querySelectorAll(".sp-native-tile")].map(row => [row.querySelector("input").value, row]));
             const wanted = options.map(o => {
-                let tile = tiles.get(o.value);
-                if (!tile) tile = nativeTile(o, `sp-native-${dialogID}`, () => { nativeValue = o.value; update(); void showNativePreview(); });
-                const title = tile.querySelector(".sp-native-title"), detail = tile.querySelector(".sp-native-detail");
-                if (title.textContent !== o.label) title.textContent = o.label;
-                const info = [o.game ? tLabel("share.nativeGame") : "", o.exe].filter(Boolean).join(" · ");
+                const row = rows.get(o.value) || nativeTile(o, view.sourceName, () => pick(o.value));
+                const [name, info] = rowText(o);
+                const title = row.querySelector(".sp-native-title"), detail = row.querySelector(".sp-native-detail");
+                if (title.textContent !== name) title.textContent = name;
                 if (detail.textContent !== info) detail.textContent = info;
                 detail.hidden = !info;
-                return tile;
+                detail.classList.toggle("sp-game", !!o.game);
+                return row;
             });
-            const current = [...nativeGrid.children];
-            if (wanted.length !== current.length || wanted.some((tile, i) => tile !== current[i])) {
-                const focused = nativeGrid.contains(document.activeElement) ? document.activeElement : null;
-                nativeGrid.replaceChildren(...wanted);
+            const current = [...list.children];
+            if (wanted.length !== current.length || wanted.some((row, i) => row !== current[i])) {
+                const focused = list.contains(document.activeElement) ? document.activeElement : null;
+                list.replaceChildren(...wanted);
                 // Reordering detaches nodes: put focus back on the same source.
                 if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
             }
-            for (const input of nativeGrid.querySelectorAll("input")) input.checked = input.value === nativeValue;
+            list.parentElement.hidden = !options.length;
+        };
+        const refreshNative = () => {
+            const usable = nativeUsable();
+            const options = { monitor: usable ? nativeSourceOptions(nativeStatus, "monitor") : [], window: usable ? nativeSourceOptions(nativeStatus, "window") : [] };
+            nativeOptions = [...options.monitor, ...options.window];
+            // A refresh keeps the user's pick while that source still exists; else
+            // the preselected one of the same kind (first: the initial kind), else of the other.
+            if (!nativeOptions.some(o => o.value === nativeValue)) {
+                const kind = nativeValue ? (nativeValue.startsWith("w:") ? "window" : "monitor") : initialKind;
+                nativeValue = (options[kind].find(o => o.selected) || options[kind === "window" ? "monitor" : "window"].find(o => o.selected))?.value || "";
+                if (nativeValue.startsWith("w:")) view.setArea(false);
+                // The old source is gone: never show its picture over the new pick.
+                if (preview) { dropNativePreview(); view.clearPreview(); }
+            }
+            fillList(lists.monitor, options.monitor);
+            fillList(lists.window, options.window);
+            for (const input of sources()) input.checked = input.value === nativeValue;
+            const option = nativeOption();
+            view.setSourceLabel(option ? rowText(option)[0] : "");
             nativeNote.textContent = !nativeStatus ? "" : !usable ? tLabel(nativeUnavailableKey(nativeStatus, !!call))
-                : !options.length ? tLabel("share.nativeNoSources") : "";
+                : !nativeOptions.length ? tLabel("share.nativeNoSources") : "";
             nativeNote.hidden = !nativeNote.textContent;
+            syncAudioSource();
             update();
             void showNativePreview();
         };
-        // Region: the area is drawn on a large still of the picked monitor,
-        // painted at the monitor's pixel size so the size hint and the minimum
-        // size stay right; it refreshes with the thumbnails.
+        // The preview: a large still of the picked screen (painted at its pixel
+        // size, so a Region's size hint and minimum size stay right), or the
+        // picked window's thumbnail enlarged; it refreshes with the thumbnails.
         let preview = null, previewToken = 0;
         const dropNativePreview = () => {
             previewToken++;
@@ -502,29 +518,28 @@ export function createVideoPublication({ policy }) {
             preview = null;
         };
         const showNativePreview = async (refresh = false) => {
-            if (view.surface() !== "region" || !nativeUsable() || !nativeValue || publishing) {
+            if (!nativeUsable() || !nativeValue || publishing) {
                 if (preview) { dropNativePreview(); view.clearPreview(); update(); }
                 return;
             }
             if (!refresh && preview?.value === nativeValue) return;
-            const value = nativeValue, token = ++previewToken;
-            const url = await nativeScreenPreview(value);
+            const value = nativeValue, token = ++previewToken, screen = value.startsWith("m:");
+            const url = screen ? await nativeScreenPreview(value) : thumbs[value] || "";
             if (!url || token !== previewToken || !isCurrentServerDialog(overlay)) return;
             const image = new Image();
             image.src = url;
             try { await image.decode(); } catch { return; }
-            if (token !== previewToken || !isCurrentServerDialog(overlay) || value !== nativeValue || view.surface() !== "region") return;
-            const option = nativeOption();
+            if (token !== previewToken || !isCurrentServerDialog(overlay) || value !== nativeValue) return;
             if (preview?.value !== value) {
                 dropNativePreview();
-                const [width, height] = String(option?.size || "").split("x").map(Number);
+                const [width, height] = screen ? String(nativeOption()?.size || "").split("x").map(Number) : [];
                 const canvas = document.createElement("canvas");
                 canvas.width = width || image.naturalWidth; canvas.height = height || image.naturalHeight;
                 preview = { value, canvas, stream: canvas.captureStream(), shown: false };
                 previewToken = token;
             }
             preview.canvas.getContext("2d")?.drawImage(image, 0, 0, preview.canvas.width, preview.canvas.height);
-            if (!preview.shown) { preview.shown = true; view.showPreview(preview.stream, option?.label || tLabel("polish.monitor")); update(); }
+            if (!preview.shown) { preview.shown = true; view.showPreview(preview.stream); update(); }
         };
         // Live thumbnails (and the window list) refresh about every 1.5 s while the picker is open.
         let nativeTimer = 0, nativeBusy = false;
@@ -535,23 +550,22 @@ export function createVideoPublication({ policy }) {
                 const status = await nativeShareStatus(V().state.activeTabID);
                 if (!isCurrentServerDialog(overlay)) return;
                 if (nativeAvailable(status)) { nativeStatus = status; refreshNative(); }
-                const thumbs = await nativeThumbnails(nativeOptions.map(o => o.value));
+                thumbs = await nativeThumbnails(nativeOptions.map(o => o.value));
                 if (!isCurrentServerDialog(overlay)) return;
-                for (const img of nativeGrid.querySelectorAll("img[data-value]")) if (thumbs[img.dataset.value]) img.src = thumbs[img.dataset.value];
+                for (const img of $(".sp-sources").querySelectorAll("img[data-value]")) if (thumbs[img.dataset.value]) img.src = thumbs[img.dataset.value];
                 await showNativePreview(true);
             } finally { nativeBusy = false; }
         };
         const nativeOption = () => nativeOptions.find(o => o.value === nativeValue) || null;
         nativeChoice = () => {
             if (!nativeUsable() || !nativeValue) return null;
-            // The drawn area belongs to the monitor whose still is shown, never to one still loading.
+            // The drawn area belongs to the screen whose still is shown, never to one still loading.
             if (view.surface() === "region") return preview?.shown && preview.value === nativeValue ? nativeRegionSource(nativeValue, view.region()) : null;
             return nativeSource(view.surface(), nativeValue);
         };
-        $(".sp-notes").appendChild(nativeBox);
         void nativeShareStatus(V().state.activeTabID).then(status => {
             if (!isCurrentServerDialog(overlay)) return;
-            nativeStatus = status; nativeBox.hidden = false; refreshNative();
+            nativeStatus = status; refreshNative();
             if (!nativeAvailable(status)) return;
             void pollNative();
             nativeTimer = setInterval(() => { void pollNative(); }, 1500);

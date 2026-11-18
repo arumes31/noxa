@@ -60,11 +60,14 @@ the current user's voice controls.
   `native share failed` line; `native share stats` lines (2, 5 and 10 s
   after the start, then every minute) count each pipeline stage, and
   `native encoder` lines name the adapter and every encoder tried.
-  The picker shows live thumbnails of every monitor or window (refreshed
-  about every 1.5 s while the dialog is open), a running game (a window
-  covering its monitor) listed first, and the last shared source preselected
-  (matched by executable and title, then by executable). A **Region** is
-  drawn on a still of the picked monitor and cropped on the GPU. **Studio**
+  The picker lists every screen and window as a row with a live thumbnail
+  (refreshed about every 1.5 s while the dialog is open), a running game (a
+  window covering its monitor) first among the windows, and the last shared
+  source preselected (matched by executable and title, then by executable).
+  Beside the list it previews the picked source (a still of a screen, a
+  window's thumbnail enlarged) above the Area, quality and audio controls.
+  With **Area** on, a **Region** is dragged on the picked screen's still and
+  cropped on the GPU. **Studio**
   composes its screens, windows and cameras (Media Foundation) with a
   Direct3D 11 compositor in Go; text and images arrive from the webview as
   transparent overlay PNGs, uploaded only on change. In a **private call**,
