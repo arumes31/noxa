@@ -87,6 +87,9 @@ type Stats struct {
 	FramesSent, KeyframesSent, FramesDropped uint64
 	AudioSSRC                                uint32
 	AudioFramesSent, AudioFramesDropped      uint64
+	// VideoPackets: RTP packets written to the video track (PacketsSent
+	// counts what the interceptors saw leave, retransmissions included).
+	VideoPackets                             uint64
 	PacketsSent, BytesSent                   uint64
 	RetransmittedPackets, RetransmittedBytes uint64
 	RTT                                      time.Duration // 0 = unknown
@@ -366,6 +369,7 @@ func (s *Sender) WriteFrame(au []byte, keyframe bool, seqHeader []byte, captured
 		if err := s.track.WriteRTP(packet); err != nil {
 			return err
 		}
+		s.stats.VideoPackets++
 	}
 	s.lastTS, s.sentAny = ts, true
 	s.stats.FramesSent++
@@ -398,7 +402,7 @@ func (s *Sender) WriteAudio(packet []byte, captured time.Time) error {
 		return err
 	}
 	s.audioLastTS, s.audioSentAny = ts, true
-	s.stats.AudioFramesSent++
+	s.stats.AudioFramesSent++ // one RTP packet per Opus frame
 	return nil
 }
 

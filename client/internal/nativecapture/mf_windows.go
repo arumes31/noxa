@@ -3,6 +3,7 @@
 package nativecapture
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"strings"
@@ -44,6 +45,7 @@ var (
 	mfTransformAsyncUnlock  = mustGUID("e5666d6b-3422-4eb6-a421-da7db1f8e207")
 	mftHardwareVendorID     = mustGUID("3aecb0cc-035b-4bcc-8185-2b8d551ef3af")
 	mftFriendlyName         = mustGUID("314ffbae-5b41-4c95-9c19-4e7d586face3")
+	mftEnumAdapterLUID      = mustGUID("1d39518c-e220-4da8-a07f-ba172552d6b1")
 	mfSampleCleanPoint      = mustGUID("9cdf01d8-a0f0-43ba-b077-eaa06cbd728a")
 	iidIMFTransform         = mustGUID("bf94c121-5b05-4e6f-8000-ba598961414d")
 	iidIMFMediaEventGen     = mustGUID("2CD0BD52-BCD5-4B89-B62C-EADC0C031E7D")
@@ -89,6 +91,20 @@ func mfStartup() error {
 type encoderInfo struct {
 	name, vendor string
 	hardware     bool
+	async        bool
+	luid         uint64 // MFT_ENUM_ADAPTER_LUID when the activate carries it
+}
+
+func (i encoderInfo) String() string {
+	kind := "sw"
+	if i.hardware {
+		kind = "hw"
+	}
+	s := fmt.Sprintf("%q vendor=%s %s async=%v", i.name, cmp.Or(i.vendor, "?"), kind, i.async)
+	if i.luid != 0 {
+		s += fmt.Sprintf(" luid=%016X", i.luid)
+	}
+	return s
 }
 
 // encoder is one Media Foundation H.264 encoder MFT fed with NV12 D3D11
@@ -100,6 +116,7 @@ type encoder struct {
 	async                       bool
 	bitrate                     int
 	seqHeader                   []byte
+	notes                       string // refused optional settings, for the selection log
 }
 
 type registerTypeInfo struct{ major, sub guid }
@@ -150,10 +167,12 @@ func vendorOf(id, name string) string {
 }
 
 // newEncoder opens the first H.264 encoder MFT that accepts the device.
-// Hardware only unless allowSoftware (tests on GPU-less runners).
-func newEncoder(d *device, width, height, fps, bitrate uint32, allowSoftware bool) (*encoder, error) {
+// Hardware only unless allowSoftware (tests on GPU-less runners). report
+// lists the adapter, every MFT tried with the step that failed, and the choice.
+func newEncoder(d *device, width, height, fps, bitrate uint32, allowSoftware bool) (_ *encoder, report []string, _ error) {
+	report = []string{fmt.Sprintf("adapter %s; %dx%d@%d %d bps", d.adapter, width, height, fps, bitrate)}
 	if err := mfStartup(); err != nil {
-		return nil, err
+		return nil, append(report, err.Error()), err
 	}
 	in := registerTypeInfo{mfMediaTypeVideo, mfVideoFormatNV12}
 	out := registerTypeInfo{mfMediaTypeVideo, mfVideoFormatH264}
@@ -169,6 +188,7 @@ func newEncoder(d *device, width, height, fps, bitrate uint32, allowSoftware boo
 		r, _, _ := procMFTEnumEx.Call(uintptr(unsafe.Pointer(&mftCategoryVideoEncoder)), flag,
 			uintptr(unsafe.Pointer(&in)), uintptr(unsafe.Pointer(&out)), uintptr(unsafe.Pointer(&list)), uintptr(unsafe.Pointer(&count)))
 		if hresult(r).failed() || count == 0 {
+			report = append(report, fmt.Sprintf("MFTEnumEx flags 0x%X: %d encoders, HRESULT 0x%08X", flag, count, uint32(r)))
 			continue
 		}
 		activates := unsafe.Slice((*uintptr)(unsafe.Pointer(list)), count) //nolint:govet // #nosec G103 -- CoTaskMem array from MFTEnumEx
@@ -177,25 +197,28 @@ func newEncoder(d *device, width, height, fps, bitrate uint32, allowSoftware boo
 			if opened == nil {
 				info := encoderInfo{name: activateString(activate, &mftFriendlyName), hardware: flag&mftEnumHardware != 0}
 				info.vendor = vendorOf(activateString(activate, &mftHardwareVendorID), info.name)
-				enc, err := openEncoder(d, activate, info, width, height, fps, bitrate)
+				vcall(activate, 8, uintptr(unsafe.Pointer(&mftEnumAdapterLUID)), uintptr(unsafe.Pointer(&info.luid))) // #nosec G103 -- GetUINT64
+				enc, err := openEncoder(d, activate, &info, width, height, fps, bitrate)
 				if err == nil {
 					opened = enc
+					report = append(report, "chosen "+info.String()+enc.notes)
 				} else {
 					lastErr = err
+					report = append(report, "skipped "+info.String()+": "+err.Error())
 				}
 			}
 			release(activate)
 		}
 		_, _, _ = procCoTaskMemFree.Call(list)
 		if opened != nil {
-			return opened, nil
+			return opened, report, nil
 		}
 	}
-	return nil, lastErr
+	return nil, append(report, "none chosen: "+lastErr.Error()), lastErr
 }
 
-func openEncoder(d *device, activate uintptr, info encoderInfo, width, height, fps, bitrate uint32) (_ *encoder, err error) {
-	e := &encoder{info: info, bitrate: int(bitrate)}
+func openEncoder(d *device, activate uintptr, info *encoderInfo, width, height, fps, bitrate uint32) (_ *encoder, err error) {
+	e := &encoder{info: *info, bitrate: int(bitrate)}
 	defer func() {
 		if err != nil {
 			vcall(activate, 34) // ShutdownObject
@@ -210,7 +233,7 @@ func openEncoder(d *device, activate uintptr, info encoderInfo, width, height, f
 		var async uint32
 		vcall(attrs, 7, uintptr(unsafe.Pointer(&mfTransformAsync)), uintptr(unsafe.Pointer(&async))) // #nosec G103
 		if async != 0 {
-			e.async = true
+			e.async, info.async = true, true
 			vcall(attrs, 21, uintptr(unsafe.Pointer(&mfTransformAsyncUnlock)), 1) // #nosec G103
 		}
 		vcall(attrs, 21, uintptr(unsafe.Pointer(&mfLowLatency)), 1) // #nosec G103
@@ -228,18 +251,24 @@ func openEncoder(d *device, activate uintptr, info encoderInfo, width, height, f
 	}
 	e.codec, _ = queryInterface(e.mft, &iidICodecAPI)
 	// Rate control before the media types: some encoders read it at type time.
-	_ = e.setCodec(&codecRateControlMode, 0, false) // CBR
-	_ = e.setCodec(&codecMeanBitRate, bitrate, false)
-	_ = e.setCodec(&codecLowLatencyMode, 1, true)
-	_ = e.setCodec(&codecBPictureCount, 0, false)
-	_ = e.setCodec(&codecGOPSize, fps*300, false) // Long GOP: keyframes on demand (PLI).
+	// These are best effort; refusals are noted in the selection log.
+	optional := func(name string, id *guid, value uint32, boolean bool) {
+		if err := e.setCodec(id, value, boolean); err != nil {
+			e.notes += "; " + name + " refused: " + err.Error()
+		}
+	}
+	optional("CBR", &codecRateControlMode, 0, false)
+	optional("mean bitrate", &codecMeanBitRate, bitrate, false)
+	optional("low latency", &codecLowLatencyMode, 1, true)
+	optional("B frames 0", &codecBPictureCount, 0, false)
+	optional("GOP size", &codecGOPSize, fps*300, false) // Long GOP: keyframes on demand (PLI).
 	// Slices by macroblock rows, all rows: exactly one slice. The sender
 	// rejects multi-slice access units, so an encoder refusing this is skipped.
 	if err := e.setCodec(&codecSliceMode, 2, false); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("slice mode: %w", err)
 	}
 	if err := e.setCodec(&codecSliceSize, (height+15)/16, false); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("slice size: %w", err)
 	}
 	outType, err := mediaType(mfVideoFormatH264, width, height, fps)
 	if err != nil {

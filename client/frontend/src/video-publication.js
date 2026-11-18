@@ -18,7 +18,7 @@ import { labelButton } from "./icons.js";
 import { renderMicStatus } from "./audio.js";
 import { videoConstraints, trackFitsVideoLimits, capVideoEncodings, screenBitrateHeadroom } from "./media-limits.js";
 import { t as tLabel } from "./i18n.js";
-import { rememberVideoSenderProfile } from "./video-sender-stats.js";
+import { rememberVideoSenderProfile, browserShareStatsLine } from "./video-sender-stats.js";
 import { hardwareVideoEncodeAvailable, videoSenderCaptureSample, hardwareStartupGeometry } from "./video-sender-hardware-recovery.js";
 import { sampleSenderStats } from "./peer-stats.js";
 import { createScreenResolutionController } from "./screen-resolution.js";
@@ -1232,6 +1232,14 @@ export function createVideoPublication({ policy }) {
             change: () => studio ? studio.change() : openShareDialog(true, selection.preset, audioMode, surface, selection.custom, selection.bitrateCeiling),
             changeQuality: () => openLiveShareQuality(display, peerConnection, shareScope, p, selection),
             reduction: () => policy.lowBandwidth ? "share.lowBandwidth" : "" });
+        // One client.log line 5 s in: whether the WebView2 encoder produced and sent anything.
+        const diagnosticSender = shareTransceiver?.sender;
+        setTimeout(() => {
+            if (state.shareStream !== display || !diagnosticSender || typeof window.go?.main?.App?.LogScreenShareDiagnostics !== "function") return;
+            diagnosticSender.getStats()
+                .then(stats => window.go.main.App.LogScreenShareDiagnostics(browserShareStatsLine(stats, publicationUploadActive("screen", screenTrack))))
+                .catch(() => {});
+        }, 5000);
         return true;
     }
 

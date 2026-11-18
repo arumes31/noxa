@@ -4,6 +4,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"unsafe"
@@ -14,6 +15,12 @@ import (
 // D3DKMT_SCHEDULINGPRIORITYCLASS_HIGH needs no administrator rights (REALTIME does).
 // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtsetprocessschedulingpriorityclass
 const gpuPriorityHigh = 4
+
+const (
+	// gpuPriorityUntouched: the process's GPU priority could not be read; it is left alone.
+	gpuPriorityUntouched   = -1
+	statusInvalidParameter = 0xC000000D
+)
 
 var (
 	gdi32                    = windows.NewLazySystemDLL("gdi32.dll")
@@ -77,11 +84,10 @@ func applyCaptureBoost(on bool) error {
 			continue
 		}
 		saved, err := boostProcess(pid)
-		if err != nil {
-			errs = append(errs, err)
-			continue
+		errs = append(errs, err)
+		if saved.cpu != 0 { // boosted (perhaps without the GPU part)
+			captureBoostRestoreState[pid] = saved
 		}
-		captureBoostRestoreState[pid] = saved
 	}
 	return errors.Join(errs...)
 }
@@ -93,27 +99,39 @@ func openForPriority(pid uint32) (windows.Handle, error) {
 func boostProcess(pid uint32) (boostedProcess, error) {
 	handle, err := openForPriority(pid)
 	if err != nil {
-		return boostedProcess{}, err
+		return boostedProcess{}, fmt.Errorf("OpenProcess pid %d: %w", pid, err)
 	}
 	defer func() { _ = windows.CloseHandle(handle) }()
 	cpu, err := windows.GetPriorityClass(handle)
 	if err != nil {
-		return boostedProcess{}, err
+		return boostedProcess{}, fmt.Errorf("GetPriorityClass pid %d: %w", pid, err)
 	}
 	var gpu int32
+	var gpuErr error
 	// #nosec G103 -- the call writes one D3DKMT_SCHEDULINGPRIORITYCLASS.
 	if status, _, _ := procGetGPUPriorityClass.Call(uintptr(handle), uintptr(unsafe.Pointer(&gpu))); status != 0 {
-		return boostedProcess{}, errors.New("D3DKMTGetProcessSchedulingPriorityClass failed")
+		// Sandboxed WebView2 processes (renderer, storage utility) answer
+		// STATUS_INVALID_PARAMETER: they have no GPU scheduling context. They
+		// still get the CPU boost; only other statuses are worth a log line.
+		if status != statusInvalidParameter {
+			gpuErr = fmt.Errorf("D3DKMTGetProcessSchedulingPriorityClass pid %d: NTSTATUS 0x%08X", pid, uint32(status))
+		}
+		gpu = gpuPriorityUntouched
 	}
 	// Never lower a process that is already above the boost.
 	newCPU := cpu
 	if cpu == windows.NORMAL_PRIORITY_CLASS || cpu == windows.BELOW_NORMAL_PRIORITY_CLASS || cpu == windows.IDLE_PRIORITY_CLASS {
 		newCPU = windows.ABOVE_NORMAL_PRIORITY_CLASS
 	}
-	if err := setHandlePriorities(handle, newCPU, max(gpu, gpuPriorityHigh)); err != nil {
-		return boostedProcess{}, err
+	newGPU := gpu
+	if gpu != gpuPriorityUntouched {
+		newGPU = max(gpu, gpuPriorityHigh)
 	}
-	return boostedProcess{cpu: cpu, gpu: gpu}, nil
+	if err := setHandlePriorities(handle, newCPU, newGPU); err != nil {
+		return boostedProcess{}, fmt.Errorf("pid %d: %w", pid, err)
+	}
+	// Returned with gpuErr too: the pid is recorded, so a refresh never retries it.
+	return boostedProcess{cpu: cpu, gpu: gpu}, gpuErr
 }
 
 func setProcessPriorities(pid, cpu uint32, gpu int32) error {
@@ -129,8 +147,11 @@ func setHandlePriorities(handle windows.Handle, cpu uint32, gpu int32) error {
 	if err := windows.SetPriorityClass(handle, cpu); err != nil {
 		return err
 	}
+	if gpu == gpuPriorityUntouched {
+		return nil
+	}
 	if status, _, _ := procSetGPUPriorityClass.Call(uintptr(handle), uintptr(gpu)); status != 0 {
-		return errors.New("D3DKMTSetProcessSchedulingPriorityClass failed")
+		return fmt.Errorf("D3DKMTSetProcessSchedulingPriorityClass: NTSTATUS 0x%08X", uint32(status))
 	}
 	return nil
 }

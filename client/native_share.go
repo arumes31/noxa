@@ -224,6 +224,8 @@ type nativeShare struct {
 	stop        chan struct{}
 	prev        nativeSample
 	badFrames   atomic.Int32
+	frames      nativeFrameDiag
+	fellBack    atomic.Bool // fallback runs once: onFrame, peerLost and watch can all trigger it
 	// Server candidates that arrive while an offer is still in flight.
 	pending []netproto.ICECandidate
 	// call: a private call share (native_call_share.go) sends to its viewers
@@ -510,9 +512,13 @@ func (n *nativeShare) start() error {
 	// Audio first: whether the native offer carries a screenaudio track.
 	notice := n.openAudio()
 	if err := n.openSender(); err != nil {
+		log.Printf("native share start: peer: %v", err)
 		return err
 	}
 	if err := n.openCapture(); err != nil {
+		// The native peer was already offered: without this line the server
+		// shows an established peer that never sends.
+		log.Printf("native share start: capture: %v", err)
 		return err
 	}
 	n.mu.Lock()
@@ -613,7 +619,9 @@ func (n *nativeShare) onAudio(p nativecapture.AudioPacket) {
 		return
 	}
 	if sender != nil && upload {
-		_ = sender.WriteAudio(p.Data, p.Captured) // a keyless packet is dropped, never sent
+		if err := sender.WriteAudio(p.Data, p.Captured); err != nil { // a keyless packet is dropped, never sent
+			n.frames.note("audio", err)
+		}
 	}
 }
 
@@ -749,13 +757,18 @@ func (n *nativeShare) onFrame(f nativecapture.Frame) {
 	var err error
 	switch {
 	case !upload:
+		n.frames.unsent.Add(1)
 		return
 	case n.call != nil:
 		err = n.call.writeFrame(f)
 	case sender == nil:
+		n.frames.unsent.Add(1)
 		return
 	default:
 		err = sender.WriteFrame(f.Data, f.Keyframe, f.SeqHeader, f.Captured)
+	}
+	if err != nil {
+		n.frames.note(dropKind(err), err)
 	}
 	if err == nil || errors.Is(err, nativesender.ErrDropped) {
 		n.badFrames.Store(0)
@@ -833,10 +846,14 @@ func (n *nativeShare) peerLost(lost *nativesender.Sender) {
 	}()
 }
 
-// watch handles pipeline failures and the minimized notice.
+// watch handles pipeline failures, the minimized notice, the stats lines
+// and the stall watchdog.
 func (n *nativeShare) watch() {
 	tick := time.NewTicker(500 * time.Millisecond)
 	defer tick.Stop()
+	started := time.Now()
+	logged := 0
+	var stall nativeStallWatch
 	for {
 		n.mu.Lock()
 		session := n.session
@@ -895,8 +912,71 @@ func (n *nativeShare) watch() {
 				}
 				n.emit(state, "")
 			}
+			now := time.Now()
+			snap, reason := n.observe(&stall, session, stats, now.Sub(started), now)
+			if now.Sub(started) >= nativeStatsAt(logged) {
+				logged++
+				log.Printf("native share stats %s", snap)
+			}
+			if reason != "" {
+				log.Printf("native share stalled (%s), falling back to Browser capture: %s", reason, snap)
+				n.fallback("stalled")
+				return
+			}
 		}
 	}
+}
+
+// nativeStallWatch is the watchdog's memory between ticks (watch goroutine only).
+type nativeStallWatch struct {
+	nativeStallState
+	session *nativecapture.Session
+	sender  *nativesender.Sender
+	packets uint64
+}
+
+// observe takes one stats snapshot and advances the stall watchdog.
+func (n *nativeShare) observe(w *nativeStallWatch, session *nativecapture.Session, cs nativecapture.Stats, elapsed time.Duration, now time.Time) (nativeShareSnapshot, string) {
+	n.mu.Lock()
+	sender, upload, generation := n.sender, n.upload, n.generation
+	n.mu.Unlock()
+	snap := nativeShareSnapshot{elapsed: elapsed, peer: "none", upload: upload, generation: generation, cs: cs, encoder: session.Info(),
+		unsent: n.frames.unsent.Load(), rejected: n.frames.rejected.Load(), dropped: n.frames.dropped.Load()}
+	n.frames.mu.Lock()
+	snap.last = n.frames.last
+	n.frames.mu.Unlock()
+	if n.call != nil {
+		snap.peer = "call"
+		return snap, "" // call viewers come and go; their links recover themselves
+	}
+	if sender == nil {
+		w.sender = nil // between re-offers: peerLost owns the recovery
+		return snap, ""
+	}
+	state := sender.ConnectionState()
+	snap.peer, snap.ss = state.String(), sender.Stats()
+	if sender != w.sender {
+		// A new peer (start or re-offer): its offer has just been answered.
+		w.nativeStallState = nativeStallState{Offered: now, Fired: w.Fired}
+		w.sender, w.packets = sender, snap.ss.VideoPackets
+	}
+	if w.Connected.IsZero() && state == webrtc.PeerConnectionStateConnected {
+		w.Connected = now
+	}
+	if snap.ss.VideoPackets != w.packets {
+		w.packets, w.LastVideo = snap.ss.VideoPackets, now
+	}
+	// Paused (no viewer demand) or minimized by design; a restarted capture
+	// session gets a fresh window too.
+	w.Idle = !upload || generation == 0 || cs.Minimized
+	if w.Idle || session != w.session {
+		w.session, w.Resumed = session, now
+	}
+	reason := nativeStallReason(w.nativeStallState, now)
+	if reason != "" {
+		w.Fired = true
+	}
+	return snap, reason
 }
 
 func (n *nativeShare) end(reason string) {
@@ -905,6 +985,9 @@ func (n *nativeShare) end(reason string) {
 }
 
 func (n *nativeShare) fallback(reason string) {
+	if !n.fellBack.CompareAndSwap(false, true) {
+		return
+	}
 	n.close()
 	n.emit("fallback", reason)
 }

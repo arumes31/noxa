@@ -88,9 +88,12 @@ type EncoderInfo struct {
 // Stats are cumulative counters since Start.
 type Stats struct {
 	Captured, Encoded, Keyframes uint64
-	EncodeTime                   time.Duration // sum of submit→output latencies
-	Width, Height                int
-	Minimized                    bool
+	// Converted: NV12 pictures scaled; Submitted: pictures handed to the
+	// encoder (resends included); NeedInput: async METransformNeedInput events.
+	Converted, Submitted, NeedInput uint64
+	EncodeTime                      time.Duration // sum of submit→output latencies
+	Width, Height                   int
+	Minimized                       bool
 	// CameraError: a Studio camera could not be opened (busy, unplugged).
 	CameraError string
 }

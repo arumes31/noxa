@@ -43,7 +43,15 @@ the current user's voice controls.
   and a second, publish-only WebRTC peer, with the same end-to-end frame
   encryption. The server must support `native-media-peer-v1`. If native
   capture is unavailable or fails, the share uses Browser capture and shows a
-  notice. Native mode has its own picker: live thumbnails of every monitor or
+  notice. It also falls back when it stalls: the native peer is not
+  connected 15 s after its offer, or viewers want the share but no video
+  packet has left for 10 s (never while the share is paused for lack of
+  viewers or its window is minimized). `client.log` then has a
+  `native share stalled` line; `native share stats` lines (2, 5 and 10 s
+  after the start, then every minute) count each pipeline stage, and
+  `native encoder` lines name the adapter and every encoder tried. A Browser
+  share logs one `browser share` line with the sender's stats after 5 s.
+  Native mode has its own picker: live thumbnails of every monitor or
   window (refreshed about every 1.5 s while the dialog is open), a running
   game (a window covering its monitor) listed first, and the last shared
   source preselected (matched by executable and title, then by executable).
