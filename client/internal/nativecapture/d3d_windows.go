@@ -163,6 +163,11 @@ func newDevice(monitor uintptr) (*device, error) {
 	}
 	defer release(dxgi)
 	d.describeAdapter(dxgi)
+	if onMonitor {
+		d.adapter += " (captured monitor's adapter)"
+	} else {
+		d.adapter += " (default adapter)"
+	}
 	// Capture is latency critical; positive values may be refused without
 	// privilege, which keeps the default.
 	vcall(dxgi, 10, 7) // IDXGIDevice::SetGPUThreadPriority

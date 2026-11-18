@@ -931,7 +931,8 @@ func (n *nativeShare) watch() {
 			}
 			if reason != "" {
 				if !n.failIfCurrent(seen, "stalled") {
-					stall.Fired = false // stale: the next tick judges the new state
+					// Stale: the share changed meanwhile; its new state gets a fresh window.
+					stall.Fired, stall.Resumed = false, now
 					continue
 				}
 				log.Printf("native share stalled (%s): %s", reason, snap)

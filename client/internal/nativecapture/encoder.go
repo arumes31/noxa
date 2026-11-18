@@ -19,19 +19,21 @@ type encoderInfo struct {
 	onAdapter    bool   // the MFT belongs to the capture device's adapter
 }
 
-// matchesAdapter reports whether a hardware MFT belongs to the adapter
-// (luid, PCI vendorID) of the capture device: by MFT_ENUM_ADAPTER_LUID when
-// the activate carries one, else by its hardware vendor ID.
-// shortcut: two adapters of one vendor without activate LUIDs (an AMD APU
-// with a Radeon) both match; openEncoder then refuses a foreign device.
-func matchesAdapter(info encoderInfo, luid uint64, vendorID uint32) bool {
+// matchesAdapter reports whether a hardware MFT from the global
+// enumeration belongs to the capture device's adapter (luid, PCI vendorID):
+// by its MFT_ENUM_ADAPTER_LUID when the activate carries one, else, only
+// when the per-adapter enumeration (MFTEnum2) was unavailable (byVendor),
+// by its hardware vendor ID.
+// shortcut: by vendor, two adapters of one vendor (an AMD APU with a Radeon)
+// both match; openEncoder then refuses a foreign device and the next is tried.
+func matchesAdapter(info encoderInfo, luid uint64, vendorID uint32, byVendor bool) bool {
 	switch {
 	case !info.hardware:
 		return false
 	case info.luid != 0:
 		return info.luid == luid
 	}
-	return vendorID != 0 && strings.EqualFold(info.vendorID, fmt.Sprintf("VEN_%04X", vendorID))
+	return byVendor && vendorID != 0 && strings.EqualFold(info.vendorID, fmt.Sprintf("VEN_%04X", vendorID))
 }
 
 func (i encoderInfo) String() string {

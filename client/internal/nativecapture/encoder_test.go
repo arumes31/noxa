@@ -42,12 +42,16 @@ func TestMatchesAdapter(t *testing.T) {
 		{"software never belongs to an adapter", encoderInfo{vendorID: "VEN_8086"}, false},
 	}
 	for _, c := range cases {
-		if got := matchesAdapter(c.info, luid, intel); got != c.want {
+		if got := matchesAdapter(c.info, luid, intel, true); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}
 	}
-	if matchesAdapter(encoderInfo{hardware: true, vendorID: "VEN_8086"}, luid, amd) {
+	if matchesAdapter(encoderInfo{hardware: true, vendorID: "VEN_8086"}, luid, amd, true) {
 		t.Error("Intel MFT matched an AMD device")
+	}
+	// With the per-adapter enumeration available, only a LUID matches.
+	if matchesAdapter(encoderInfo{hardware: true, vendorID: "VEN_8086"}, luid, intel, false) {
+		t.Error("vendor match used although MFTEnum2 listed the adapter's MFTs")
 	}
 }
 

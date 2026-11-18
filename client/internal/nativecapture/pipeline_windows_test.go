@@ -3,12 +3,15 @@
 package nativecapture
 
 import (
+	"fmt"
 	"os"
 	"runtime"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
+
+	"noxa/internal/framecrypt"
 )
 
 // TestMonitorCaptureEncodes runs the full pipeline on the primary monitor.
@@ -342,36 +345,83 @@ func TestSupportedOnThisDesktop(t *testing.T) {
 	}
 }
 
-// The software H.264 MFT, the last step of the encoder chain, opens on this
-// device and encodes NV12 input from the same ring textures.
+// The software H.264 MFT, the last step of the encoder chain: with every
+// hardware encoder rejected (as after multi-slice keyframes) a real session
+// opens it, encodes the NV12 ring textures and writes single-slice
+// keyframes the sender admits.
 func TestSoftwareEncoderIsTheLastResort(t *testing.T) {
 	if os.Getenv("NOXA_NATIVE_CAPTURE") == "" {
 		t.Skip("set NOXA_NATIVE_CAPTURE=1 on an interactive Windows desktop")
 	}
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	initThread()
-	d, err := newDevice(0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer d.close()
-	if err := mfStartup(); err != nil {
-		t.Fatal(err)
-	}
 	var report []string
-	activates, infos, free := enumEncoders(d, &report)
-	defer free()
-	order := rankEncoders(infos, func(encoderInfo) bool { return false })
-	if len(order) == 0 || infos[order[len(order)-1]].hardware {
-		t.Fatalf("no software encoder last: %v %v", infos, report)
+	var hardware []string
+	func() {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		initThread()
+		d, err := newDevice(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.close()
+		if err := mfStartup(); err != nil {
+			t.Fatal(err)
+		}
+		_, infos, free := enumEncoders(d, &report)
+		defer free()
+		order := rankEncoders(infos, func(encoderInfo) bool { return false })
+		if len(order) == 0 || infos[order[len(order)-1]].hardware {
+			t.Fatalf("no software encoder last: %v %v", infos, report)
+		}
+		for _, info := range infos {
+			if info.hardware {
+				hardware = append(hardware, info.name)
+			}
+		}
+		t.Logf("adapter %s; chain %v; enumeration notes %v", d.adapter, infos, report)
+	}()
+	for _, name := range hardware {
+		multiSliceEncoders.Store(name, true)
 	}
-	last := order[len(order)-1]
-	info := infos[last]
-	enc, err := openEncoder(d, activates[last], &info, 640, 360, 30, 1_000_000)
+	t.Cleanup(func() {
+		for _, name := range hardware {
+			multiSliceEncoders.Delete(name)
+		}
+	})
+	var mu sync.Mutex
+	var encoded, keyframes int
+	var keyErr error
+	s, err := Start(Config{Source: Source{Monitor: 0}, MaxWidth: 1280, MaxHeight: 720, FPS: 30, Bitrate: 2_000_000}, func(f Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		encoded++
+		if !f.Keyframe {
+			return
+		}
+		keyframes++
+		var sps, pps []byte
+		for _, nal := range framecrypt.SplitAnnexB(f.SeqHeader) {
+			switch nal[0] & 31 {
+			case 7:
+				sps = nal
+			case 8:
+				pps = nal
+			}
+		}
+		if _, key, err := framecrypt.CanonicalH264(f.Data, sps, pps); err != nil || !key {
+			keyErr = fmt.Errorf("keyframe rejected (key=%v): %w", key, err)
+		}
+	})
 	if err != nil {
-		t.Fatalf("software encoder %s: %v", info, err)
+		t.Fatal(err)
 	}
-	defer enc.close()
-	t.Logf("adapter %s; chain: %v; last resort %s%s; enumeration notes: %v", d.adapter, infos, info, enc.notes, report)
+	time.Sleep(2 * time.Second)
+	s.Close()
+	info := s.Info()
+	mu.Lock()
+	defer mu.Unlock()
+	t.Logf("encoder %q hardware=%v encoded=%d keyframes=%d", info.Name, info.Hardware, encoded, keyframes)
+	if info.Hardware || encoded == 0 || keyframes == 0 || keyErr != nil {
+		t.Fatalf("software encoder: hardware=%v encoded=%d keyframes=%d err=%v", info.Hardware, encoded, keyframes, keyErr)
+	}
 }

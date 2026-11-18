@@ -1,11 +1,11 @@
 import { expect, test } from "./fixtures.js";
 
-// Real Chromium, real Studio modules, synthetic colored-canvas captures (no
-// capture hardware is used or claimed). The voice peer is the same stand-in
-// the media-slots specs use, so Go live runs the ordinary guarded screen
-// publication (startShare) with the encrypted-session double.
+// Real Chromium, real Studio modules. Studio capture is native: sources come
+// from noXa's picker and Go composes and sends the program, so the Go bridge
+// is mocked (no capture hardware is used or claimed). The voice peer is the
+// same stand-in the media-slots specs use.
 
-const RED = [230, 20, 20], GREEN = [20, 200, 40], BLUE = [20, 40, 230];
+const BLUE = [20, 40, 230];
 
 test.beforeEach(async ({ page }) => {
     await page.route("**/studio-fixture", route => route.fulfill({ contentType: "text/html", body: `<!doctype html>
@@ -86,6 +86,8 @@ test.beforeEach(async ({ page }) => {
         channelMedia.useChannelMediaFactory(standIn);
         channelMedia.useChannelMediaSession(standIn());
         (await import("/src/modal.js")).initModalSystem();
+        window.__events = {};
+        window.runtime = { EventsOn: (name, callback) => { (window.__events[name] ||= []).push(callback); return () => {}; } };
         window.__studio = await import("/src/studio-ui.js");
         window.__video = await import("/src/video.js");
         // The Studio button and startup sweep live in the eager launcher; the
@@ -111,287 +113,6 @@ async function open(page) {
     await expect(page.getByRole("dialog", { name: "Studio" })).toBeVisible();
     return page.getByRole("dialog", { name: "Studio" });
 }
-async function addDisplay(page, color, audio = "none") {
-    await page.evaluate(c => window.__captures.colors.push(c), color);
-    const studio = page.getByRole("dialog", { name: "Studio" });
-    await studio.locator(".studio-capture-audio").selectOption(audio);
-    await studio.getByRole("button", { name: "Screen or window", exact: true }).click();
-}
-async function addCamera(page, color) {
-    await page.evaluate(c => window.__captures.colors.push(c), color);
-    await page.getByRole("dialog", { name: "Studio" }).getByRole("button", { name: "Camera", exact: true }).click();
-}
-const diagnostics = page => page.evaluate(() => window.__studio.studioDiagnostics());
-
-test("Studio reconnect keeps the program capture and stops all sources on cancellation", async ({ page }) => {
-    const studio = await open(page);
-    await addDisplay(page, RED);
-    await studio.getByRole("button", { name: "Go live", exact: true }).click();
-    await expect.poll(() => page.evaluate(() => !!window.__noxa.state.screenSharing)).toBe(true);
-    const result = await page.evaluate(async () => {
-        const original = window.__noxa.state.shareStream;
-        window.__video.pauseShareForReconnect();
-        (await import('/src/modal.js')).closeServerDialogs('disconnected');
-        (await import('/src/stream-controls.js')).stopStreamSession();
-        window.__video.resetCameraState();
-        const retained = !!window.__studio.studioSessionForTest();
-        window.__noxa.state.serverGeneration++;
-        await window.__video.resumeShareAfterReconnect();
-        const same = window.__noxa.state.shareStream === original;
-        window.__video.pauseShareForReconnect();
-        window.__video.cancelShareResume();
-        return { retained, same, captures: window.__captures.displayCalls,
-            source: window.__captures.display[0].getVideoTracks()[0].readyState,
-            disposed: !window.__studio.studioSessionForTest() };
-    });
-    expect(result).toEqual({ retained: true, same: true, captures: 1, source: 'ended', disposed: true });
-});
-
-test("opening the Studio never captures; draft edits stay off the program until Take", async ({ page }) => {
-    const studio = await open(page);
-    expect(await page.evaluate(() => [window.__captures.displayCalls, window.__captures.cameraCalls])).toEqual([0, 0]);
-    await addDisplay(page, RED);
-    await expectPixel(page, "preview", RED);
-    await page.waitForTimeout(300);
-    expect(near(await pixel(page, "program"), [0, 0, 0], 10)).toBe(true);
-    await studio.locator(".studio-transition").selectOption("cut");
-    await studio.getByRole("button", { name: "Take", exact: true }).click();
-    await expectPixel(page, "program", RED);
-    // A second scene with a green camera: preview changes, program does not.
-    await studio.getByRole("button", { name: "Add scene" }).click();
-    await addCamera(page, GREEN);
-    await expectPixel(page, "preview", GREEN);
-    await page.waitForTimeout(400);
-    expect(near(await pixel(page, "program"), RED)).toBe(true);
-    // Editing the on-air scene's draft (hide its source) does not reach the program.
-    await page.keyboard.press("1");
-    await studio.locator(".studio-visibility").first().click();
-    await expectPixel(page, "preview", [0, 0, 0], 0.5, 0.5);
-    await page.waitForTimeout(400);
-    expect(near(await pixel(page, "program"), RED)).toBe(true);
-    // Take (cut) the green scene.
-    await page.keyboard.press("2");
-    await page.keyboard.press("Control+Enter");
-    await expectPixel(page, "program", GREEN);
-    expect((await diagnostics(page)).program).toBe(await page.evaluate(() => window.__studio.studioSessionForTest().studio.scenes[1].id));
-});
-
-test("crossfade blends both scenes and settles; a new Take replaces a running fade", async ({ page }) => {
-    const studio = await open(page);
-    await addDisplay(page, RED);
-    await studio.locator(".studio-transition").selectOption("cut");
-    await studio.getByRole("button", { name: "Take", exact: true }).click();
-    await expectPixel(page, "program", RED);
-    await studio.getByRole("button", { name: "Add scene" }).click();
-    await addDisplay(page, BLUE);
-    await studio.locator(".studio-transition").selectOption("fade");
-    await studio.locator(".studio-duration").fill("1500");
-    await studio.locator(".studio-duration").press("Tab");
-    expect(await page.evaluate(() => window.__studio.studioSessionForTest().studio.transition)).toEqual({ kind: "fade", ms: 1500 });
-    await studio.getByRole("button", { name: "Take", exact: true }).click();
-    const samples = [];
-    const started = Date.now();
-    while (Date.now() - started < 1300) { samples.push(await pixel(page, "program")); await page.waitForTimeout(60); }
-    // Mid-transition: red AND blue present at once (a real crossfade).
-    expect(samples.some(([r, , b]) => r > 70 && b > 70)).toBe(true);
-    await expectPixel(page, "program", BLUE);
-    await expect.poll(async () => (await diagnostics(page)).transitioning, { timeout: 3000 }).toBe(false);
-    // Out-of-range durations are clamped to 100–1500 ms.
-    await studio.locator(".studio-duration").fill("20");
-    await studio.locator(".studio-duration").press("Tab");
-    expect(await page.evaluate(() => window.__studio.studioSessionForTest().studio.transition.ms)).toBe(100);
-    await studio.locator(".studio-duration").fill("1500");
-    await studio.locator(".studio-duration").press("Tab");
-    // Replace a running fade: back to red, then immediately to blue again.
-    await page.keyboard.press("1");
-    await page.keyboard.press("Control+Enter");
-    await page.waitForTimeout(200);
-    expect((await diagnostics(page)).transitioning).toBe(true);
-    await page.keyboard.press("2");
-    await page.keyboard.press("Control+Enter");
-    await expectPixel(page, "program", BLUE);
-    await expect.poll(async () => (await diagnostics(page)).transitioning, { timeout: 3000 }).toBe(false);
-    // The outgoing holder is released after the fade: only the blue capture is held by the program.
-    const captures = (await diagnostics(page)).captures;
-    expect(captures.every(capture => capture.state === "live")).toBe(true);
-});
-
-test("ended or revoked sources turn neutral at once; removing a draft source keeps the live capture", async ({ page }) => {
-    const studio = await open(page);
-    await addDisplay(page, RED);
-    await studio.locator(".studio-transition").selectOption("cut");
-    await page.keyboard.press("Control+Enter");
-    await expectPixel(page, "program", RED);
-    // Remove the source from the draft: the program still shows it, capture alive.
-    await studio.getByRole("button", { name: "Remove Screen" }).click();
-    await page.waitForTimeout(300);
-    expect(near(await pixel(page, "program"), RED)).toBe(true);
-    expect(await page.evaluate(() => window.__captures.display[0].getVideoTracks()[0].readyState)).toBe("live");
-    expect((await diagnostics(page)).captures).toEqual([{ id: "c1", refs: 1, state: "live" }]);
-    // Taking the (now empty) draft releases the capture.
-    await page.keyboard.press("Control+Enter");
-    await expect.poll(() => page.evaluate(() => window.__captures.display[0].getVideoTracks()[0].readyState)).toBe("ended");
-    expect((await diagnostics(page)).captures).toEqual([]);
-
-    // A live capture that the user revokes (track ends) becomes neutral, not frozen.
-    await addDisplay(page, BLUE);
-    await page.keyboard.press("Control+Enter");
-    await expectPixel(page, "program", BLUE);
-    const neutralAfter = await page.evaluate(async () => {
-        const track = window.__captures.display[1].getVideoTracks()[0];
-        track.stop();
-        track.dispatchEvent(new Event("ended"));
-        const started = performance.now();
-        while (performance.now() - started < 1000) {
-            const [r, g, b] = window.__pixel("program");
-            if (b < 60 && r < 60 && g < 60) return performance.now() - started;
-            await new Promise(resolve => setTimeout(resolve, 5));
-        }
-        return -1;
-    });
-    expect(neutralAfter).toBeGreaterThanOrEqual(0);
-    expect(neutralAfter).toBeLessThan(100);
-    expect(near(await pixel(page, "program"), [17, 22, 28], 12)).toBe(true);
-    await expect(studio.locator(".studio-source[data-state='ended']")).toBeVisible();
-    // No silent restart: an explicit recapture in the draft, then Take.
-    expect(await page.evaluate(() => window.__captures.displayCalls)).toBe(2);
-    await page.evaluate(() => window.__captures.colors.push([20, 200, 40]));
-    await studio.getByRole("button", { name: "Recapture Screen", exact: true }).click();
-    await expectPixel(page, "preview", GREEN);
-    expect(near(await pixel(page, "program"), [17, 22, 28], 12)).toBe(true);
-    await page.keyboard.press("Control+Enter");
-    await expectPixel(page, "program", GREEN);
-});
-
-test("Go live publishes the stable program through the ordinary screen publication; Take never replaces the track", async ({ page }) => {
-    const studio = await open(page);
-    await addDisplay(page, RED);
-    await studio.locator(".studio-transition").selectOption("cut");
-    await page.keyboard.press("Control+Enter");
-    await studio.getByRole("button", { name: "Go live" }).click();
-    await expect(studio.locator(".studio-air")).toHaveText("Live");
-    const published = await page.evaluate(() => {
-        const state = window.__noxa.state;
-        const sender = state.shareVideoTransceiver.sender;
-        return { sharing: state.screenSharing, trackKind: sender.track.kind, live: sender.track.readyState,
-            fromStudio: window.__studio.studioSessionForTest().engine.captureTrack !== sender.track,
-            settings: sender.track.getSettings(), studioActive: window.__video.studioShareActive(),
-            audio: !!state.shareAudioTransceiver, replaceTrack: window.__pub.replaceTrack, offers: window.__pub.offers.length,
-            publish: window.__pub.controls.filter(entry => entry[0] === "control" && entry[1] === "publish" && entry[2] === "screen").length };
-    });
-    expect(published.sharing).toBe(true);
-    expect(published.trackKind).toBe("video");
-    expect(published.live).toBe("live");
-    expect(published.fromStudio).toBe(true); // the publication owns a clone
-    expect([published.settings.width, published.settings.height]).toEqual([1280, 720]);
-    expect(published.studioActive).toBe(true);
-    expect(published.audio).toBe(true); // one stable studio audio track
-    expect(published.offers).toBeGreaterThan(0);
-    expect(published.publish).toBeGreaterThan(0);
-    const sender = await page.evaluateHandle(() => window.__noxa.state.shareVideoTransceiver.sender);
-    const before = await page.evaluate(s => [s.track.id, window.__pub.replaceTrack, window.__pub.offers.length], sender);
-    // Several Takes and a crossfade: pixels change, the published track does not.
-    await studio.getByRole("button", { name: "Add scene" }).click();
-    await addCamera(page, GREEN);
-    await page.keyboard.press("Control+Enter");
-    await studio.locator(".studio-transition").selectOption("fade");
-    await page.keyboard.press("1");
-    await page.keyboard.press("Control+Enter");
-    await page.waitForTimeout(600);
-    expect(await page.evaluate(s => [s.track.id, window.__pub.replaceTrack, window.__pub.offers.length], sender)).toEqual(before);
-    // The share bar labels the Studio, and its Change action reopens the Studio.
-    await expect(page.locator(".sharing-source")).toContainText("Studio");
-    // Stop: publication ends, every capture/timer/canvas is released.
-    const publishedTrack = await page.evaluateHandle(() => window.__noxa.state.shareVideoTransceiver.sender.track);
-    await studio.getByRole("button", { name: "Stop", exact: true }).click();
-    await expect(studio.locator(".studio-air")).toHaveText("Off air");
-    const after = await page.evaluate(t => ({
-        sharing: window.__noxa.state.screenSharing, published: t.readyState,
-        captures: [...window.__captures.display, ...window.__captures.camera].flatMap(s => s.getTracks()).map(track => track.readyState),
-        diagnostics: window.__studio.studioDiagnostics(),
-    }), publishedTrack);
-    expect(after.sharing).toBe(false);
-    expect(after.published).toBe("ended");
-    expect(after.captures.every(state => state === "ended")).toBe(true);
-    expect(after.diagnostics.captures).toEqual([]); // fresh capture-free session in the open panel
-    expect(after.diagnostics.live).toBe(false);
-});
-
-test("the Studio refuses to replace an ordinary share and ordinary sharing still works", async ({ page }) => {
-    await page.evaluate(async () => {
-        await import("/src/modal.js");
-        document.getElementById("voice-screen").onclick = () => window.__video.shareToggle();
-    });
-    await page.locator("#voice-screen").click();
-    await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
-    await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
-    await expect.poll(() => page.evaluate(() => window.__noxa.state.screenSharing)).toBe(true);
-    expect(await page.evaluate(() => window.__video.studioShareActive())).toBe(false);
-    const studio = await open(page);
-    await addDisplay(page, RED);
-    await studio.getByRole("button", { name: "Go live" }).click();
-    await expect(studio.locator(".studio-error")).toContainText("Stop the current screen share");
-    expect(await page.evaluate(() => window.__noxa.state.shareStream.getVideoTracks()[0].readyState)).toBe("live");
-});
-
-test("panel close ownership: off air stops every capture; live keeps only the program's captures", async ({ page }) => {
-    let studio = await open(page);
-    await addDisplay(page, RED);
-    await studio.getByRole("button", { name: "Close Studio" }).click();
-    await expect(studio).toBeHidden();
-    expect(await page.evaluate(() => window.__captures.display[0].getVideoTracks()[0].readyState)).toBe("ended");
-    expect(await page.evaluate(() => window.__studio.studioActive())).toBe(false);
-
-    studio = await open(page);
-    await expect(studio.locator(".studio-ownership")).toHaveText("Closing stops every Studio capture.");
-    await expect(studio.locator(".studio-source[data-state='missing']")).toBeVisible(); // restored layout, no auto capture
-    expect(await page.evaluate(() => window.__captures.displayCalls)).toBe(1);
-    await studio.getByRole("button", { name: "Remove Screen" }).click();
-    await addDisplay(page, RED);       // program capture
-    await studio.locator(".studio-transition").selectOption("cut");
-    await page.keyboard.press("Control+Enter");
-    await studio.getByRole("button", { name: "Add scene" }).click();
-    await addCamera(page, GREEN);      // draft-only capture
-    await studio.getByRole("button", { name: "Go live" }).click();
-    await expect(studio.locator(".studio-ownership")).toContainText("Closing keeps the program live");
-    await studio.getByRole("button", { name: "Close Studio" }).click();
-    const state = await page.evaluate(() => ({
-        program: window.__captures.display[1].getVideoTracks()[0].readyState,
-        draft: window.__captures.camera[0].getVideoTracks()[0].readyState,
-        sharing: window.__noxa.state.screenSharing, diagnostics: window.__studio.studioDiagnostics(),
-    }));
-    expect(state).toMatchObject({ program: "live", draft: "ended", sharing: true });
-    expect(state.diagnostics.live).toBe(true);
-    await expectPixel(page, "program", RED);
-    // Teardown (channel/server switch, disconnect): disposeStudio releases everything.
-    const engine = await page.evaluateHandle(() => window.__studio.studioSessionForTest().engine);
-    await page.evaluate(() => window.__studio.disposeStudio());
-    const disposed = await page.evaluate(e => ({ program: window.__captures.display[1].getVideoTracks()[0].readyState,
-        canvas: [e.program.width, e.preview.width], timer: e.timer, active: window.__studio.studioActive() }), engine);
-    expect(disposed).toEqual({ program: "ended", canvas: [0, 0], timer: null, active: false });
-});
-
-test("a server/account switch while live ends the publication and every Studio resource", async ({ page }) => {
-    const studio = await open(page);
-    await addDisplay(page, RED, "system");
-    await page.keyboard.press("Control+Enter");
-    await studio.getByRole("button", { name: "Go live" }).click();
-    await expect(studio.locator(".studio-air")).toHaveText("Live");
-    const handles = await page.evaluateHandle(() => {
-        const session = window.__studio.studioSessionForTest();
-        return { published: window.__noxa.state.shareVideoTransceiver.sender.track, engine: session.engine, audio: session.audio };
-    });
-    // The modal system closes server-scoped dialogs on a server/account switch.
-    await page.evaluate(async () => (await import("/src/modal.js")).closeServerDialogs("server-change"));
-    await expect(studio).toBeHidden();
-    await expect.poll(() => page.evaluate(() => window.__noxa.state.screenSharing)).toBe(false);
-    const after = await page.evaluate(h => ({ published: h.published.readyState, captures: window.__captures.display.flatMap(s => s.getTracks()).map(t => t.readyState),
-        timer: h.engine.timer, canvas: h.engine.program.width, audio: h.audio.graph().contextState, active: window.__studio.studioActive() }), handles);
-    expect(after.published).toBe("ended");
-    expect(after.captures.every(state => state === "ended")).toBe(true);
-    expect(after).toMatchObject({ timer: null, canvas: 0, active: false });
-    await expect.poll(() => page.evaluate(h => h.audio.graph().contextState, handles)).toBe("closed");
-});
 
 // RMS of the PUBLISHED screen-audio track (what the encrypted publication sends).
 const publishedRMS = page => page.evaluate(async () => {
@@ -407,119 +128,6 @@ const publishedRMS = page => page.evaluate(async () => {
     }
     await context.close();
     return peak;
-});
-
-test("audio follows Take: draft capture audio, recapture audio and the audio switch never reach the publication before Take", async ({ page }) => {
-    const studio = await open(page);
-    await addDisplay(page, RED, "none");
-    await studio.locator(".studio-transition").selectOption("cut");
-    await page.keyboard.press("Control+Enter");
-    await studio.getByRole("button", { name: "Go live" }).click();
-    await expect(studio.locator(".studio-air")).toHaveText("Live");
-    expect(await publishedRMS(page)).toBeLessThan(0.005);
-
-    // (a) A new capture WITH audio in a draft-only scene: silent until Take.
-    await studio.getByRole("button", { name: "Add scene" }).click();
-    await addDisplay(page, BLUE, "system");
-    await expectPixel(page, "preview", BLUE);
-    await expect(studio.locator(".studio-route-audio")).toBeChecked(); // enabled on the draft source
-    expect((await diagnostics(page)).routes).toEqual([]);
-    expect(await publishedRMS(page)).toBeLessThan(0.005);
-    await page.keyboard.press("Control+Enter");
-    await expectPixel(page, "program", BLUE);
-    expect((await diagnostics(page)).routes).toEqual(["c2"]);
-    expect(await publishedRMS(page)).toBeGreaterThan(0.05);
-
-    // (b) Back to the silent scene (Take): the outgoing scene's audio stops at Take, even during a fade.
-    await studio.locator(".studio-transition").selectOption("fade");
-    await page.keyboard.press("1");
-    await page.keyboard.press("Control+Enter");
-    expect((await diagnostics(page)).routes).toEqual([]);
-    expect(await publishedRMS(page)).toBeLessThan(0.005);
-
-    // (c) The audio switch on a draft-only source: off in the draft, Take, then
-    // switching it on in the draft does not reach the publication until Take.
-    await page.keyboard.press("2");
-    await studio.locator(".studio-source-select").first().click();
-    await studio.locator(".studio-route-audio").uncheck();
-    await studio.locator(".studio-transition").selectOption("cut");
-    await page.keyboard.press("Control+Enter");
-    expect((await diagnostics(page)).routes).toEqual([]);
-    await studio.locator(".studio-route-audio").check();
-    await page.waitForTimeout(200);
-    expect((await diagnostics(page)).routes).toEqual([]);
-    expect(await publishedRMS(page)).toBeLessThan(0.005);
-    await studio.getByRole("button", { name: "Take", exact: true }).click();
-    expect((await diagnostics(page)).routes).toEqual(["c2"]);
-    expect(await publishedRMS(page)).toBeGreaterThan(0.05);
-
-    // (d) Recapture with audio in the draft while live: the program keeps the
-    // old capture's audio until Take; then exactly the new capture is routed.
-    await page.evaluate(() => { const t = window.__captures.display[1].getVideoTracks()[0]; t.stop(); t.dispatchEvent(new Event("ended")); });
-    await expect(studio.locator(".studio-source[data-state='ended']")).toBeVisible();
-    await page.evaluate(() => window.__captures.colors.push([20, 200, 40]));
-    await studio.locator(".studio-capture-audio").selectOption("system");
-    await studio.getByRole("button", { name: "Recapture Screen", exact: true }).click();
-    await expectPixel(page, "preview", GREEN);
-    expect((await diagnostics(page)).routes).not.toContain("c3");
-    const beforeTake = await publishedRMS(page);
-    await page.keyboard.press("Control+Enter");
-    await expect.poll(async () => (await diagnostics(page)).routes).toEqual(["c3"]);
-    expect(await publishedRMS(page)).toBeGreaterThan(0.05);
-    expect(beforeTake).toBeLessThan(0.005);
-});
-
-test("audio: a capture shown in two scenes is routed once; nothing monitors to speakers; mic and camera stay out", async ({ page }) => {
-    const studio = await open(page);
-    await addDisplay(page, RED, "system");
-    await studio.getByRole("button", { name: "Add scene" }).click();
-    await studio.locator(".studio-reuse").selectOption("c1"); // same capture, second scene
-    await addDisplay(page, BLUE, "system");                   // second capture with audio, switched off
-    await studio.locator(".studio-source-select").first().click();
-    await studio.locator(".studio-route-audio").uncheck();
-    await studio.locator(".studio-transition").selectOption("cut");
-    await page.keyboard.press("Control+Enter");
-    expect((await diagnostics(page)).routes).toEqual(["c1"]);
-    await page.keyboard.press("1");
-    await studio.locator(".studio-transition").selectOption("fade");
-    await page.keyboard.press("Control+Enter");
-    await page.waitForTimeout(400);
-    expect((await diagnostics(page)).routes).toEqual(["c1"]);
-    const session = await page.evaluate(() => {
-        const s = window.__studio.studioSessionForTest();
-        return { tracks: s.registry.audioTracks().map(item => item.id), speakers: window.__speakerConnections,
-            micInGraph: window.__noxa.state.localStream.getAudioTracks().length };
-    });
-    expect(session.tracks).toEqual(["c1", "c2"]);
-    expect(session.speakers).toBe(0);
-    expect(session.micInGraph).toBe(0);
-    const level = await page.evaluate(async () => {
-        const track = window.__studio.studioSessionForTest().audio.track;
-        const context = new AudioContext(); const analyser = context.createAnalyser();
-        context.createMediaStreamSource(new MediaStream([track])).connect(analyser);
-        const data = new Float32Array(analyser.fftSize); let peak = 0;
-        for (let i = 0; i < 20 && peak < 0.01; i++) { await new Promise(r => setTimeout(r, 50)); analyser.getFloatTimeDomainData(data); peak = Math.max(peak, ...data.map(Math.abs)); }
-        await context.close();
-        return peak;
-    });
-    expect(level).toBeGreaterThan(0.01);
-    await addCamera(page, GREEN);
-    expect(await page.evaluate(() => window.__captures.cameraConstraints.audio)).toBe(false);
-});
-
-test("Ctrl+Enter in a property field takes the value just typed; the preview shows it too", async ({ page }) => {
-    const studio = await open(page);
-    await addDisplay(page, RED, "none");
-    await studio.locator(".studio-transition").selectOption("cut");
-    await page.keyboard.press("Control+Enter");
-    await expectPixel(page, "program", RED, 0.9, 0.5);
-    await studio.locator(".studio-source-select").first().click();
-    const width = studio.getByLabel("Width (%)");
-    await width.fill("50");
-    await page.keyboard.press("Control+Enter"); // still focused in the field
-    await expectPixel(page, "program", [0, 0, 0], 0.9, 0.5);
-    await expectPixel(page, "preview", [0, 0, 0], 0.9, 0.5);
-    await expectPixel(page, "program", RED, 0.25, 0.5);
 });
 
 test("images: EXIF-rotated phone JPEGs decode; a raced prune never deletes a just-added image", async ({ page }) => {
@@ -616,7 +224,6 @@ test("keyboard, accessibility and compact layout", async ({ page }) => {
     await expect(studio.getByRole("button", { name: "Take", exact: true })).toBeFocused();
     await expect(studio.getByRole("img", { name: "Live program output" })).toBeVisible();
     await expect(studio.getByRole("img", { name: /Draft preview of scene/ })).toBeVisible();
-    await expect(studio.getByRole("meter", { name: "Studio audio level" })).toBeAttached();
     for (let i = 0; i < 3; i++) await studio.getByRole("button", { name: "Add scene" }).click();
     await studio.getByRole("button", { name: "Take", exact: true }).focus();
     await page.keyboard.press("2");
@@ -665,82 +272,6 @@ test("a click right after editing a field is not lost (the blur commit does not 
     await expect(studio.locator(".studio-source-select").last()).toHaveAttribute("aria-pressed", "true");
 });
 
-test("the program clock runs in a worker: renders continue when page timers are throttled away", async ({ page }) => {
-    // Simulate background throttling: page intervals never fire from here on.
-    await page.evaluate(() => { window.__realSetInterval = window.setInterval; window.setInterval = () => 0; });
-    const studio = await open(page);
-    await addDisplay(page, RED);
-    await studio.locator(".studio-transition").selectOption("cut");
-    await page.keyboard.press("Control+Enter");
-    await studio.getByRole("button", { name: "Add scene" }).click();
-    await addDisplay(page, BLUE);
-    await studio.locator(".studio-transition").selectOption("fade");
-    await page.keyboard.press("Control+Enter");
-    // Only ticks can complete a fade: with page timers dead, the worker clock does.
-    await expectPixel(page, "program", BLUE);
-    await expect.poll(async () => (await diagnostics(page)).transitioning, { timeout: 3000 }).toBe(false);
-    // Dispose terminates the clock worker with the session.
-    await page.evaluate(() => window.__studio.disposeStudio());
-    expect(await page.evaluate(() => window.__studio.studioActive())).toBe(false);
-});
-
-test("a failed Go live keeps the Studio session (captures, draft, program) and shows the error; a retry works", async ({ page }) => {
-    const studio = await open(page);
-    await addDisplay(page, RED);
-    await studio.locator(".studio-transition").selectOption("cut");
-    await page.keyboard.press("Control+Enter");
-    await page.evaluate(() => {
-        const control = window.go.main.App.VideoStreamControlForTab;
-        window.__restoreControl = () => { window.go.main.App.VideoStreamControlForTab = control; };
-        window.go.main.App.VideoStreamControlForTab = async (tab, msg) => {
-            if (msg.action === "publish" && msg.active) throw new Error("publish refused");
-            return control(tab, msg);
-        };
-    });
-    await studio.getByRole("button", { name: "Go live" }).click();
-    await expect(studio.locator(".studio-error")).toContainText("Could not go live");
-    const after = await page.evaluate(() => ({ d: window.__studio.studioDiagnostics(), sharing: window.__noxa.state.screenSharing,
-        capture: window.__captures.display[0].getVideoTracks()[0].readyState }));
-    expect(after.sharing).toBe(false);
-    expect(after.capture).toBe("live");
-    expect(after.d).toMatchObject({ live: false, program: "sc1", captures: [{ id: "c1", refs: 2, state: "live" }] });
-    await expect(studio.locator(".studio-air")).toHaveText("Off air");
-    await expectPixel(page, "program", RED);
-    // Retry after the server accepts again.
-    await page.evaluate(() => window.__restoreControl());
-    await studio.getByRole("button", { name: "Go live" }).click();
-    await expect(studio.locator(".studio-air")).toHaveText("Live");
-    expect(await page.evaluate(() => window.__video.studioShareActive())).toBe(true);
-});
-
-for (const failure of ["async", "sync"]) {
-    test(`the program clock falls back to a page timer when the clock worker fails (${failure})`, async ({ page }) => {
-        await page.evaluate(mode => {
-            window.__workerFailures = 0;
-            window.Worker = class extends EventTarget {
-                constructor() {
-                    super();
-                    if (mode === "sync") { window.__workerFailures++; throw new Error("worker blocked"); }
-                    setTimeout(() => { window.__workerFailures++; this.onerror?.(new Event("error")); }, 20);
-                }
-                postMessage() {}
-                terminate() { this.terminated = true; }
-            };
-        }, failure);
-        const studio = await open(page);
-        await addDisplay(page, RED);
-        await studio.locator(".studio-transition").selectOption("cut");
-        await page.keyboard.press("Control+Enter");
-        await studio.getByRole("button", { name: "Add scene" }).click();
-        await addDisplay(page, BLUE);
-        await studio.locator(".studio-transition").selectOption("fade");
-        await page.keyboard.press("Control+Enter");
-        await expectPixel(page, "program", BLUE);
-        await expect.poll(async () => (await diagnostics(page)).transitioning, { timeout: 3000 }).toBe(false);
-        expect(await page.evaluate(() => window.__workerFailures)).toBeGreaterThan(0);
-    });
-}
-
 test("an image added and removed in the same session is pruned from local storage at once", async ({ page }) => {
     const studio = await open(page);
     const png = await page.evaluate(async () => {
@@ -760,95 +291,47 @@ test("an image added and removed in the same session is pruned from local storag
     expect(await page.evaluate(() => window.__studio.studioSessionForTest().assets.loadedCount())).toBe(0);
 });
 
-test("a hidden program source's audio is not streamed; visibility applies to audio only at Take", async ({ page }) => {
-    const studio = await open(page);
-    await addDisplay(page, RED, "system");
-    await studio.locator(".studio-transition").selectOption("cut");
-    await page.keyboard.press("Control+Enter");
-    await studio.getByRole("button", { name: "Go live" }).click();
-    await expect(studio.locator(".studio-air")).toHaveText("Live");
-    expect((await diagnostics(page)).routes).toEqual(["c1"]);
-    expect(await publishedRMS(page)).toBeGreaterThan(0.05);
-    // Hide in the draft: still on air (picture and audio) until Take.
-    await studio.getByRole("button", { name: "Hide Screen" }).click();
-    expect((await diagnostics(page)).routes).toEqual(["c1"]);
-    await page.keyboard.press("Control+Enter");
-    await expectPixel(page, "program", [0, 0, 0]);
-    expect((await diagnostics(page)).routes).toEqual([]);
-    expect(await publishedRMS(page)).toBeLessThan(0.005);
-    // Show again in the draft: silent until Take.
-    await studio.getByRole("button", { name: "Show Screen" }).click();
-    expect((await diagnostics(page)).routes).toEqual([]);
-    await page.keyboard.press("Control+Enter");
-    expect((await diagnostics(page)).routes).toEqual(["c1"]);
-    expect(await publishedRMS(page)).toBeGreaterThan(0.05);
-});
-
-test("the program composites on WebGL and matches the scene layout", async ({ page }) => {
-    // Headless runs use a software rasteriser, which "auto" refuses; force it.
-    await page.evaluate(() => window.__studio.useStudioRendererForTest("webgl"));
-    const studio = await open(page);
-    await addDisplay(page, RED);
-    await addCamera(page, BLUE);
-    // Second source (camera) is added on top; put it in the right half.
-    await page.evaluate(() => {
-        const session = window.__studio.studioSessionForTest();
-        const scene = session.studio.scenes.find(s => s.id === session.studio.selected);
-        const [display, camera] = scene.sources;
-        Object.assign(display, { x: 0, y: 0, w: 0.5, h: 1 });
-        Object.assign(camera, { x: 0.5, y: 0, w: 0.5, h: 1 });
-    });
-    await studio.locator(".studio-transition").selectOption("cut");
-    await studio.getByRole("button", { name: "Take", exact: true }).click();
-    expect((await diagnostics(page)).renderer).toBe("webgl");
-    await expectPixel(page, "program", RED, 0.25, 0.5);
-    await expectPixel(page, "program", BLUE, 0.75, 0.5);
-});
-
-test("a lost WebGL context falls back to 2D without changing the published track", async ({ page }) => {
-    await page.evaluate(() => window.__studio.useStudioRendererForTest("webgl"));
-    const studio = await open(page);
-    await addDisplay(page, GREEN);
-    await studio.locator(".studio-transition").selectOption("cut");
-    await studio.getByRole("button", { name: "Take", exact: true }).click();
-    await expectPixel(page, "program", GREEN);
-    expect((await diagnostics(page)).renderer).toBe("webgl");
-    const trackID = await page.evaluate(() => {
-        const engine = window.__studio.studioSessionForTest().engine;
-        engine.outputStream().getVideoTracks()[0].stop(); // the publication's clone
-        const id = engine.captureTrack.id;
-        engine.gl.gl.getExtension("WEBGL_lose_context").loseContext();
-        return id;
-    });
-    await expect.poll(async () => (await diagnostics(page)).renderer, { timeout: 3000 }).toBe("2d");
-    // The 2D path keeps drawing the scene onto the same program canvas, so
-    // the one program track (and any publication of it) carries on.
-    await expectPixel(page, "program", GREEN);
-    const after = await page.evaluate(() => {
-        const engine = window.__studio.studioSessionForTest().engine;
-        return { id: engine.captureTrack.id, state: engine.captureTrack.readyState };
-    });
-    expect(after).toEqual({ id: trackID, state: "live" });
-});
-
-for (const [name, expected] of [["ANGLE (Google, Vulkan (SwiftShader Device (Subzero)), SwiftShader driver)", "2d"],
-    ["ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Direct3D11)", "webgl"]]) {
-    test(`auto mode picks ${expected} when WebGL reports "${name.slice(0, 32)}…"`, async ({ page }) => {
-        // The reported renderer name is the only input that differs between a
-        // software rasteriser and a GPU, so the test controls exactly that.
-        await page.evaluate(rendererName => {
-            const original = WebGL2RenderingContext.prototype.getParameter;
-            WebGL2RenderingContext.prototype.getParameter = function (parameter) {
-                const info = this.getExtension("WEBGL_debug_renderer_info");
-                if (parameter === this.RENDERER || (info && parameter === info.UNMASKED_RENDERER_WEBGL)) return rendererName;
-                return original.call(this, parameter);
-            };
-        }, name);
-        const studio = await open(page);
-        await addDisplay(page, RED);
-        await studio.locator(".studio-transition").selectOption("cut");
-        await studio.getByRole("button", { name: "Take", exact: true }).click();
-        expect((await diagnostics(page)).renderer).toBe(expected);
-        await expectPixel(page, "program", RED);
-    });
+async function installNative(page, status = { available: true }) {
+    await page.evaluate(status => {
+        window.__native = { starts: [], scenes: [], stops: [] };
+        Object.assign(window.go.main.App, {
+            NativeScreenShareStatusForTab: async () => ({ monitors: [{ index: 0, width: 1920, height: 1080, primary: true }], windows: [], foreground: "0", ...status }),
+            NativeScreenThumbnails: async () => ({}),
+            NativeCameras: async () => [],
+            StartNativeScreenShareForTab: async (tab, request) => { window.__native.starts.push(request); },
+            UpdateNativeScreenShareForTab: async () => {},
+            UpdateNativeStudioForTab: async (tab, id, scene) => { window.__native.scenes.push(scene); },
+            StopNativeScreenShareForTab: async (tab, id) => { window.__native.stops.push(id); },
+        });
+    }, status);
 }
+
+test("Studio captures through noXa's picker and goes live natively; a Go failure ends it with the reason", async ({ page }) => {
+    await installNative(page);
+    const studio = await open(page);
+    await studio.getByRole("button", { name: "Screen or window", exact: true }).click();
+    const pick = page.getByRole("dialog", { name: "Choose a source" });
+    await pick.getByRole("button", { name: "Add", exact: true }).click();
+    await expect(studio.locator(".studio-source")).toHaveCount(1);
+    await studio.getByRole("button", { name: "Take", exact: true }).click();
+    await studio.getByRole("button", { name: "Go live", exact: true }).click();
+    await expect(studio.locator(".studio-air")).toHaveText("Live");
+    const request = await page.evaluate(() => window.__native.starts[0]);
+    expect(request.source.studio).toBe(true);
+    expect(request.studio.layers.map(layer => layer.source)).toEqual([{ monitor: 0, window: "0" }]);
+    expect(await page.evaluate(() => window.__captures.displayCalls + window.__captures.cameraCalls)).toBe(0);
+    await page.evaluate(id => { for (const callback of window.__events.native_share || []) callback({ tab: "studio-tab", share: id, state: "failed", reason: "capture" }); }, request.id);
+    await expect(studio.locator(".studio-air")).not.toHaveText("Live");
+    expect(await page.evaluate(() => window.__pub.controls.filter(([kind]) => kind === "toast").map(([, text]) => text)))
+        .toContain("Screen sharing stopped: screen capture failed again after a restart.");
+    expect(await page.evaluate(() => window.__native.stops)).toEqual([request.id]);
+});
+
+test("without native capture the Studio explains why and cannot capture or go live", async ({ page }) => {
+    await installNative(page, { available: false, reason: "server_outdated" });
+    const studio = await open(page);
+    await expect(studio.locator(".studio-error")).toContainText("too old for screen sharing");
+    await expect(studio.getByRole("button", { name: "Screen or window", exact: true })).toBeDisabled();
+    await expect(studio.getByRole("button", { name: "Go live", exact: true })).toBeDisabled();
+});
+

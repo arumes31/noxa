@@ -17,6 +17,7 @@ var (
 	mfplat                       = windows.NewLazySystemDLL("mfplat.dll")
 	procMFStartup                = mfplat.NewProc("MFStartup")
 	procMFTEnumEx                = mfplat.NewProc("MFTEnumEx")
+	procMFTEnum2                 = mfplat.NewProc("MFTEnum2")
 	procMFCreateMediaType        = mfplat.NewProc("MFCreateMediaType")
 	procMFCreateSample           = mfplat.NewProc("MFCreateSample")
 	procMFCreateDXGISurfaceBuf   = mfplat.NewProc("MFCreateDXGISurfaceBuffer")
@@ -147,33 +148,54 @@ func vendorOf(id, name string) string {
 	return ""
 }
 
-// enumEncoders lists the hardware, then the software H.264 encoder
-// activates and their infos; free releases them all. MFTEnumEx2 (adapter
-// filter) is not exported on every Windows build, so matchesAdapter decides.
+// enumEncoders lists H.264 encoder activates and their infos: the hardware
+// MFTs of the device's adapter (MFTEnum2 with MFT_ENUM_ADAPTER_LUID, Windows
+// 10 1703+), every hardware MFT, then the software MFTs. free releases them.
 func enumEncoders(d *device, report *[]string) (activates []uintptr, infos []encoderInfo, free func()) {
 	in := registerTypeInfo{mfMediaTypeVideo, mfVideoFormatNV12}
 	out := registerTypeInfo{mfMediaTypeVideo, mfVideoFormatH264}
 	var lists []uintptr
-	for _, flags := range []uintptr{mftEnumHardware | mftEnumSortAndFilter, mftEnumSyncMFT | mftEnumSortAndFilter} {
+	// byVendor: without the adapter enumeration, an activate without a LUID
+	// is matched to the device by its PCI vendor ID.
+	byVendor := true
+	add := func(what string, flags, attrs uintptr) bool {
 		var list uintptr
 		var count uint32
-		// #nosec G103 -- MFTEnumEx takes the category GUID by value (passed by reference on x64) and returns a CoTaskMem array.
-		r, _, _ := procMFTEnumEx.Call(uintptr(unsafe.Pointer(&mftCategoryVideoEncoder)), flags,
-			uintptr(unsafe.Pointer(&in)), uintptr(unsafe.Pointer(&out)), uintptr(unsafe.Pointer(&list)), uintptr(unsafe.Pointer(&count)))
+		var r uintptr
+		// #nosec G103 -- the category GUID by reference (x64 by-value struct), CoTaskMem array out.
+		if attrs != 0 {
+			r, _, _ = procMFTEnum2.Call(uintptr(unsafe.Pointer(&mftCategoryVideoEncoder)), flags,
+				uintptr(unsafe.Pointer(&in)), uintptr(unsafe.Pointer(&out)), attrs, uintptr(unsafe.Pointer(&list)), uintptr(unsafe.Pointer(&count)))
+		} else {
+			r, _, _ = procMFTEnumEx.Call(uintptr(unsafe.Pointer(&mftCategoryVideoEncoder)), flags,
+				uintptr(unsafe.Pointer(&in)), uintptr(unsafe.Pointer(&out)), uintptr(unsafe.Pointer(&list)), uintptr(unsafe.Pointer(&count)))
+		}
 		if hresult(r).failed() || count == 0 {
-			*report = append(*report, fmt.Sprintf("MFTEnumEx flags 0x%X: %d encoders, HRESULT 0x%08X", flags, count, uint32(r)))
-			continue
+			*report = append(*report, fmt.Sprintf("%s: %d encoders, HRESULT 0x%08X", what, count, uint32(r)))
+			return hresult(r).succeeded()
 		}
 		lists = append(lists, list)
-		for _, activate := range unsafe.Slice((*uintptr)(unsafe.Pointer(list)), count) { //nolint:govet // #nosec G103 -- CoTaskMem array from MFTEnumEx
+		for _, activate := range unsafe.Slice((*uintptr)(unsafe.Pointer(list)), count) { //nolint:govet // #nosec G103 -- CoTaskMem array from MFTEnum2/MFTEnumEx
 			info := encoderInfo{name: activateString(activate, &mftFriendlyName), vendorID: activateString(activate, &mftHardwareVendorID),
 				hardware: flags&mftEnumHardware != 0}
 			info.vendor = vendorOf(info.vendorID, info.name)
-			vcall(activate, 8, uintptr(unsafe.Pointer(&mftEnumAdapterLUID)), uintptr(unsafe.Pointer(&info.luid))) // #nosec G103 -- GetUINT64
-			info.onAdapter = matchesAdapter(info, d.luid, d.vendorID)
+			var size uint32
+			vcall(activate, 15, uintptr(unsafe.Pointer(&mftEnumAdapterLUID)), uintptr(unsafe.Pointer(&info.luid)), 8, uintptr(unsafe.Pointer(&size))) // #nosec G103 -- GetBlob: a LUID
+			info.onAdapter = attrs != 0 || matchesAdapter(info, d.luid, d.vendorID, byVendor)
 			activates, infos = append(activates, activate), append(infos, info)
 		}
+		return true
 	}
+	if d.luid != 0 && procMFTEnum2.Find() == nil {
+		if attrs, err := newAttributes(1); err == nil {
+			luid := d.luid
+			vcall(attrs, 26, uintptr(unsafe.Pointer(&mftEnumAdapterLUID)), uintptr(unsafe.Pointer(&luid)), 8) // #nosec G103 -- SetBlob: a LUID
+			byVendor = !add("adapter hardware MFTs (MFTEnum2)", mftEnumHardware|mftEnumSortAndFilter, attrs)
+			release(attrs)
+		}
+	}
+	add("hardware MFTs", mftEnumHardware|mftEnumSortAndFilter, 0)
+	add("software MFTs", mftEnumSyncMFT|mftEnumSortAndFilter, 0)
 	return activates, infos, func() {
 		for _, activate := range activates {
 			release(activate)
