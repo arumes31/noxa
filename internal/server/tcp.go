@@ -1590,9 +1590,12 @@ func (s *TCPServer) pingLoop(client *Client, stop <-chan struct{}) {
 			return
 		case <-s.stopCh:
 			return
-		case now := <-ticker.C:
-			// A paused process (GC, VM) froze every read loop too: skip one
-			// check so the buffered bytes are read before anyone is judged.
+		case <-ticker.C:
+			// The tick's own timestamp hides delivery delay, so measure the
+			// pause from the processing time. A paused process (GC, VM) froze
+			// every read loop too: skip one round of both checks so the
+			// buffered bytes are read before anyone is judged.
+			now := time.Now()
 			stalled := now.Sub(lastTick) > fastHeartbeatStall
 			lastTick = now
 			s.configMu.RLock()
@@ -1617,7 +1620,7 @@ func (s *TCPServer) pingLoop(client *Client, stop <-chan struct{}) {
 			}
 			lastPing = now
 			last := client.lastActivity()
-			if idle := time.Since(last); timeout > 0 && !last.IsZero() && idle > time.Duration(timeout)*time.Second {
+			if idle := time.Since(last); !stalled && timeout > 0 && !last.IsZero() && idle > time.Duration(timeout)*time.Second {
 				client.markCloseCause(netproto.ControlCloseServerInactivity)
 				s.logger.Info("control connection closed",
 					zap.String("reason", string(netproto.ControlCloseServerInactivity)),
