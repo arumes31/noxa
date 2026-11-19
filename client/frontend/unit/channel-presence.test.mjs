@@ -160,7 +160,8 @@ test('a desktop dropped by its fast heartbeat is announced as lost, then reconne
     assert.deepEqual(changes(lost, before).map(cue),
         [['peer', 'join', 'runtime.reconnectedUser', 'user_join', 'user_reconnected', false]], 'the resume is a reconnect');
     assert.deepEqual(changes(before, before), [], 'reconnected once');
-    assert.deepEqual(changes(lost, state([])).map(change => change.message), ['runtime.left'], 'no return: one plain leave, no second lost');
+    assert.deepEqual(changes(lost, state([])), [], 'no return: the expiry is silent, the loss was already announced');
+    assert.deepEqual(changes(lost, state([], { presenceDepartures: { peer: 'left' } })), [], 'silent whatever the expiry reason');
     const newSession = state([{ ...peer, client_id: 'peer-2' }], { presenceDepartures: { peer: 'replaced' }, presenceReturned: new Set(['peer-2']) });
     assert.deepEqual(changes(lost, newSession).map(cue),
         [['peer-2', 'join', 'runtime.reconnectedUser', 'user_join', 'user_reconnected', false]], 'a return on a new session is one reconnect');
