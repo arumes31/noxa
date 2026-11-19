@@ -74,8 +74,8 @@ func TestPingLoopClosesSilentFastHeartbeatClient(t *testing.T) {
 	if cause := c.closeCause.Load(); cause == nil || *cause != netproto.ControlCloseServerInactivity {
 		t.Fatalf("close cause = %v, want server inactivity", cause)
 	}
-	if got := c.departureReason(); got != netproto.DepartureConnectionLost || !c.droppedByHeartbeat() {
-		t.Fatalf("departure = %q (heartbeat drop %v), want a lost connection", got, c.droppedByHeartbeat())
+	if got := c.departureReason(); got != netproto.DepartureConnectionLost {
+		t.Fatalf("departure = %q, want a lost connection", got)
 	}
 }
 

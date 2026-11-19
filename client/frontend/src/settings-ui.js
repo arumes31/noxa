@@ -1383,7 +1383,7 @@ function pageNotifications() {
     speech.appendChild(row(t("settings.speak.administrative.actions"), checkbox(s.speech_admin !== false, v => { s.speech_admin = v; })));
     speech.appendChild(row(t("settings.speak.removal"), checkbox(s.speech_removal !== false, v => { s.speech_removal = v; })));
     speech.appendChild(row(t("settings.speak.permissions"), checkbox(s.speech_permissions !== false, v => { s.speech_permissions = v; })));
-    speech.appendChild(row(t("settings.speak.names"), checkbox(s.speech_names !== false, v => { s.speech_names = v; })));
+    speech.appendChild(row(t("settings.speak.names"), checkbox(s.speech_names !== false, v => { s.speech_names = v; }), "", { key: "speech_names" }));
     const speechTest = document.createElement("button");
     speechTest.type = "button";
     speechTest.textContent = t("settings.test.spoken.message");

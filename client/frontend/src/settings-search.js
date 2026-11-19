@@ -98,6 +98,7 @@ export const SETTINGS_SEARCH_TERMS = Object.freeze({
     spoken_messages: { de: ["Sprachausgabe", "Vorlesen", "Stimme liest vor", "Text zu Sprache"], en: ["text to speech", "read aloud", "spoken messages", "voice reads"] },
     speech_volume: { de: ["Sprachausgabe Lautstärke", "Vorlesen zu laut"], en: ["speech volume", "read aloud too loud"] },
     speech_language: { de: ["Sprachausgabe Sprache"], en: ["speech language"] },
+    speech_names: { de: ["Namen ansagen", "Benutzername vorlesen", "sagt nur Benutzer"], en: ["announce names", "spoken username", "says user instead of name"] },
     event_sounds: { de: ["Ereignistöne", "Ton bei Beitritt", "Ton pro Ereignis"], en: ["event sounds", "join sound", "sound per event"] },
     chat_notification_level: { de: ["Benachrichtigung kommt nicht", "keine Benachrichtigung", "zu viele Benachrichtigungen", "Benachrichtigungen", "Hinweis bei Nachricht"], en: ["notification not showing", "no notifications", "too many notifications", "notifications", "alert on message"] },
     notify_matrix: { de: ["Benachrichtigung pro Ereignis", "Benachrichtigungsmatrix", "Popup", "Desktop Benachrichtigung"], en: ["notification per event", "notification matrix", "popup", "desktop notification"] },

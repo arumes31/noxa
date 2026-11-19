@@ -1293,7 +1293,7 @@ window.runtime.EventsOn("settings_update", (s) => {
     else renderMember();
     renderVoiceHints();
     void updateSoundOutput();
-    prefetchVisibleNames(); // the speech language or Announce names may have changed
+    prefetchVisibleNames(); // the speech language or the spoken-names setting may have changed
     void applyLiveAudioSettings().catch((error) => toast(t("runtime.audioSettings", { error: error.message }), "warn"));
 });
 
@@ -1430,7 +1430,7 @@ window.runtime.EventsOn("snapshot", (json) => {
         for (const change of channelPresenceChanges(previousPresence, nextPresence)) {
             if (presenceCueSuppressed(state, change)) continue;
             window.__noxaNotify?.notify("join_leave", t(change.message, { name: change.client.nickname || t("runtime.someone") }),
-                { channelID: state.myChannelID, className: "joins", kind: "info", soundEvent: change.soundEvent, speechEvent: change.speechEvent, speechKey: presenceSpeechKey(change.client, state.myChannelID), noSound: !!change.quiet });
+                { channelID: state.myChannelID, className: "joins", kind: "info", soundEvent: change.soundEvent, speechEvent: change.speechEvent, speechKey: presenceSpeechKey(change.client, state.myChannelID), speaker: change.client, noSound: !!change.quiet });
         }
     }
     snapshotPresenceScope = nextPresence.scope;

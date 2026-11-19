@@ -1567,11 +1567,6 @@ func (c *Client) fastHeartbeatLost(now time.Time) (time.Duration, bool) {
 	return idle, idle > netproto.FastHeartbeatTimeout
 }
 
-// droppedByHeartbeat reports a connection the fast heartbeat closed.
-func (c *Client) droppedByHeartbeat() bool {
-	cause := c.closeCause.Load()
-	return c.fastHeartbeat.Load() && cause != nil && *cause == netproto.ControlCloseServerInactivity
-}
 
 // pingLoop sends a server-initiated Ping every 15s (3s on the fast heartbeat)
 // until stopped; matching Pongs feed the client's smoothed RTT. A client on
@@ -1708,7 +1703,9 @@ func (s *TCPServer) onDisconnect(client *Client) {
 					// A session taken over by its own resume needs no kept place.
 					if (departure == netproto.DepartureUpdating || departure == netproto.DepartureReconnecting) && !client.resumeTakeover.Load() {
 						ghost := updatingGhost(removed)
-						ghost.LostAloud = departure == netproto.DepartureReconnecting && client.droppedByHeartbeat()
+						// Any unannounced drop is announced at once (shutdown, crash, heartbeat);
+						// the 2 min grace only keeps the place for a resume.
+						ghost.LostAloud = departure == netproto.DepartureReconnecting
 						s.presence.noteUpdating(key, ghost, departure, wasInvisible, now)
 						id, uniqueID, nickname := client.ID, client.UniqueID, client.nickname()
 						time.AfterFunc(presenceUpdateWindow, func() { s.expireUpdatingDeparture(key, id, uniqueID, nickname, now) })

@@ -105,7 +105,7 @@ voice blend (it rebuilds the ST13 style and checks its hash), speed and steps,
 and the same trimming, fades and quiet level. Differences: names are not
 respelled or Whisper-reviewed, ffmpeg resamples 44.1 kHz to 24 kHz instead of
 the FFT resampler, and a name may be 0.15–4 s long. Until a name is cached the
-client plays the generic clip; **Announce names** off always does.
+client plays the generic clip; **Speak user names in announcements** off always does.
 
 ## Audio contract and runtime policy
 
