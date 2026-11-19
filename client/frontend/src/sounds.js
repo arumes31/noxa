@@ -35,47 +35,165 @@ export const speechQueue = new SpeechQueue({ engine: soundEngine, assets: SPEECH
     getState: () => V()?.state, isDND: settings => !!window.__noxaPolish?.dndActive?.(settings),
     systemLanguage: () => navigator.language || "en", nameClip: spokenNameClip });
 
+// Token bucket with a fractional level, refilled continuously.
+function tokenBucket(capacity, perMs, now) {
+    let tokens = capacity, updated = now();
+    return {
+        level() { const t = now(); tokens = Math.min(capacity, tokens + Math.max(0, t - updated) / perMs); updated = t; return tokens; },
+        take() { if (this.level() < 1) return false; tokens--; return true; },
+    };
+}
+
+// Every GetSpokenNameForTab request (prefetch, retry or announcement) is paced
+// under the server's per-session limit of 40 burst then 1/s, keeping 10 for
+// headroom; higher priority runs first. synthesis mirrors the server's budget
+// for new clips (10 then 1/min): prefetch holds back while the clips it may
+// cause (probing: first asks in flight) could spend the last two.
+// shortcut: one pacer for all tabs, conservative since each tab has its own server budget.
+export function createNamePacer({ burst = 30, perMs = 1000, now = () => Date.now(), schedule = (fn, ms) => setTimeout(fn, ms) } = {}) {
+    const requests = tokenBucket(burst, perMs, now), queue = [];
+    let timer = null;
+    const drain = () => {
+        timer = null;
+        for (let index = 0; index < queue.length && requests.level() >= 1;) {
+            const job = queue[index];
+            if (job.stale?.(job)) { queue.splice(index, 1); continue; }
+            if (job.held?.(job)) { index++; continue; }
+            queue.splice(index, 1);
+            requests.take();
+            job.run();
+        }
+        if (!queue.length) return;
+        // Wait for the next request token, or poll for held jobs.
+        const mark = timer = {};
+        const level = requests.level();
+        schedule(() => { if (timer === mark) drain(); }, level >= 1 ? perMs : Math.ceil((1 - level) * perMs));
+    };
+    const pacer = {
+        now, synthesis: tokenBucket(8, 60000, now), probing: 0,
+        // job: { run, priority, stale(job): drop it, held(job): keep it queued for now }
+        add(job) {
+            const index = queue.findIndex(other => other.priority < job.priority);
+            queue.splice(index < 0 ? queue.length : index, 0, job);
+            if (!timer || requests.level() >= 1) drain();
+            return job;
+        },
+        promote(job, priority) {
+            const index = queue.indexOf(job);
+            if (index < 0 || job.priority >= priority) return;
+            queue.splice(index, 1);
+            job.priority = priority;
+            pacer.add(job);
+        },
+        get size() { return queue.length; },
+    };
+    return pacer;
+}
+export const namePacer = createNamePacer();
+
+// Announcements outrank prefetch (my channel 2, voice channels 1, others 0).
+export const NAME_PRIORITY_LIVE = 3;
+// Raised from 256: a whole-server prefetch needs one entry per visible online
+// user. Clips are decoded only when announced, so an entry is its ~50 KB data URL.
+export const SPOKEN_NAME_LIMIT = 512;
+const NAME_PREFETCH_LIMIT = SPOKEN_NAME_LIMIT - 64; // room for announcements
+const NAME_RETRY_MS = 60000; // prefetch backoff after a failed fetch
+
 // Spoken names fetched from the server this session: tab, language and
-// nickname -> engine sound ID, or a pending fetch.
+// nickname -> {id} once fetched, {ready, job} in flight, or {failedAt}.
+// Least recently used first.
 const spokenNames = new Map();
+function rememberName(key, entry, engine) {
+    spokenNames.delete(key);
+    spokenNames.set(key, entry);
+    while (spokenNames.size > SPOKEN_NAME_LIMIT) {
+        const [oldKey, old] = spokenNames.entries().next().value;
+        spokenNames.delete(oldKey);
+        if (old.id && ![...spokenNames.values()].some(other => other.id === old.id)) {
+            delete engine.definitions[old.id];
+            delete engine.urls[old.id];
+            engine.buffers.delete(old.id);
+        }
+    }
+}
+
+// Returns the decoded name clip ID, "" when none is coming, or (for an
+// announcement) a promise of the ID or "". Prefetch (priority below
+// NAME_PRIORITY_LIVE) only fetches and returns "".
 export function spokenNameClip({ language, speaker, phrase }, app = window.go?.main?.App, engine = soundEngine,
-    schedule = (fn, ms) => setTimeout(fn, ms)) {
-    const tabID = V()?.state?.activeTabID || "";
+    schedule = (fn, ms) => setTimeout(fn, ms), pacer = namePacer, priority = NAME_PRIORITY_LIVE) {
+    const activeTab = () => V()?.state?.activeTabID || "";
+    const tabID = activeTab();
     const key = JSON.stringify([tabID, language, speaker.nickname || ""]);
+    const live = priority >= NAME_PRIORITY_LIVE;
+    const decoded = id => {
+        if (engine.buffers.has(id) && engine.buffers.has(phrase)) return id;
+        return Promise.resolve(engine.preload([id, phrase])).then(() => engine.buffers.has(id) && engine.buffers.has(phrase) ? id : "");
+    };
     const known = spokenNames.get(key);
     if (known?.id) {
-        if (engine.buffers.has(known.id) && engine.buffers.has(phrase)) return known.id;
-        void engine.preload([known.id, phrase]);
-        return "";
+        rememberName(key, known, engine);
+        return live ? decoded(known.id) : "";
     }
-    if (known || !app?.GetSpokenNameForTab) return "";
-    while (spokenNames.size >= 256) spokenNames.delete(spokenNames.keys().next().value);
-    const entry = { pending: true };
-    spokenNames.set(key, entry);
+    if (known && !known.failedAt) { // in flight
+        if (known.job) pacer.promote(known.job, priority);
+        if (!live) return "";
+        return known.ready.then(ok => ok && known.id ? decoded(known.id) : "");
+    }
+    // Announcements retry a failed name at once; prefetch backs off.
+    if (!app?.GetSpokenNameForTab || (!live && known && pacer.now() - known.failedAt < NAME_RETRY_MS)) return "";
+    let settle;
+    const entry = { ready: new Promise(resolve => { settle = resolve; }), job: null };
+    rememberName(key, entry, engine);
+    const fail = () => { entry.failedAt = pacer.now(); entry.job = null; settle(false); };
     // The server answers at once; a name it is still voicing is asked again a
     // few times. A failed fetch (no clip, user gone, older server) is retried
     // by a later announcement.
-    const fetchName = attempt => Promise.resolve(app.GetSpokenNameForTab(tabID, speaker.client_id, language)).then(data => {
-        // The session may have been renamed since: never file a clip under another name.
-        if (data.nickname !== speaker.nickname) throw new Error("renamed");
-        if (data.pending) {
-            if (attempt >= 6) throw new Error("still pending");
-            schedule(() => fetchName(attempt + 1), 3000);
-            return undefined;
-        }
-        const id = "speech_name_" + data.key;
-        engine.definitions[id] = { duration: 1, priority: 1, cooldown: 0, category: "Speech" };
-        engine.urls[id] = "data:audio/wav;base64," + data.data_base64;
-        entry.id = id;
-        return engine.preload([id, phrase]);
-    }).catch(() => { if (spokenNames.get(key) === entry) spokenNames.delete(key); });
-    void fetchName(1);
-    return "";
+    const request = attempt => {
+        entry.job = pacer.add({ priority: entry.job?.priority ?? priority, run: () => fetchName(attempt),
+            // Evicted from the cache or asked for another tab.
+            stale: () => {
+                if (spokenNames.get(key) === entry && activeTab() === tabID) return false;
+                fail();
+                return true;
+            },
+            // A first prefetch ask may start a new clip: keep two for announcements.
+            held: job => attempt === 1 && job.priority < NAME_PRIORITY_LIVE && pacer.synthesis.level() - pacer.probing < 1 });
+    };
+    const fetchName = attempt => {
+        if (attempt === 1) pacer.probing++;
+        const answered = pending => { if (attempt === 1) { pacer.probing--; if (pending) pacer.synthesis.take(); } };
+        return new Promise(resolve => resolve(app.GetSpokenNameForTab(tabID, speaker.client_id, language))).then(data => {
+            answered(data?.pending);
+            // The session may have been renamed since: never file a clip under another name.
+            if (data.nickname !== speaker.nickname) throw new Error("renamed");
+            if (data.pending) {
+                settle(false); // a new clip takes longer than an announcement waits
+                if (attempt >= 6) throw new Error("still pending");
+                schedule(() => request(attempt + 1), 3000);
+                return;
+            }
+            const id = "speech_name_" + data.key;
+            engine.definitions[id] = { duration: 1, priority: 1, cooldown: 0, category: "Speech" };
+            engine.urls[id] = "data:audio/wav;base64," + data.data_base64;
+            entry.id = id;
+            entry.job = null;
+            settle(true);
+        }, error => { answered(false); throw error; }).catch(fail);
+    };
+    request(1);
+    return live ? entry.ready.then(ok => ok ? decoded(entry.id) : "") : "";
 }
-export function prefetchSpokenNames(clients, settings = V()?.state.settings) {
+// entries: [client, priority] pairs. When a server has more visible users
+// than the cache holds, the highest priorities are kept.
+export function prefetchSpokenNames(entries, settings = V()?.state.settings,
+    { app = window.go?.main?.App, engine = soundEngine, pacer = namePacer, schedule } = {}) {
     if (!settings || settings.speech_names === false || settings.spoken_messages === false) return;
     const language = speechLanguage(settings, navigator.language);
-    for (const speaker of clients) spokenNameClip({ language, speaker, phrase: "speech_" + language + "_user_leave_named" });
+    const ranked = [...entries].sort((a, b) => b[1] - a[1]).slice(0, NAME_PREFETCH_LIMIT);
+    for (const [speaker, priority] of ranked) {
+        if (speaker?.client_id && speaker.nickname) spokenNameClip({ language, speaker, phrase: "" }, app, engine, schedule, pacer, priority);
+    }
 }
 export function playSpeech(event, options) { return speechQueue.enqueue(event, options); }
 export function playAlert(event, options) {

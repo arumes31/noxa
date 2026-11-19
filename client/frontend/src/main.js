@@ -1293,6 +1293,7 @@ window.runtime.EventsOn("settings_update", (s) => {
     else renderMember();
     renderVoiceHints();
     void updateSoundOutput();
+    prefetchVisibleNames(); // the speech language or Announce names may have changed
     void applyLiveAudioSettings().catch((error) => toast(t("runtime.audioSettings", { error: error.message }), "warn"));
 });
 
@@ -1382,6 +1383,7 @@ window.runtime.EventsOn("tab_replay_done", (tabID) => {
     // In either case, this resolves a new tab's first own-channel cue exactly
     // once, while restored tabs have no pending cue to play.
     syncOwnChannel({ audible: false });
+    prefetchVisibleNames();
     const cue = pendingIntentionalDisconnectCue;
     if (cue && cue.replacementTabID === String(tabID || "")
         && cue.replacementTabID === state.activeTabID && cue.replacementGeneration === state.serverGeneration) {
@@ -1444,6 +1446,7 @@ window.runtime.EventsOn("snapshot", (json) => {
     recomputeDucking();
     renderTree();
     syncChannelMedia();
+    prefetchVisibleNames(); // connect, renames and role-filtered roster changes
 });
 
 // syncOwnChannel makes channel ownership independent of whether the snapshot
@@ -1496,15 +1499,18 @@ function syncOwnChannel({ audible = true, ownMove } = {}) {
     window.__noxaFiles?.onChannelChanged?.();
     renderTree();
     ensureVoiceForChannel();
-    prefetchChannelNames(channelID);
+    prefetchVisibleNames();
 }
 
-// Members already in a channel I enter are fetched now, so their later leave
-// can say the name (a departed session can no longer be fetched).
-function prefetchChannelNames(channelID) {
-    if (channelID > 0 && !actionSoundsSuppressed()) {
-        prefetchSpokenNames(state.clients.filter(client => client.channel_id === channelID && client.client_id !== state.myClientID));
-    }
+// Every visible online user's spoken name is fetched before any announcement:
+// a departed session can no longer be fetched, and a first join should not
+// say "user". Cached and in-flight names are skipped, so this runs on every
+// roster change; my channel goes first, then voice channels.
+function prefetchVisibleNames() {
+    if (actionSoundsSuppressed()) return;
+    const voice = new Set(state.channels.filter(ch => !ch.TextOnly).map(ch => ch.ChannelID));
+    prefetchSpokenNames(state.clients.filter(client => client.client_id !== state.myClientID).map(client => [client,
+        state.myChannelID > 0 && client.channel_id === state.myChannelID ? 2 : voice.has(client.channel_id) ? 1 : 0]));
 }
 
 // applyBlockAndContacts mutes blocked users locally and records contact
@@ -1608,6 +1614,7 @@ window.runtime.EventsOn("event", (json) => {
                             speechKey: presenceSpeechKey(joined, joinedChannel), speaker: joined, noSound: actionSoundsSuppressed() });
                 }
             }
+            prefetchVisibleNames();
             break;
         }
         case "user_left": {
@@ -1687,7 +1694,7 @@ window.runtime.EventsOn("event", (json) => {
                 window.__noxaFiles?.onChannelChanged?.(); // (256) file browser follows the channel
                 recordRecentChannel(nextChannelID); // (320) recent channels
                 ensureVoiceForChannel();
-                prefetchChannelNames(nextChannelID);
+                prefetchVisibleNames();
             } else if (c && nextChannelID === state.myChannelID && state.myChannelID !== 0
                 && previousRemoteChannelID !== nextChannelID) {
                 // A member back from an update or a drop rejoins its channel without a join cue.
@@ -1703,6 +1710,7 @@ window.runtime.EventsOn("event", (json) => {
                         noSound: actionSoundsSuppressed() });
             }
             recomputeDucking();
+            prefetchVisibleNames(); // a move can change the priority of a still-queued name
             break;
         }
         case "channel_created":

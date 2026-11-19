@@ -51,6 +51,9 @@ export const NAMED_SPEECH_EVENTS = Object.freeze([
     "user_join", "user_leave", "user_disconnected", "user_connection_lost", "user_reconnected",
     "user_moved", "user_moved_out", "user_kicked", "user_kicked_channel", "buddy_online",
 ]);
+// How long a named announcement waits for a name clip still being fetched
+// (a stored clip is one round trip) before it plays the generic phrase.
+export const NAME_WAIT_MS = 1200;
 export const SPEECH_VARIANTS = {
     ...Object.fromEntries(NAMED_SPEECH_EVENTS.map(event => [event + "_named", event])),
     ...Object.fromEntries(CLOSING_SPEECH_CLIPS.slice(1).map(clip => [clip, "client_closing"])),
@@ -138,13 +141,23 @@ export class SpeechQueue {
         const language = speechLanguage(selected, this.systemLanguage());
         if (!this.allowed(event, selected, preview, item.effect) || !soundVolume(selected?.speech_volume ?? 100)
             || !this.assets[language]?.[event]) return false;
-        // A name not cached yet keeps the generic clip now, without delay;
-        // nameClip starts fetching it for the next announcement.
+        // nameClip answers with a ready clip, "" (none coming: generic now) or
+        // a promise of one; the item then waits up to NAME_WAIT_MS in the queue.
         if (speaker?.client_id && !preview && selected?.speech_names !== false && NAMED_SPEECH_EVENTS.includes(event)
             && this.assets[language]?.[event + "_named"]) {
             const phrase = "speech_" + language + "_" + event + "_named";
             const name = this.nameClip({ language, speaker, phrase });
-            if (name) Object.assign(item, { name, phrase, language });
+            if (typeof name === "string") {
+                if (name) Object.assign(item, { name, phrase, language });
+            } else if (name) {
+                Object.assign(item, { phrase, language, nameDeadline: now + NAME_WAIT_MS });
+                Promise.resolve(name).catch(() => "").then(id => {
+                    if (!item.nameDeadline) return; // already played generic
+                    item.nameDeadline = 0;
+                    if (id) item.name = id;
+                    this.pump();
+                });
+            }
         }
         if (coolingDown || (!preview && this.current?.scope === scope && this.current?.priority > def.priority)) return false;
         if (!preview) {
@@ -156,7 +169,10 @@ export class SpeechQueue {
             }
         }
         // Terminal/high-priority messages replace obsolete connection/admin speech.
-        this.pending = this.pending.filter(entry => entry.scope !== scope || entry.priority > def.priority);
+        // An item waiting for its name would be playing without the wait, so an
+        // equal-priority newcomer queues behind it instead of replacing it.
+        this.pending = this.pending.filter(entry => entry.scope !== scope || entry.priority > def.priority
+            || (entry.nameDeadline > now && entry.priority === def.priority));
         const replacesCurrentState = def.family && SPEECH_EVENTS[this.current?.event]?.family === def.family;
         if (this.current && (preview || (this.current.scope === scope && (def.priority > this.current.priority || replacesCurrentState)))) this.stopCurrent();
         this.pending.push(item);
@@ -174,6 +190,8 @@ export class SpeechQueue {
             const settings = item.settings || this.getState()?.settings;
             if (item.expires < now || (!item.preview && item.scope !== this.scope()) || !this.allowed(item.event, settings, item.preview, item.effect)) { this.pending.shift(); item.onEnded?.(); continue; }
             if (item.ready > now) { this.timer = this.schedule(() => this.pump(), item.ready - now); return; }
+            if (item.nameDeadline > now) { this.timer = this.schedule(() => this.pump(), item.nameDeadline - now); return; }
+            item.nameDeadline = 0;
             this.pending.shift();
             const language = speechLanguage(settings, this.systemLanguage());
             // Names may have been turned off since this item was queued.
