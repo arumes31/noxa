@@ -15,7 +15,11 @@ export function captureChannelPresence(state) {
 const UPDATING_CUE = Object.freeze({ kind: 'updating', message: 'runtime.updatingUser', quiet: true });
 // A member whose connection dropped keeps its place while it may resume.
 const RECONNECTING_CUE = Object.freeze({ kind: 'reconnecting', message: 'runtime.reconnectingUser', quiet: true });
-const keptCue = client => client?.updating ? UPDATING_CUE : client?.reconnecting ? RECONNECTING_CUE : null;
+// A desktop dropped by its fast heartbeat (lost_aloud) keeps its place too, but
+// is announced like any lost connection, and its resume as a reconnect.
+const LOST_KEPT_CUE = Object.freeze({ kind: 'leave', message: 'runtime.connectionLostUser', soundEvent: 'user_leave', speechEvent: 'user_connection_lost' });
+const lostAloud = client => !!(client?.reconnecting && client.lost_aloud);
+const keptCue = client => client?.updating ? UPDATING_CUE : lostAloud(client) ? LOST_KEPT_CUE : client?.reconnecting ? RECONNECTING_CUE : null;
 
 /** The cue for a member leaving: a lost connection, a silent replacement, an update restart, or a plain leave. */
 export function departureCue(reason, moved = false) {
@@ -64,16 +68,20 @@ export function channelPresenceChanges(before, after) {
         || !after.selfID || !after.channelID || before.channelID !== after.channelID
         || after.clients.get(after.selfID)?.channel_id !== after.channelID) return [];
     const changes = [];
+    const lostReturns = new Set(); // devices of announced drops back on a new session
     for (const [id, client] of before.clients) {
         if (id === after.selfID || client.channel_id !== after.channelID) continue;
         const next = after.clients.get(id);
         if (next?.channel_id === after.channelID) {
             // The server keeps an updating or reconnecting member's place, marked
-            // as such; a resumed session simply loses the mark, silently.
+            // as such; a resumed session simply loses the mark, silently unless
+            // its drop was announced.
             const kept = keptCue(next);
             if (kept && keptCue(client) !== kept) changes.push({ client, ...kept });
+            else if (!kept && lostAloud(client)) changes.push({ client: next, ...arrivalCue(true) });
             continue;
         }
+        if (lostAloud(client) && after.departures[id] === 'replaced' && client.unique_id) lostReturns.add(client.unique_id);
         // A filtered snapshot can omit a private destination, so absence alone
         // does not prove disconnection: only the server's reason does.
         const cue = departureCue(after.departures[id], !!next?.channel_id);
@@ -81,7 +89,7 @@ export function channelPresenceChanges(before, after) {
     }
     for (const [id, client] of after.clients) {
         if (id === after.selfID || keptCue(client) || client.channel_id !== after.channelID || before.clients.get(id)?.channel_id === after.channelID) continue;
-        const cue = arrivalCue(after.reconnected.has(id), after.returned.has(id));
+        const cue = lostReturns.has(client.unique_id) ? arrivalCue(true) : arrivalCue(after.reconnected.has(id), after.returned.has(id));
         if (cue) changes.push({ client, ...cue });
     }
     return changes;

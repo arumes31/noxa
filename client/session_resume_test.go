@@ -18,7 +18,8 @@ func TestReconnectTabPresentsAndRotatesResumeToken(t *testing.T) {
 	result := make(chan ConnectTabResult, 1)
 	go func() { result <- a.ReconnectTab(tabID, "pw", "") }()
 	request := waitReconnect(t, requests)
-	if request.ResumeToken != "lost-session-token" || !slices.Contains(request.ClientFeatures, netproto.ClientFeatureResume) {
+	if request.ResumeToken != "lost-session-token" || !slices.Contains(request.ClientFeatures, netproto.ClientFeatureResume) ||
+		!slices.Contains(request.ClientFeatures, netproto.ClientFeatureFastHeartbeat) {
 		t.Fatalf("reconnect request token %q features %v", request.ResumeToken, request.ClientFeatures)
 	}
 	close(release)

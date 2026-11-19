@@ -1,5 +1,7 @@
 package netproto
 
+import "time"
+
 // MsgGoodbye is sent by an updated client right before it closes its control
 // connection on purpose (disconnect, quit, sign-out). The payload is empty or
 // a Goodbye object; servers ignore fields they do not know.
@@ -65,4 +67,17 @@ const (
 	// session for this token, account and device, or another handover is
 	// already pending. The client falls back to a restart with resume.
 	ReasonHandoverUnavailable = "update handover unavailable"
+)
+
+// Fast heartbeat (heartbeat-fast-v1). A client that announced
+// ClientFeatureFastHeartbeat to a server advertising CapabilityFastHeartbeat
+// pings every FastHeartbeatInterval. From its first ping after login the
+// server treats FastHeartbeatTimeout without inbound bytes as a lost
+// connection instead of waiting for client_timeout_seconds, so the others hear
+// about a real drop within seconds. Other clients keep the configured timeout.
+const (
+	ClientFeatureFastHeartbeat = "heartbeat-fast-v1"
+	CapabilityFastHeartbeat    = "heartbeat_fast_v1"
+	FastHeartbeatInterval      = 1500 * time.Millisecond
+	FastHeartbeatTimeout       = 5 * time.Second
 )

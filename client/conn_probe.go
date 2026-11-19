@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"time"
 
 	"noxa/internal/netproto"
@@ -13,7 +14,8 @@ const resumeProbeTimeout = 5 * time.Second
 // probeLiveness sends a ping and shortens the read deadline to timeout. A live
 // server's pong (or any frame) arrives first, and the read loop restores its
 // normal deadline; a transport that died during sleep fails within timeout
-// instead of the regular 45-second read timeout, so reconnection starts early.
+// instead of the regular read timeout (45 s, or 10 s on a fast heartbeat), so
+// reconnection starts early.
 func (m *connManager) probeLiveness(timeout time.Duration) bool {
 	if timeout <= 0 {
 		return false
@@ -69,8 +71,12 @@ func (m *connManager) nextReadDeadline() time.Time {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var deadline time.Time
-	if m.readTimeout > 0 {
-		deadline = time.Now().Add(m.readTimeout)
+	timeout := m.readTimeout
+	if m.fastHeartbeat && timeout > fastReadTimeout {
+		timeout = fastReadTimeout
+	}
+	if timeout > 0 {
+		deadline = time.Now().Add(timeout)
 	}
 	if !m.probeUntil.IsZero() && (deadline.IsZero() || m.probeUntil.Before(deadline)) {
 		deadline = m.probeUntil
@@ -83,4 +89,22 @@ func (m *connManager) clearProbe() {
 	m.mu.Lock()
 	m.probeUntil = time.Time{}
 	m.mu.Unlock()
+}
+
+// progressReader renews the read deadline whenever a read returns data (over
+// TLS once per decrypted record, up to 16 KiB), so a large frame on a slow but
+// live link is not cut off by the short read timeout.
+type progressReader struct {
+	conn net.Conn
+	m    *connManager
+}
+
+func (r progressReader) Read(p []byte) (int, error) {
+	n, err := r.conn.Read(p)
+	if n > 0 {
+		r.m.deadlineMu.Lock()
+		_ = r.conn.SetReadDeadline(r.m.nextReadDeadline())
+		r.m.deadlineMu.Unlock()
+	}
+	return n, err
 }

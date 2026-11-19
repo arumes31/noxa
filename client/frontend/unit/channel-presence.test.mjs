@@ -149,6 +149,23 @@ test('a reconnecting member shows its own quiet badge and a resume under the sam
     assert.equal(departureCue('reconnecting').soundEvent, undefined);
 });
 
+test('a desktop dropped by its fast heartbeat is announced as lost, then reconnected once', () => {
+    const peer = { ...member('peer'), unique_id: 'peer-uid' };
+    const before = state([peer]);
+    const lost = state([{ ...peer, reconnecting: true, lost_aloud: true }]);
+    const cue = change => [change.client.client_id, change.kind, change.message, change.soundEvent, change.speechEvent, !!change.quiet];
+    assert.deepEqual(changes(before, lost).map(cue),
+        [['peer', 'leave', 'runtime.connectionLostUser', 'user_leave', 'user_connection_lost', false]]);
+    assert.deepEqual(changes(lost, lost), [], 'announced once');
+    assert.deepEqual(changes(lost, before).map(cue),
+        [['peer', 'join', 'runtime.reconnectedUser', 'user_join', 'user_reconnected', false]], 'the resume is a reconnect');
+    assert.deepEqual(changes(before, before), [], 'reconnected once');
+    assert.deepEqual(changes(lost, state([])).map(change => change.message), ['runtime.left'], 'no return: one plain leave, no second lost');
+    const newSession = state([{ ...peer, client_id: 'peer-2' }], { presenceDepartures: { peer: 'replaced' }, presenceReturned: new Set(['peer-2']) });
+    assert.deepEqual(changes(lost, newSession).map(cue),
+        [['peer-2', 'join', 'runtime.reconnectedUser', 'user_join', 'user_reconnected', false]], 'a return on a new session is one reconnect');
+});
+
 test('a kept-place return plays no join or move-in cue; a real leave still announces', () => {
     const live = {};
     // Back from an update with a new session, or resumed under the same ID.

@@ -94,6 +94,9 @@ type connManager struct {
 	// supportsHandover: the server keeps an update handover login in standby
 	// until it commits (handover_v1).
 	supportsHandover bool
+	// fastHeartbeat: the server watches this connection's fast heartbeat
+	// (heartbeat_fast_v1), so ping every netproto.FastHeartbeatInterval.
+	fastHeartbeat bool
 	// handoverBegin, set only on an update handover login, is called once the
 	// server holds the login in standby; true commits it.
 	handoverBegin func() bool
@@ -271,6 +274,10 @@ const (
 	defaultHeartbeatInterval = 15 * time.Second
 	defaultReadTimeout       = 45 * time.Second
 	defaultWriteTimeout      = 10 * time.Second
+	// fastReadTimeout replaces the read timeout on a fast-heartbeat connection,
+	// whose server answers a ping every 1.5 s. It stays above the server's own
+	// 5 s window and tolerates a slow server handler delaying the pong.
+	fastReadTimeout = 10 * time.Second
 )
 
 func newConnManager(wailsCtx context.Context) *connManager {
@@ -583,12 +590,16 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.reconnectTerminal = false
 	authMsg.ResumeToken = m.resumeToken
 	handoverBegin := m.handoverBegin
+	heartbeat := m.heartbeatInterval > 0
 	m.handoverBegin = nil // one handover attempt; later logins are ordinary
 	m.handoverCommitted = false
 	m.mu.Unlock()
 	authMsg.AuthorizationModels = []string{netproto.AuthorizationModelRolesV1}
 	authMsg.ClientVersion = version.Short()
 	authMsg.ClientFeatures = []string{netproto.ClientFeaturePow, netproto.ClientFeatureRetryHint, netproto.ClientFeatureGoodbye, netproto.ClientFeatureResume, netproto.ClientFeatureBusy}
+	if heartbeat { // the server only watches a heartbeat that runs
+		authMsg.ClientFeatures = append(authMsg.ClientFeatures, netproto.ClientFeatureFastHeartbeat)
+	}
 	if handoverBegin != nil {
 		authMsg.Handover = true
 		authMsg.ClientFeatures = append(authMsg.ClientFeatures, netproto.ClientFeatureHandover)
@@ -837,6 +848,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.supportsStreamReceiverRecovery = slices.Contains(resp.Capabilities, netproto.CapabilityStreamReceiverRecovery)
 	m.supportsConversationActivity = slices.Contains(resp.Capabilities, netproto.CapabilityConversationActivity)
 	m.supportsHandover = slices.Contains(resp.Capabilities, netproto.CapabilityHandover)
+	m.fastHeartbeat = slices.Contains(resp.Capabilities, netproto.CapabilityFastHeartbeat)
 	m.iceServers = resp.ICEServers
 	m.supportsNativeMediaPeer = slices.Contains(resp.Capabilities, netproto.CapabilityNativeMediaPeer)
 	m.nativeKeyring, m.nativeAudioKeyring, m.nativeCallKeys = nil, nil, nil
@@ -1175,6 +1187,9 @@ func (m *connManager) writeConn(conn net.Conn, mt netproto.MessageType, msg any)
 func (m *connManager) heartbeatPeriod() time.Duration {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.fastHeartbeat && m.heartbeatInterval > netproto.FastHeartbeatInterval {
+		return netproto.FastHeartbeatInterval
+	}
 	return m.heartbeatInterval
 }
 
@@ -1374,7 +1389,7 @@ func (m *connManager) readLoop(conn net.Conn) {
 		m.deadlineMu.Lock()
 		_ = conn.SetReadDeadline(m.nextReadDeadline())
 		m.deadlineMu.Unlock()
-		f, err := netproto.ReadFrame(conn)
+		f, err := netproto.ReadFrame(progressReader{conn: conn, m: m})
 		if err != nil {
 			// Intentional closes (Disconnect/CloseTab) end the loop quietly;
 			// only unexpected drops are reported. An old loop may only detach

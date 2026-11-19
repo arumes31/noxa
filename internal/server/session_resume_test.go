@@ -261,7 +261,7 @@ func TestSessionResumeKeepsClientIDChannelAndVoiceStateQuietly(t *testing.T) {
 	_ = user.Close() // a drop: no goodbye although the client promised one
 	awaitSnapshot(t, observer, "a reconnecting badge", func(s *broadcast.TreeSnapshot) bool {
 		m := snapshotMember(s, id)
-		return m != nil && m.Reconnecting && !m.Updating && m.ChannelID == 1
+		return m != nil && m.Reconnecting && !m.Updating && !m.LostAloud && m.ChannelID == 1
 	}, quietFor(t, id))
 
 	resumed, second := dialResumable(t, env.addr, userLogin(first.ResumeToken))

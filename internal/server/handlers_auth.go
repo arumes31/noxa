@@ -46,6 +46,7 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	client.mu.Lock()
 	client.clientVersion = msg.ClientVersion
 	client.announcesGoodbye = slices.Contains(msg.ClientFeatures, netproto.ClientFeatureGoodbye)
+	client.announcesFastHB = slices.Contains(msg.ClientFeatures, netproto.ClientFeatureFastHeartbeat)
 	client.hideLobbyPresence = msg.HideLobbyPresence
 	client.mu.Unlock()
 	// Spent only after this login succeeds and only for the same identity.

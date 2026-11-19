@@ -89,6 +89,14 @@ type kickEvent struct {
 // handlePing replies with a Pong.
 func (s *TCPServer) handlePing(ctx context.Context, client *Client, _ *netproto.Frame) error {
 	s.logger.Debug("ping received", zap.String("client_id", client.ID))
+	// Armed only once the client's post-login heartbeat runs, so slow login
+	// steps (proof of work, passkeys, a handover standby) keep the old timeout.
+	if !client.fastHeartbeat.Load() && client.isAuthed() && !client.inHandoverStandby() {
+		client.mu.RLock()
+		fast := client.announcesFastHB
+		client.mu.RUnlock()
+		client.fastHeartbeat.Store(fast)
+	}
 	return s.writeMessage(client, netproto.MsgPong, netproto.Pong{})
 }
 
