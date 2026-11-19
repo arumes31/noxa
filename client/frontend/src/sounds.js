@@ -87,9 +87,12 @@ export function createNamePacer({ burst = 38, reserve = 8, maxInFlight = 2, perM
             if (!timer || requests.level() >= 1) drain();
             return job;
         },
-        promote(job, priority) {
+        // rerank also lowers a queued prefetch (the roster changed); an
+        // announcement's live priority is never lowered.
+        promote(job, priority, rerank = false) {
             const index = queue.indexOf(job);
-            if (index < 0 || job.priority >= priority) return;
+            if (index < 0 || job.priority === priority) return;
+            if (job.priority > priority && (!rerank || job.priority >= NAME_PRIORITY_LIVE)) return;
             queue.splice(index, 1);
             job.priority = priority;
             pacer.add(job);
@@ -143,7 +146,7 @@ export function spokenNameClip({ language, speaker, phrase }, app = window.go?.m
         return live ? decoded(known.id) : "";
     }
     if (known && !known.failedAt) { // in flight
-        if (known.job) pacer.promote(known.job, priority);
+        if (known.job) pacer.promote(known.job, priority, !live);
         if (!live) return "";
         return known.ready.then(ok => ok && known.id ? decoded(known.id) : "");
     }
@@ -180,6 +183,8 @@ export function spokenNameClip({ language, speaker, phrase }, app = window.go?.m
                 schedule(() => request(attempt + 1), 3000);
                 return;
             }
+            // Evicted while in flight: no cache entry would own (and free) the asset.
+            if (spokenNames.get(key) !== entry) { entry.job = null; settle(false); return; }
             const id = "speech_name_" + data.key;
             engine.definitions[id] = { duration: 1, priority: 1, cooldown: 0, category: "Speech" };
             engine.urls[id] = "data:audio/wav;base64," + data.data_base64;
