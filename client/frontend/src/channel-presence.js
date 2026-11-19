@@ -82,6 +82,8 @@ export function channelPresenceChanges(before, after) {
             continue;
         }
         if (lostAloud(client) && after.departures[id] === 'replaced' && client.unique_id) lostReturns.add(client.unique_id);
+        // Its loss was already announced: the grace expiry ends it silently.
+        if (lostAloud(client) && !next?.channel_id) continue;
         // A filtered snapshot can omit a private destination, so absence alone
         // does not prove disconnection: only the server's reason does.
         const cue = departureCue(after.departures[id], !!next?.channel_id);
