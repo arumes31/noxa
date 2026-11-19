@@ -121,6 +121,11 @@ type Sender struct {
 	rtxSSRC     uint32
 	estimatorCh chan cc.BandwidthEstimator
 	closed      bool
+	// Local candidates wait for the answer: pion gathers on
+	// SetLocalDescription, and a candidate that overtakes the offer reaches
+	// the server before the native peer exists and is dropped (ErrNoPeer).
+	answered bool
+	held     []netproto.ICECandidate
 
 	audioTrack   *webrtc.TrackLocalStaticRTP
 	audioSSRC    uint32
@@ -251,7 +256,15 @@ func New(cfg Config) (*Sender, error) {
 		if init.SDPMLineIndex != nil {
 			candidate.SDPMLineIndex = *init.SDPMLineIndex
 		}
-		_ = cfg.Signaling.Candidate(candidate)
+		s.mu.Lock()
+		answered := s.answered
+		if !answered {
+			s.held = append(s.held, candidate)
+		}
+		s.mu.Unlock()
+		if answered {
+			_ = cfg.Signaling.Candidate(candidate)
+		}
 	})
 	if err := s.negotiate(); err != nil {
 		_ = pc.Close()
@@ -277,7 +290,18 @@ func (s *Sender) negotiate() error {
 	if err != nil {
 		return err
 	}
-	return s.pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: answer.SDP})
+	if err := s.pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: answer.SDP}); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.answered = true
+	held := s.held
+	s.held = nil
+	s.mu.Unlock()
+	for _, c := range held {
+		_ = s.cfg.Signaling.Candidate(c)
+	}
+	return nil
 }
 
 // AddCandidate adds a remote (server) ICE candidate.
