@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,27 +39,24 @@ func TestFastHeartbeatOnlyWithServerCapability(t *testing.T) {
 }
 
 // A frame trickling in slower than the read timeout is not a dead link: every
-// received byte renews the deadline.
+// read that returns data renews the deadline.
 func TestReadLoopKeepsASlowFrameAlive(t *testing.T) {
 	local, peer := net.Pipe()
 	t.Cleanup(func() { _ = peer.Close(); _ = local.Close() })
 	cm := newTestConnManager()
-	cm.readTimeout = 150 * time.Millisecond
+	cm.readTimeout = 300 * time.Millisecond
 	cm.conn = local
 	done := make(chan struct{})
 	go func() { defer close(done); cm.readLoop(local) }()
-	pong, err := netproto.Encode(netproto.MsgPong, netproto.Pong{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	pong := &netproto.Frame{Type: uint16(netproto.MsgPong), Payload: []byte(`{"pad":"` + strings.Repeat("x", 40) + `"}`)}
 	var wire bytes.Buffer
 	if err := netproto.WriteFrame(&wire, pong); err != nil {
 		t.Fatal(err)
 	}
-	// Three frames at one byte per 50 ms: each takes well past 150 ms.
-	for range 3 {
+	// Two frames at one byte per 20 ms: each takes about a second, well past 300 ms.
+	for range 2 {
 		for _, b := range wire.Bytes() {
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(20 * time.Millisecond)
 			if _, err := peer.Write([]byte{b}); err != nil {
 				t.Fatalf("slow frame cut off: %v", err)
 			}

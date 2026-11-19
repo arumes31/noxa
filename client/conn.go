@@ -590,12 +590,16 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.reconnectTerminal = false
 	authMsg.ResumeToken = m.resumeToken
 	handoverBegin := m.handoverBegin
+	heartbeat := m.heartbeatInterval > 0
 	m.handoverBegin = nil // one handover attempt; later logins are ordinary
 	m.handoverCommitted = false
 	m.mu.Unlock()
 	authMsg.AuthorizationModels = []string{netproto.AuthorizationModelRolesV1}
 	authMsg.ClientVersion = version.Short()
-	authMsg.ClientFeatures = []string{netproto.ClientFeaturePow, netproto.ClientFeatureRetryHint, netproto.ClientFeatureGoodbye, netproto.ClientFeatureResume, netproto.ClientFeatureBusy, netproto.ClientFeatureFastHeartbeat}
+	authMsg.ClientFeatures = []string{netproto.ClientFeaturePow, netproto.ClientFeatureRetryHint, netproto.ClientFeatureGoodbye, netproto.ClientFeatureResume, netproto.ClientFeatureBusy}
+	if heartbeat { // the server only watches a heartbeat that runs
+		authMsg.ClientFeatures = append(authMsg.ClientFeatures, netproto.ClientFeatureFastHeartbeat)
+	}
 	if handoverBegin != nil {
 		authMsg.Handover = true
 		authMsg.ClientFeatures = append(authMsg.ClientFeatures, netproto.ClientFeatureHandover)

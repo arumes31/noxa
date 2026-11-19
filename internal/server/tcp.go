@@ -1514,10 +1514,16 @@ func (s *TCPServer) servePingLoop(client *Client, stop <-chan struct{}, done cha
 	s.pingLoop(client, stop)
 }
 
-// Server ping cadence, and how often a fast-heartbeat client's silence is checked.
+// Server ping cadence (faster for a fast-heartbeat client, so its short read
+// timeout never fires while a slow handler holds back the pong), how often a
+// fast-heartbeat client's silence is checked, and the tick gap that means this
+// process itself was paused.
 const (
-	serverPingInterval = 15 * time.Second
-	fastHeartbeatCheck = time.Second
+	serverPingInterval     = 15 * time.Second
+	fastServerPingInterval = 3 * time.Second
+	fastHeartbeatCheck     = time.Second
+	fastHeartbeatStall     = 2 * time.Second
+	pingWriteTimeout       = roleWriteCeiling
 )
 
 // monoEpoch anchors readWaitSince on the monotonic clock, so a wall-clock
@@ -1529,8 +1535,9 @@ func (c *Client) noteReadWait() {
 	c.readWaitSince.Store(int64(time.Since(monoEpoch)) + 1) // never 0, which means dispatching
 }
 
-// activityReader stamps readWaitSince whenever bytes arrive, so a large frame
-// trickling in over a slow link still counts as a live connection.
+// activityReader stamps readWaitSince whenever a read returns data. Over TLS
+// that is once per decrypted record (up to 16 KiB), so a large frame arriving
+// over a slow link still counts as activity record by record.
 type activityReader struct {
 	conn   net.Conn
 	client *Client
@@ -1545,24 +1552,38 @@ func (r activityReader) Read(p []byte) (int, error) {
 }
 
 // fastHeartbeatLost reports a fast-heartbeat client whose read loop has been
-// waiting without a byte for longer than netproto.FastHeartbeatTimeout.
+// waiting without data for longer than netproto.FastHeartbeatTimeout.
 func (c *Client) fastHeartbeatLost(now time.Time) (time.Duration, bool) {
+	// Armed is read first: arming happens while dispatching (readWaitSince 0),
+	// so an older wait can never be judged under the fast rule.
+	if !c.fastHeartbeat.Load() {
+		return 0, false
+	}
 	since := c.readWaitSince.Load()
-	if !c.fastHeartbeat.Load() || since == 0 || c.inHandoverStandby() {
+	if since == 0 || c.inHandoverStandby() {
 		return 0, false
 	}
 	idle := now.Sub(monoEpoch) - time.Duration(since)
 	return idle, idle > netproto.FastHeartbeatTimeout
 }
 
-// pingLoop sends a server-initiated Ping every 15s until stopped; matching
-// Pongs feed the client's smoothed RTT. A client on the fast heartbeat is
-// closed as soon as it falls silent (fastHeartbeatLost); others only after
-// client_timeout_seconds without a frame.
+// droppedByHeartbeat reports a connection the fast heartbeat closed.
+func (c *Client) droppedByHeartbeat() bool {
+	cause := c.closeCause.Load()
+	return c.fastHeartbeat.Load() && cause != nil && *cause == netproto.ControlCloseServerInactivity
+}
+
+// pingLoop sends a server-initiated Ping every 15s (3s on the fast heartbeat)
+// until stopped; matching Pongs feed the client's smoothed RTT. A client on
+// the fast heartbeat is closed as soon as it falls silent (fastHeartbeatLost);
+// others only after client_timeout_seconds without a frame. Ping writes are
+// bounded by pingWriteTimeout, so a stalled write pauses the checks briefly at
+// most, and a write that times out closes the connection itself.
 func (s *TCPServer) pingLoop(client *Client, stop <-chan struct{}) {
 	ticker := time.NewTicker(fastHeartbeatCheck)
 	defer ticker.Stop()
 	lastPing := time.Now()
+	lastTick := lastPing
 	for {
 		select {
 		case <-stop:
@@ -1570,7 +1591,14 @@ func (s *TCPServer) pingLoop(client *Client, stop <-chan struct{}) {
 		case <-s.stopCh:
 			return
 		case now := <-ticker.C:
-			if idle, lost := client.fastHeartbeatLost(now); lost {
+			// A paused process (GC, VM) froze every read loop too: skip one
+			// check so the buffered bytes are read before anyone is judged.
+			stalled := now.Sub(lastTick) > fastHeartbeatStall
+			lastTick = now
+			s.configMu.RLock()
+			timeout := s.cfg.ClientTimeoutSeconds
+			s.configMu.RUnlock()
+			if idle, lost := client.fastHeartbeatLost(now); lost && timeout > 0 && !stalled {
 				client.markCloseCause(netproto.ControlCloseServerInactivity)
 				s.logger.Info("control connection closed",
 					zap.String("reason", string(netproto.ControlCloseServerInactivity)),
@@ -1580,13 +1608,14 @@ func (s *TCPServer) pingLoop(client *Client, stop <-chan struct{}) {
 				_ = client.Conn.Close()
 				return
 			}
-			if now.Sub(lastPing) < serverPingInterval {
+			interval := serverPingInterval
+			if client.fastHeartbeat.Load() {
+				interval = fastServerPingInterval
+			}
+			if now.Sub(lastPing) < interval {
 				continue
 			}
 			lastPing = now
-			s.configMu.RLock()
-			timeout := s.cfg.ClientTimeoutSeconds
-			s.configMu.RUnlock()
 			last := client.lastActivity()
 			if idle := time.Since(last); timeout > 0 && !last.IsZero() && idle > time.Duration(timeout)*time.Second {
 				client.markCloseCause(netproto.ControlCloseServerInactivity)
@@ -1599,9 +1628,11 @@ func (s *TCPServer) pingLoop(client *Client, stop <-chan struct{}) {
 				return
 			}
 			client.notePingSent()
-			if err := s.writeMessage(client, netproto.MsgPing, netproto.Ping{}); err != nil {
-				return
-			}
+			ctx, cancel := context.WithTimeout(context.Background(), pingWriteTimeout)
+			// A failed write closed the connection (or only skipped this ping
+			// behind a busy writer); handleConn stops the loop either way.
+			_ = s.writeMessageInContext(ctx, client, netproto.MsgPing, netproto.Ping{})
+			cancel()
 		}
 	}
 }
@@ -1673,7 +1704,9 @@ func (s *TCPServer) onDisconnect(client *Client) {
 					s.presence.noteDeparture(client.ID, key, departure, channelID, wasInvisible, now)
 					// A session taken over by its own resume needs no kept place.
 					if (departure == netproto.DepartureUpdating || departure == netproto.DepartureReconnecting) && !client.resumeTakeover.Load() {
-						s.presence.noteUpdating(key, updatingGhost(removed), departure, wasInvisible, now)
+						ghost := updatingGhost(removed)
+						ghost.LostAloud = departure == netproto.DepartureReconnecting && client.droppedByHeartbeat()
+						s.presence.noteUpdating(key, ghost, departure, wasInvisible, now)
 						id, uniqueID, nickname := client.ID, client.UniqueID, client.nickname()
 						time.AfterFunc(presenceUpdateWindow, func() { s.expireUpdatingDeparture(key, id, uniqueID, nickname, now) })
 					}

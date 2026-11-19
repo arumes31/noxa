@@ -91,8 +91,9 @@ func (m *connManager) clearProbe() {
 	m.mu.Unlock()
 }
 
-// progressReader renews the read deadline whenever bytes arrive, so a large
-// frame on a slow but live link is not cut off by the short read timeout.
+// progressReader renews the read deadline whenever a read returns data (over
+// TLS once per decrypted record, up to 16 KiB), so a large frame on a slow but
+// live link is not cut off by the short read timeout.
 type progressReader struct {
 	conn net.Conn
 	m    *connManager
