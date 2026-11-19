@@ -1567,7 +1567,6 @@ func (c *Client) fastHeartbeatLost(now time.Time) (time.Duration, bool) {
 	return idle, idle > netproto.FastHeartbeatTimeout
 }
 
-
 // pingLoop sends a server-initiated Ping every 15s (3s on the fast heartbeat)
 // until stopped; matching Pongs feed the client's smoothed RTT. A client on
 // the fast heartbeat is closed as soon as it falls silent (fastHeartbeatLost);
