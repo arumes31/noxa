@@ -44,24 +44,33 @@ function tokenBucket(capacity, perMs, now) {
     };
 }
 
+// Announcements outrank prefetch (my channel 2, voice channels 1, others 0).
+export const NAME_PRIORITY_LIVE = 3;
+
 // Every GetSpokenNameForTab request (prefetch, retry or announcement) is paced
-// under the server's per-session limit of 40 burst then 1/s, keeping 10 for
-// headroom; higher priority runs first. synthesis mirrors the server's budget
-// for new clips (10 then 1/min): prefetch holds back while the clips it may
-// cause (probing: first asks in flight) could spend the last two.
+// under the server's per-session limit of 40 burst then 1/s; higher priority
+// runs first. Prefetch leaves `reserve` tokens for announcements. At most
+// maxInFlight requests are open, since the native side answers them one at a
+// time and an announcement must not queue behind a prefetch burst there.
+// synthesis mirrors the server's budget for new clips (10 then 1/min):
+// prefetch holds back while the clips it may cause (probing: first asks in
+// flight) could spend the last two.
 // shortcut: one pacer for all tabs, conservative since each tab has its own server budget.
-export function createNamePacer({ burst = 30, perMs = 1000, now = () => Date.now(), schedule = (fn, ms) => setTimeout(fn, ms) } = {}) {
+export function createNamePacer({ burst = 38, reserve = 8, maxInFlight = 2, perMs = 1000, now = () => Date.now(),
+    schedule = (fn, ms) => setTimeout(fn, ms) } = {}) {
     const requests = tokenBucket(burst, perMs, now), queue = [];
-    let timer = null;
+    let timer = null, inFlight = 0;
     const drain = () => {
         timer = null;
-        for (let index = 0; index < queue.length && requests.level() >= 1;) {
+        for (let index = 0; index < queue.length && inFlight < maxInFlight && requests.level() >= 1;) {
             const job = queue[index];
             if (job.stale?.(job)) { queue.splice(index, 1); continue; }
-            if (job.held?.(job)) { index++; continue; }
+            if (job.held?.(job) || (job.priority < NAME_PRIORITY_LIVE && requests.level() < 1 + reserve)) { index++; continue; }
             queue.splice(index, 1);
             requests.take();
-            job.run();
+            inFlight++;
+            // A throwing run still frees its slot.
+            new Promise(resolve => resolve(job.run())).catch(() => {}).finally(() => { inFlight--; drain(); });
         }
         if (!queue.length) return;
         // Wait for the next request token, or poll for held jobs.
@@ -91,8 +100,6 @@ export function createNamePacer({ burst = 30, perMs = 1000, now = () => Date.now
 }
 export const namePacer = createNamePacer();
 
-// Announcements outrank prefetch (my channel 2, voice channels 1, others 0).
-export const NAME_PRIORITY_LIVE = 3;
 // Raised from 256: a whole-server prefetch needs one entry per visible online
 // user. Clips are decoded only when announced, so an entry is its ~50 KB data URL.
 export const SPOKEN_NAME_LIMIT = 512;

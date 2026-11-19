@@ -752,7 +752,7 @@ test("a name still being voiced is asked again; a clip for a renamed session is 
 });
 
 test("name requests are paced: a burst, then one per second, highest priority first", async () => {
-    const f = await fakePacer({ burst: 3 });
+    const f = await fakePacer({ burst: 3, reserve: 0, maxInFlight: 10 });
     const ran = [];
     const job = (name, priority, extra) => ({ priority, run: () => ran.push(name), ...extra });
     for (const name of ["a", "b", "c"]) f.pacer.add(job(name, 0));
@@ -764,34 +764,59 @@ test("name requests are paced: a burst, then one per second, highest priority fi
     f.pacer.add(job("live", 3));
     f.pacer.promote(low, 3);
     assert.equal(ran.length, 3);
+    await settle();
     assert.equal(f.timer.at, 1000);
     const order = [];
-    while (f.timer) { const at = f.tick().at; if (ran.length > 3 + order.length) order.push([ran.at(-1), at]); }
+    while (f.timer) {
+        const at = f.tick().at;
+        await settle();
+        if (ran.length > 3 + order.length) order.push([ran.at(-1), at]);
+    }
     // The stale job is dropped without spending the token "voice" then uses.
     assert.deepEqual(order, [["live", 1000], ["low", 2000], ["mine", 3000], ["voice", 4000]]);
     assert.equal(f.pacer.size, 0);
 });
 
 test("held jobs wait without blocking the queue and run once released", async () => {
-    const f = await fakePacer({ burst: 2 });
+    const f = await fakePacer({ burst: 2, reserve: 0 });
     const ran = [];
     let hold = true;
     f.pacer.add({ priority: 1, held: () => hold, run: () => ran.push("held") });
     f.pacer.add({ priority: 0, run: () => ran.push("free") });
     assert.deepEqual(ran, ["free"]);
+    await settle();
     assert.equal(f.timer.at, 1000, "held jobs are polled");
     f.tick();
     assert.deepEqual(ran, ["free"]);
     hold = false;
     f.tick();
     assert.deepEqual(ran, ["free", "held"]);
+    await settle();
     assert.equal(f.timer, null);
+});
+
+test("an announcement takes the next free request slot and reserved tokens ahead of prefetch", async () => {
+    const f = await fakePacer({ burst: 10, reserve: 8, maxInFlight: 2 });
+    const ran = [], replies = {};
+    const job = (name, priority) => ({ priority, run: () => { ran.push(name); return new Promise(resolve => { replies[name] = resolve; }); } });
+    f.pacer.add(job("p1", 0));
+    f.pacer.add(job("p2", 0));
+    f.pacer.add(job("p3", 0));
+    f.pacer.add(job("live", 3));
+    assert.deepEqual(ran, ["p1", "p2"], "two requests open at most; p3 would dip into the reserve");
+    replies.p1();
+    await settle();
+    assert.deepEqual(ran, ["p1", "p2", "live"]);
+    replies.p2(); replies.live();
+    await settle();
+    assert.deepEqual(ran, ["p1", "p2", "live"], "prefetch leaves the reserve to announcements");
+    assert.equal(f.pacer.size, 1);
 });
 
 test("prefetch skips cached and in-flight names, ranks my channel first and leaves new-clip budget for announcements", async () => {
     globalThis.window ??= {};
     const { prefetchSpokenNames, spokenNameClip } = await import("../src/sounds.js");
-    const f = await fakePacer({ burst: 2 });
+    const f = await fakePacer({ burst: 3, reserve: 1 });
     const asked = [];
     let reply = id => ({ nickname: "Pf" + id, key: "pf" + id, data_base64: "UklGRg==" });
     const app = { GetSpokenNameForTab: (_tab, id) => { asked.push(id); return Promise.resolve(reply(id)); } };
@@ -814,12 +839,12 @@ test("prefetch skips cached and in-flight names, ranks my channel first and leav
     // An announcement for a prefetched name decodes it and plays it.
     assert.equal(await spokenNameClip({ language: "en", speaker: user("mine"), phrase: "p" }, app, engine, undefined, f.pacer), "speech_name_pfmine");
     // Unvoiced names: prefetch stops before the last two new clips of the server budget.
-    const g = await fakePacer({ burst: 30 });
+    const g = await fakePacer();
     asked.length = 0;
     reply = id => ({ nickname: "Pf" + id, pending: true });
     prefetchSpokenNames(Array.from({ length: 12 }, (_, index) => [user("new" + index), 0]), settings, { app, engine, pacer: g.pacer, schedule: () => {} });
-    assert.equal(asked.length, 8, "at most eight first asks that could each start a clip");
     await settle();
+    assert.equal(asked.length, 8, "at most eight first asks that could each start a clip");
     assert.equal(g.pacer.size, 4);
     g.tick();
     assert.equal(asked.length, 8, "spent budget holds prefetch back");
