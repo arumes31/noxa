@@ -97,6 +97,9 @@ func TestSenderStreamsEncryptedFramesToReceiver(t *testing.T) {
 		key := i%10 == 0
 		payload := make([]byte, 100+i*300) // large frames cross FU-A fragmentation
 		_, _ = rand.Read(payload)
+		for j := range payload {
+			payload[j] |= 1 // no zero bytes: a random start code would split the slice into a bogus NAL
+		}
 		au := encoderAU(key, payload)
 		canonical, _, err := framecrypt.CanonicalH264(au, nil, nil)
 		if err != nil {

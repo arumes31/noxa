@@ -29,6 +29,9 @@ type Receiver struct {
 	}
 	mu     sync.Mutex
 	Offers []netproto.WebRTCOffer
+	// Our candidates gathered before SetSender (the client's pending queue):
+	// dropping them could leave ICE with no candidate pair at all.
+	unsent []netproto.ICECandidate
 	Frames chan []byte
 	SSRC   chan uint32
 	// Audio receives the screenaudio track's RTP packets (encrypted Opus).
@@ -56,6 +59,10 @@ func (f *Receiver) Candidate(c netproto.ICECandidate) error {
 	if c.Peer != netproto.PeerNative {
 		return errors.New("candidate without native peer tag")
 	}
+	if f.PC.RemoteDescription() == nil {
+		// The server drops these too (no native peer before the offer).
+		f.t.Errorf("native candidate before the offer: %s", c.Candidate)
+	}
 	mid, index := c.SDPMid, c.SDPMLineIndex
 	return f.PC.AddICECandidate(webrtc.ICECandidateInit{Candidate: c.Candidate, SDPMid: &mid, SDPMLineIndex: &index})
 }
@@ -82,14 +89,17 @@ func NewReceiver(t testing.TB) *Receiver {
 		if c == nil {
 			return
 		}
+		init := c.ToJSON()
+		candidate := netproto.ICECandidate{Candidate: init.Candidate, SDPMid: *init.SDPMid, SDPMLineIndex: *init.SDPMLineIndex, Peer: netproto.PeerNative}
 		f.mu.Lock()
 		s := f.Sender
-		f.mu.Unlock()
 		if s == nil {
-			return
+			f.unsent = append(f.unsent, candidate)
 		}
-		init := c.ToJSON()
-		_ = s.AddCandidate(netproto.ICECandidate{Candidate: init.Candidate, SDPMid: *init.SDPMid, SDPMLineIndex: *init.SDPMLineIndex, Peer: netproto.PeerNative})
+		f.mu.Unlock()
+		if s != nil {
+			_ = s.AddCandidate(candidate)
+		}
 	})
 	pc.OnTrack(func(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 		if track.Kind() == webrtc.RTPCodecTypeAudio {
@@ -173,7 +183,12 @@ func (f *Receiver) SetSender(s interface {
 }) {
 	f.mu.Lock()
 	f.Sender = s
+	unsent := f.unsent
+	f.unsent = nil
 	f.mu.Unlock()
+	for _, c := range unsent {
+		_ = s.AddCandidate(c)
+	}
 }
 
 // Offer0 returns the first native offer received.

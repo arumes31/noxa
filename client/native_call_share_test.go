@@ -207,6 +207,9 @@ func streamAndDecrypt(t *testing.T, n *nativeShare, r *sendertest.Receiver, mate
 		key := i%6 == 0
 		payload := make([]byte, 200+i*400)
 		_, _ = rand.Read(payload)
+		for j := range payload {
+			payload[j] |= 1 // no zero bytes: a random start code would split the slice into a bogus NAL
+		}
 		au := testAU(key, payload)
 		canonical, _, err := framecrypt.CanonicalH264(au, nil, nil)
 		if err != nil {
@@ -348,6 +351,9 @@ func TestNativeCallShareFansOutToEveryViewer(t *testing.T) {
 		key := i%4 == 0
 		payload := make([]byte, 300+i*500)
 		_, _ = rand.Read(payload)
+		for j := range payload {
+			payload[j] |= 1 // no zero bytes: a random start code would split the slice into a bogus NAL
+		}
 		au := testAU(key, payload)
 		canonical, _, _ := framecrypt.CanonicalH264(au, nil, nil)
 		want = append(want, canonical)
