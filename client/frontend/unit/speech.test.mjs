@@ -691,50 +691,223 @@ test("announce names off keeps the generic clip and fetches nothing", () => {
     assert.equal(asked, 0);
 });
 
+const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+const nameEngine = () => {
+    const engine = { definitions: {}, urls: {}, buffers: new Set(), preloads: [],
+        preload: async ids => { engine.preloads.push(ids); for (const id of ids) engine.buffers.add(id); } };
+    return engine;
+};
+// A pacer on a fake clock: tick() runs the next scheduled drain.
+async function fakePacer(options = {}) {
+    const { createNamePacer } = await import("../src/sounds.js");
+    let time = 0, timer = null;
+    const pacer = createNamePacer({ now: () => time, schedule: (fn, ms) => { timer = { fn, at: time + ms }; return 1; }, ...options });
+    return { pacer, advance: ms => { time += ms; }, tick: () => { const next = timer; timer = null; time = Math.max(time, next.at); next.fn(); return next; },
+        get timer() { return timer; } };
+}
+
 test("spoken names are fetched once per tab, language and nickname and used only once decoded", async () => {
     globalThis.window ??= {};
     const { spokenNameClip } = await import("../src/sounds.js");
     const requests = [];
     const app = { GetSpokenNameForTab: (...args) => { requests.push(args); return Promise.resolve({ key: "k1", nickname: args[1] === "c7" ? "Joshi" : "Mia", data_base64: "UklGRg==" }); } };
-    const engine = { definitions: {}, urls: {}, buffers: new Set(), preload: async ids => { for (const id of ids) engine.buffers.add(id); } };
+    const engine = nameEngine();
     const request = { language: "de", speaker: { client_id: "c7", nickname: "Joshi" }, phrase: "speech_de_user_join_named" };
-    assert.equal(spokenNameClip(request, app, engine), "");
-    assert.equal(spokenNameClip(request, app, engine), "");
-    await new Promise(resolve => setTimeout(resolve, 0));
+    const first = spokenNameClip(request, app, engine), second = spokenNameClip(request, app, engine);
+    assert.equal(typeof first.then, "function", "a miss answers with a promise to wait for");
+    assert.equal(await first, "speech_name_k1");
+    assert.equal(await second, "speech_name_k1");
     assert.equal(requests.length, 1);
     assert.deepEqual(requests[0].slice(1), ["c7", "de"]);
     assert.equal(engine.urls.speech_name_k1, "data:audio/wav;base64,UklGRg==");
-    assert.equal(spokenNameClip(request, app, engine), "speech_name_k1");
+    assert.deepEqual(engine.preloads, [["speech_name_k1", "speech_de_user_join_named"]], "decoded once");
+    assert.equal(spokenNameClip(request, app, engine), "speech_name_k1", "a decoded clip is used at once");
     const failing = { GetSpokenNameForTab: () => Promise.reject(new Error("gone")) };
     const other = { ...request, speaker: { client_id: "c8", nickname: "Mia" } };
-    assert.equal(spokenNameClip(other, failing, engine), "");
-    await new Promise(resolve => setTimeout(resolve, 0));
-    assert.equal(spokenNameClip(other, app, engine), "", "a failed fetch is retried later");
+    assert.equal(await spokenNameClip(other, failing, engine), "");
+    assert.equal(await spokenNameClip(other, app, engine), "speech_name_k1", "an announcement retries a failed fetch at once");
     assert.equal(requests.length, 2);
 });
 
 test("a name still being voiced is asked again; a clip for a renamed session is not cached", async () => {
     globalThis.window ??= {};
     const { spokenNameClip } = await import("../src/sounds.js");
-    const engine = { definitions: {}, urls: {}, buffers: new Set(), preload: async ids => { for (const id of ids) engine.buffers.add(id); } };
+    const engine = nameEngine();
     const replies = [{ nickname: "Ada", pending: true }, { nickname: "Ada", key: "k2", data_base64: "UklGRg==" }];
     const retries = [];
     const app = { GetSpokenNameForTab: () => Promise.resolve(replies.shift()) };
     const request = { language: "de", speaker: { client_id: "c9", nickname: "Ada" }, phrase: "speech_de_user_join_named" };
-    assert.equal(spokenNameClip(request, app, engine, fn => retries.push(fn)), "");
-    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(await spokenNameClip(request, app, engine, fn => retries.push(fn)), "", "a clip being voiced is not waited for");
     assert.equal(retries.length, 1);
-    assert.equal(spokenNameClip(request, app, engine, fn => retries.push(fn)), "", "no duplicate fetch while pending");
+    assert.equal(await spokenNameClip(request, app, engine, fn => retries.push(fn)), "", "no duplicate fetch while pending");
+    assert.equal(replies.length, 1);
     retries[0]();
-    await new Promise(resolve => setTimeout(resolve, 0));
-    assert.equal(spokenNameClip(request, app, engine), "speech_name_k2");
+    await settle();
+    assert.equal(await spokenNameClip(request, app, engine), "speech_name_k2");
     // Alice was renamed to Bob before the reply: the clip is not filed under Alice.
     const renamed = { GetSpokenNameForTab: () => Promise.resolve({ nickname: "Bob", key: "k3", data_base64: "UklGRg==" }) };
     const alice = { ...request, speaker: { client_id: "c10", nickname: "Alice" } };
-    spokenNameClip(alice, renamed, engine);
-    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(await spokenNameClip(alice, renamed, engine), "");
     assert.equal(engine.urls.speech_name_k3, undefined);
-    assert.equal(spokenNameClip(alice, renamed, engine), "");
+});
+
+test("name requests are paced: a burst, then one per second, highest priority first", async () => {
+    const f = await fakePacer({ burst: 3, reserve: 0, maxInFlight: 10 });
+    const ran = [];
+    const job = (name, priority, extra) => ({ priority, run: () => ran.push(name), ...extra });
+    for (const name of ["a", "b", "c"]) f.pacer.add(job(name, 0));
+    assert.deepEqual(ran, ["a", "b", "c"], "the burst runs at once");
+    const low = f.pacer.add(job("low", 0));
+    f.pacer.add(job("mine", 2));
+    f.pacer.add(job("gone", 1, { stale: () => true }));
+    f.pacer.add(job("voice", 1));
+    f.pacer.add(job("live", 3));
+    f.pacer.promote(low, 3);
+    assert.equal(ran.length, 3);
+    await settle();
+    assert.equal(f.timer.at, 1000);
+    const order = [];
+    while (f.timer) {
+        const at = f.tick().at;
+        await settle();
+        if (ran.length > 3 + order.length) order.push([ran.at(-1), at]);
+    }
+    // The stale job is dropped without spending the token "voice" then uses.
+    assert.deepEqual(order, [["live", 1000], ["low", 2000], ["mine", 3000], ["voice", 4000]]);
+    assert.equal(f.pacer.size, 0);
+});
+
+test("held jobs wait without blocking the queue and run once released", async () => {
+    const f = await fakePacer({ burst: 2, reserve: 0 });
+    const ran = [];
+    let hold = true;
+    f.pacer.add({ priority: 1, held: () => hold, run: () => ran.push("held") });
+    f.pacer.add({ priority: 0, run: () => ran.push("free") });
+    assert.deepEqual(ran, ["free"]);
+    await settle();
+    assert.equal(f.timer.at, 1000, "held jobs are polled");
+    f.tick();
+    assert.deepEqual(ran, ["free"]);
+    hold = false;
+    f.tick();
+    assert.deepEqual(ran, ["free", "held"]);
+    await settle();
+    assert.equal(f.timer, null);
+});
+
+test("an announcement takes the next free request slot and reserved tokens ahead of prefetch", async () => {
+    const f = await fakePacer({ burst: 10, reserve: 8, maxInFlight: 2 });
+    const ran = [], replies = {};
+    const job = (name, priority) => ({ priority, run: () => { ran.push(name); return new Promise(resolve => { replies[name] = resolve; }); } });
+    f.pacer.add(job("p1", 0));
+    f.pacer.add(job("p2", 0));
+    f.pacer.add(job("p3", 0));
+    f.pacer.add(job("live", 3));
+    assert.deepEqual(ran, ["p1", "p2"], "two requests open at most; p3 would dip into the reserve");
+    replies.p1();
+    await settle();
+    assert.deepEqual(ran, ["p1", "p2", "live"]);
+    replies.p2(); replies.live();
+    await settle();
+    assert.deepEqual(ran, ["p1", "p2", "live"], "prefetch leaves the reserve to announcements");
+    assert.equal(f.pacer.size, 1);
+});
+
+test("prefetch skips cached and in-flight names, ranks my channel first and leaves new-clip budget for announcements", async () => {
+    globalThis.window ??= {};
+    const { prefetchSpokenNames, spokenNameClip } = await import("../src/sounds.js");
+    const f = await fakePacer({ burst: 3, reserve: 1 });
+    const asked = [];
+    let reply = id => ({ nickname: "Pf" + id, key: "pf" + id, data_base64: "UklGRg==" });
+    const app = { GetSpokenNameForTab: (_tab, id) => { asked.push(id); return Promise.resolve(reply(id)); } };
+    const engine = nameEngine();
+    const settings = { speech_language: "en" };
+    const user = id => ({ client_id: id, nickname: "Pf" + id });
+    const roster = [[user("other"), 0], [user("mine"), 2], [user("voice"), 1]];
+    prefetchSpokenNames(roster, settings, { app, engine, pacer: f.pacer });
+    assert.deepEqual(asked, ["mine", "voice"]);
+    assert.equal(f.pacer.size, 1);
+    prefetchSpokenNames(roster, settings, { app, engine, pacer: f.pacer });
+    assert.deepEqual(asked, ["mine", "voice"], "in-flight names are not asked twice");
+    await settle();
+    assert.deepEqual(engine.preloads, [], "prefetch does not decode");
+    prefetchSpokenNames(roster, settings, { app, engine, pacer: f.pacer });
+    assert.equal(f.pacer.size, 1, "cached names are not queued again");
+    f.tick();
+    assert.deepEqual(asked, ["mine", "voice", "other"]);
+    await settle();
+    // An announcement for a prefetched name decodes it and plays it.
+    assert.equal(await spokenNameClip({ language: "en", speaker: user("mine"), phrase: "p" }, app, engine, undefined, f.pacer), "speech_name_pfmine");
+    // Unvoiced names: prefetch stops before the last two new clips of the server budget.
+    const g = await fakePacer();
+    asked.length = 0;
+    reply = id => ({ nickname: "Pf" + id, pending: true });
+    prefetchSpokenNames(Array.from({ length: 12 }, (_, index) => [user("new" + index), 0]), settings, { app, engine, pacer: g.pacer, schedule: () => {} });
+    await settle();
+    assert.equal(asked.length, 8, "at most eight first asks that could each start a clip");
+    assert.equal(g.pacer.size, 4);
+    g.tick();
+    assert.equal(asked.length, 8, "spent budget holds prefetch back");
+    // An announcement is never held back.
+    const live = spokenNameClip({ language: "en", speaker: user("late"), phrase: "p" }, app, engine, () => {}, g.pacer);
+    assert.equal(asked.at(-1), "late");
+    assert.equal(await live, "");
+    g.advance(60000);
+    g.tick();
+    assert.equal(asked.length, 10, "a refilled clip budget releases the next prefetch");
+});
+
+test("a named announcement waits briefly for a clip in flight, keeping order", async () => {
+    const f = fixture();
+    let deliver;
+    const answers = [() => new Promise(resolve => { deliver = resolve; }), () => ""];
+    f.queue.nameClip = () => answers.shift()();
+    f.queue.enqueue("user_join", { delay: 0, speaker: { client_id: "c7", nickname: "Joshi" } });
+    assert.equal(f.played.length, 0, "the item waits in the queue");
+    // An equal-priority announcement queues behind it instead of replacing it.
+    assert.equal(f.queue.enqueue("user_leave", { delay: 0, speaker: { client_id: "c8", nickname: "Mia" } }), true);
+    assert.equal(f.played.length, 0);
+    deliver("speech_name_abc");
+    await settle();
+    assert.equal(f.played[0].id, "speech_name_abc");
+    f.played[0].options.onEnded();
+    assert.equal(f.played[1].id, "speech_en_user_join_named");
+    f.played[1].options.onEnded();
+    assert.equal(f.played[2].id, "speech_en_user_leave", "the next announcement follows");
+});
+
+test("a clip that never arrives delays the next announcement by NAME_WAIT_MS at most", async () => {
+    const { NAME_WAIT_MS } = await import("../src/speech-queue.js");
+    const f = fixture();
+    const answers = [() => new Promise(() => {}), () => ""];
+    f.queue.nameClip = () => answers.shift()();
+    f.queue.enqueue("user_join", { delay: 0, speaker: { client_id: "c7", nickname: "Joshi" } });
+    f.queue.enqueue("user_leave", { delay: 0, speaker: { client_id: "c8", nickname: "Mia" } });
+    f.tick(NAME_WAIT_MS);
+    assert.equal(f.played[0].id, "speech_en_user_join");
+    f.played[0].options.onEnded();
+    assert.equal(f.played[1].id, "speech_en_user_leave");
+});
+
+test("a named announcement falls back to the generic clip after the wait or at once on failure", async () => {
+    const { NAME_WAIT_MS } = await import("../src/speech-queue.js");
+    const f = fixture();
+    let deliver;
+    f.queue.nameClip = () => new Promise(resolve => { deliver = resolve; });
+    const joshi = { client_id: "c7", nickname: "Joshi" };
+    f.queue.enqueue("user_join", { delay: 0, speaker: joshi });
+    f.tick(NAME_WAIT_MS - 1);
+    assert.equal(f.played.length, 0);
+    f.tick(1);
+    assert.equal(f.played[0].id, "speech_en_user_join", "never later than NAME_WAIT_MS");
+    deliver("speech_name_late");
+    await settle();
+    assert.equal(f.played.length, 1, "a late clip cannot replay the announcement");
+    f.played[0].options.onEnded(); f.advance(20000);
+    f.queue.nameClip = () => Promise.reject(new Error("gone"));
+    f.queue.enqueue("user_leave", { delay: 0, speaker: joshi });
+    await settle();
+    assert.equal(f.played[1].id, "speech_en_user_leave", "a failed fetch does not wait");
 });
 
 test("a queued name is not played after Announce names is turned off", () => {
