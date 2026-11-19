@@ -202,3 +202,34 @@ func TestActivityReaderStampsPartialFrames(t *testing.T) {
 		t.Fatal("received bytes did not reset the silence")
 	}
 }
+
+// A desktop whose socket simply closes without a goodbye (a PC shutdown) is
+// announced at once, not after the resume grace or the silence window.
+func TestDesktopClosedWithoutGoodbyeIsLostAloud(t *testing.T) {
+	env := startTestEnvFull(t, nil, func(c *config.Config) { c.ClientTimeoutSeconds = 90 })
+	defer env.stop()
+	env.state.AddChannel(testChannel(1))
+	observer, _ := dialAuthed(t, env.addr, "admin-uid")
+	defer func() { _ = observer.Close() }()
+	send(t, observer, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
+	conn := dialRetry(t, env.addr)
+	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw",
+		ClientFeatures: []string{netproto.ClientFeatureGoodbye, netproto.ClientFeatureResume, netproto.ClientFeatureFastHeartbeat}})
+	var resp netproto.AuthResponse
+	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthResponse), &resp); err != nil || !resp.OK {
+		t.Fatalf("login: %v %+v", err, resp)
+	}
+	send(t, conn, netproto.MsgPing, netproto.Ping{}) // arms the fast heartbeat
+	readOfType(t, conn, netproto.MsgPong)
+	send(t, conn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
+	waitFor(t, "desktop in channel", func() bool { c, ok := env.state.GetClient(resp.ClientID); return ok && c.ChannelID == 1 })
+	closedAt := time.Now()
+	_ = conn.Close()
+	awaitSnapshot(t, observer, "an announced drop", func(s *broadcast.TreeSnapshot) bool {
+		m := snapshotMember(s, resp.ClientID)
+		return m != nil && m.Reconnecting && m.LostAloud && m.ChannelID == 1
+	}, nil)
+	if took := time.Since(closedAt); took >= netproto.FastHeartbeatTimeout {
+		t.Fatalf("announced after %s, want at once", took)
+	}
+}

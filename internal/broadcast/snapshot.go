@@ -58,8 +58,8 @@ type ClientInfo struct {
 	// Reconnecting marks the kept place of a member whose connection dropped
 	// and that may still resume its session.
 	Reconnecting bool `json:"reconnecting,omitempty"`
-	// LostAloud: that reconnecting member's drop was unannounced (no
-	// goodbye: shutdown, crash, heartbeat), so others announce it and its
+	// LostAloud: that reconnecting desktop dropped without a goodbye (
+	// shutdown, crash, heartbeat), so others announce it and its
 	// resume aloud.
 	LostAloud bool `json:"lost_aloud,omitempty"`
 	// Connecting marks a member whose voice is not connected yet: from a

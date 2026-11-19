@@ -15,7 +15,7 @@ export function captureChannelPresence(state) {
 const UPDATING_CUE = Object.freeze({ kind: 'updating', message: 'runtime.updatingUser', quiet: true });
 // A member whose connection dropped keeps its place while it may resume.
 const RECONNECTING_CUE = Object.freeze({ kind: 'reconnecting', message: 'runtime.reconnectingUser', quiet: true });
-// A member dropped without a goodbye (lost_aloud) keeps its place too, but
+// A desktop dropped without a goodbye (lost_aloud) keeps its place too, but
 // is announced like any lost connection, and its resume as a reconnect.
 const LOST_KEPT_CUE = Object.freeze({ kind: 'leave', message: 'runtime.connectionLostUser', soundEvent: 'user_leave', speechEvent: 'user_connection_lost' });
 const lostAloud = client => !!(client?.reconnecting && client.lost_aloud);
