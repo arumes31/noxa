@@ -2047,8 +2047,10 @@ func (r *Router) recordingVideoSlotLocked(publisherID string) string {
 }
 
 // videoAdmissionWait is how long a new video track retries a refused publish
-// gate. It covers the bounded writes a policy commit can wait behind.
-var videoAdmissionWait = 2 * time.Second
+// gate. It is longer than the longest bounded write a policy commit can wait
+// behind (the server's 5 s control write ceiling), so contention alone cannot
+// outlast it.
+var videoAdmissionWait = 6 * time.Second
 
 // ReadVideoLoop reads RTP packets from an incoming video track until the
 // track ends or errors and forwards each packet on the given slot. Video from

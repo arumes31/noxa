@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
@@ -497,3 +498,6 @@ func TestVideoAdmissionRetriesARefusedGate(t *testing.T) {
 		t.Fatalf("admission gave up after %d gate calls", calls.Load())
 	}
 }
+
+// Tests that expect a denial should not wait out the production window.
+func init() { videoAdmissionWait = 500 * time.Millisecond }
