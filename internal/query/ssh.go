@@ -163,7 +163,7 @@ const (
 // beginHandshake admits an unauthenticated connection within the handshake
 // caps; endHandshake (idempotent) releases it.
 func (s *SSHServer) beginHandshake(conn net.Conn) bool {
-	source := auth.SourceAddressKey(hostOnly(conn.RemoteAddr().String()))
+	source := auth.SourceAddressKey(auth.HostOnly(conn.RemoteAddr().String()))
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.handshaking) >= maxSSHHandshakes || s.pendingBySource[source] >= maxSSHHandshakesPerSource {
@@ -223,7 +223,7 @@ func (s *SSHServer) Close() error {
 func (s *SSHServer) passwordCallback(ctx context.Context, principal *auth.IntegrationPrincipal) func(ssh.ConnMetadata, []byte) (*ssh.Permissions, error) {
 	authFailed := errors.New("invalid loginname or password")
 	return func(meta ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
-		ip := hostOnly(meta.RemoteAddr().String())
+		ip := auth.HostOnly(meta.RemoteAddr().String())
 		sourceScope := auth.LoginFailureScope("ssh:"+auth.SourceAddressKey(ip), "")
 		principalScope := auth.LoginFailureScope("ssh", meta.User())
 		accountScope := auth.AccountPasswordScope(meta.User())
@@ -301,7 +301,7 @@ func (s *SSHServer) serve(ctx context.Context, nConn net.Conn, cfg *ssh.ServerCo
 
 	s.logger.Info("query ssh client logged in",
 		zap.String("unique_id", sshConn.User()),
-		zap.String("remote", hostOnly(nConn.RemoteAddr().String())))
+		zap.String("remote", auth.HostOnly(nConn.RemoteAddr().String())))
 
 	var roleWrites sync.Mutex
 	perConn := new(atomic.Int64)
@@ -365,7 +365,7 @@ func (s *SSHServer) serveChannel(ctx context.Context, sshConn *ssh.ServerConn, n
 		setReadDeadline:  nConn.SetReadDeadline,
 		setWriteDeadline: nConn.SetWriteDeadline,
 		closeTransport:   nConn.Close,
-		remoteIP:         hostOnly(nConn.RemoteAddr().String()),
+		remoteIP:         auth.HostOnly(nConn.RemoteAddr().String()),
 		authed:           true,
 		username:         sshConn.User(),
 		principal:        principal,
@@ -452,15 +452,6 @@ func execCommand(payload []byte) string {
 		return ""
 	}
 	return string(payload[4 : 4+n])
-}
-
-// hostOnly strips the port from a host:port address.
-func hostOnly(addr string) string {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return addr
-	}
-	return host
 }
 
 // readPrivateKeyFile reads a private key from one opened descriptor. On

@@ -704,11 +704,24 @@ function mentionsMe(text) {
 
 // markMentions wraps @tokens in the rendered body. It walks text nodes only,
 // so it can never introduce markup into user text.
-function markMentions(container) {
+// The member alternation can hold thousands of names: compile it once per
+// member list and nickname, not once per rendered message.
+let mentionTokenCache = { key: null, re: null };
+function mentionTokenRe() {
     const members = V().state.clients || [];
     const names = [...new Set(members.map(c => c.nickname).filter(Boolean))].sort((a, b) => b.length - a.length);
-    const memberPattern = names.length ? "|@(?:" + names.map(reEscape).join("|") + ")(?![\\w-])" : "";
-    const re = new RegExp(mentionRe().source + "|<@&([1-9][0-9]{0,18})>" + memberPattern, "gi");
+    const base = mentionRe().source;
+    const key = base + "\n" + names.join("\n");
+    if (mentionTokenCache.key !== key) {
+        const memberPattern = names.length ? "|@(?:" + names.map(reEscape).join("|") + ")(?![\\w-])" : "";
+        mentionTokenCache = { key, re: new RegExp(base + "|<@&([1-9][0-9]{0,18})>" + memberPattern, "gi") };
+    }
+    return mentionTokenCache.re;
+}
+
+function markMentions(container) {
+    const members = V().state.clients || [];
+    const re = mentionTokenRe();
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
     const nodes = [];
     while (walker.nextNode()) nodes.push(walker.currentNode);
@@ -3567,6 +3580,7 @@ async function loadPage(key, beforeID) {
         st.truncated = !!resp.truncated;
     } else {
         st.msgs = page.concat(st.msgs);
+        boundHistory(st, false);
         // (103) a gap anywhere in the loaded window is still a gap in it, so
         // one truncated page keeps the notice up until the scope is reloaded.
         st.truncated = st.truncated || !!resp.truncated;
@@ -3586,6 +3600,21 @@ const MAX_JUMP_PAGES = 20;
 // or until "Jump to present" reloads the newest page.
 const AROUND_WINDOW = 100;
 const DETACHED_BUFFER = 500;
+// READING_CEILING bounds scrollback kept while reading, as a multiple of the cap.
+const READING_CEILING = 10;
+const readingCeiling = () => Math.max(V().state.settings?.chat_max_lines || 200, PAGE) * READING_CEILING;
+
+// boundHistory keeps a paged channel store under the reading ceiling by
+// dropping the end away from the user. Dropping the newest rows detaches the
+// window; forward paging (ChatHistoryAfter) fetches them again.
+function boundHistory(st, keepNewest) {
+    const excess = st.msgs.length - readingCeiling();
+    if (excess <= 0) return;
+    const dropped = keepNewest ? st.msgs.splice(0, excess) : st.msgs.splice(-excess);
+    for (const m of dropped) if (m.clientMsgID) receipts.delete(m.clientMsgID);
+    if (keepNewest) { st.end = false; return; }
+    if (!st.detached) Object.assign(st, { detached: true, pendingLive: [], pendingOverflow: false });
+}
 
 async function loadAroundWindow(key, st, id, scope, current) {
     if (typeof app().ChatHistoryAroundForTab !== "function") return false;
@@ -3640,6 +3669,7 @@ async function maybeLoadNewer() {
     st.truncated = st.truncated || !!resp.truncated;
     const known = new Set(st.msgs.map(m => m.id));
     st.msgs = st.msgs.concat(page.filter(m => !known.has(m.id)));
+    boundHistory(st, true);
     if (page.length < PAGE) {
         if (st.pendingOverflow) { returnToPresent(key); return; }
         const all = new Set(st.msgs.map(m => m.id));
@@ -3894,14 +3924,21 @@ function pushMsg(key, m) {
         if (st.pendingLive.length > DETACHED_BUFFER) { st.pendingLive.shift(); st.pendingOverflow = true; }
         return "detached";
     }
-    const index = m.id ? st.msgs.findIndex((existing) => existing.id && existing.id > m.id) : -1;
-    if (index >= 0) st.msgs.splice(index, 0, m);
-    else st.msgs.push(m);
     const max = V().state.settings?.chat_max_lines || 200;
     // Scrollback the user is reading stays loaded; the cap applies again once
     // they are back at the newest message.
     const reading = key === activeKey() && !atBottom;
-    while (!reading && st.msgs.length > Math.max(max, PAGE)) {
+    // Reading must not grow the store forever (a client left scrolled up
+    // overnight). Past the ceiling a channel detaches, as after a jump: the
+    // rows being read stay put and scrolling down pages forward (601).
+    if (reading && key.startsWith("ch:") && st.msgs.length >= readingCeiling()) {
+        Object.assign(st, { detached: true, pendingLive: [m], pendingOverflow: false });
+        return "detached";
+    }
+    const index = m.id ? st.msgs.findIndex((existing) => existing.id && existing.id > m.id) : -1;
+    if (index >= 0) st.msgs.splice(index, 0, m);
+    else st.msgs.push(m);
+    while (st.msgs.length > Math.max(max, PAGE) * (reading ? READING_CEILING : 1)) {
         const evicted = st.msgs.shift();
         // Drop the evicted message's receipt too, else the map grows unbounded.
         if (evicted.clientMsgID) receipts.delete(evicted.clientMsgID);

@@ -1,6 +1,19 @@
 package auth
 
-import "net/netip"
+import (
+	"net"
+	"net/netip"
+)
+
+// HostOnly strips the port from a host:port address; other input is
+// returned unchanged.
+func HostOnly(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return host
+}
 
 // sourcePrefixBitsIPv6 is the IPv6 prefix treated as one source. A single
 // host or subscriber is routinely delegated a whole /64, so keying limits by

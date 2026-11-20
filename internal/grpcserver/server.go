@@ -292,11 +292,7 @@ func remoteIPFromContext(ctx context.Context) string {
 	if !ok || p.Addr == nil {
 		return "unknown"
 	}
-	host, _, err := net.SplitHostPort(p.Addr.String())
-	if err != nil {
-		return p.Addr.String()
-	}
-	return host
+	return auth.HostOnly(p.Addr.String())
 }
 
 // parseBasic decodes an HTTP Basic credential.
