@@ -69,6 +69,24 @@ func conversationQuota(ctx context.Context, tx *sql.Tx, uid string) error {
 	return nil
 }
 
+// transferredInviteQuota checks that newOwner can hold one more pending
+// invite for target (besides the one in conversation id it takes over).
+func transferredInviteQuota(ctx context.Context, tx *sql.Tx, target, newOwner, id string) error {
+	if err := lockConversationUser(ctx, tx, target); err != nil {
+		return err
+	}
+	var fromOwner int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*)
+		FROM private_conversation_members m JOIN private_conversations c ON c.id=m.conversation_id
+		WHERE m.unique_id=$1 AND m.pending AND c.owner_uid=$2 AND c.id::text<>$3`, target, newOwner, id).Scan(&fromOwner); err != nil {
+		return err
+	}
+	if fromOwner >= maxPendingInvitesPerOwner {
+		return netproto.ErrConversationInvalid
+	}
+	return nil
+}
+
 // inviteQuota bounds a user's pending invites, overall and per owner.
 func inviteQuota(ctx context.Context, tx *sql.Tx, target, owner string) error {
 	if err := lockConversationUser(ctx, tx, target); err != nil {
@@ -153,6 +171,16 @@ func (s *Store) ChangeConversation(ctx context.Context, uid string, request netp
 	case "accept":
 		if err := conversationQuota(ctx, tx, uid); err != nil {
 			return nil, false, err
+		}
+	case "transfer":
+		// The new owner takes over this group's pending invites: they must
+		// fit its per-owner cap, or transfers would stack invites past it.
+		for _, member := range current.Members {
+			if member.Pending {
+				if err := transferredInviteQuota(ctx, tx, member.UniqueID, request.Target, current.ID); err != nil {
+					return nil, false, err
+				}
+			}
 		}
 	}
 	recipients := make([]string, 0, len(current.Members)+1)

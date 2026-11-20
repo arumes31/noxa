@@ -591,3 +591,24 @@ func TestConversationListIncludesJoinedAndPendingBeyond64(t *testing.T) {
 		t.Fatalf("listed %d conversations, want %d", len(got.Conversations), want)
 	}
 }
+
+// Transfers cannot stack pending invites past the new owner's cap.
+func TestConversationTransferRespectsPendingInviteCap(t *testing.T) {
+	s, c := conversationTestStore(t)
+	for i := range maxPendingInvitesPerOwner {
+		own, err := s.CreateConversation(t.Context(), "member", fmt.Sprintf("member group %d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := s.ChangeConversation(t.Context(), "member", netproto.ConversationRequest{ID: own.ID, Revision: own.Revision, Action: "invite", Target: "outsider"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c = conversationTestChange(t, s, c, "owner", "invite", "member")
+	c = conversationTestChange(t, s, c, "member", "accept", "")
+	c = conversationTestChange(t, s, c, "owner", "invite", "outsider")
+	_, _, err := s.ChangeConversation(t.Context(), "owner", netproto.ConversationRequest{ID: c.ID, Revision: c.Revision, Action: "transfer", Target: "member"})
+	if !errors.Is(err, netproto.ErrConversationInvalid) {
+		t.Fatalf("transfer over the new owner's invite cap = %v, want ErrConversationInvalid", err)
+	}
+}
