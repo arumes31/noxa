@@ -720,6 +720,7 @@ function mentionTokenRe() {
 }
 
 function markMentions(container) {
+    const members = V().state.clients || [];
     const re = mentionTokenRe();
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
     const nodes = [];
