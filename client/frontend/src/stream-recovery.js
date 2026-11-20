@@ -9,6 +9,7 @@ export function streamRecovery(entry, track, now = Date.now()) {
     if (state === "ended") return { state, retry: false };
     if (state === "live" || state === "paused") {
         entry.recoverySince = null;
+        entry.autoRetries = 0; // a picture refills the automatic retry budget
         return { state, retry: false };
     }
     entry.recoverySince ??= now;
@@ -23,7 +24,7 @@ export function streamRecovery(entry, track, now = Date.now()) {
 // a watch the user started and never starts one.
 export const STREAM_AUTO_RETRIES = 3;
 export function streamAutoRetry(entry, recovery, now = Date.now()) {
-    if (recovery.state === "live" || recovery.state === "paused" || !entry.watching) entry.autoRetries = 0;
+    if (!entry.watching) entry.autoRetries = 0;
     if (recovery.state !== "waitingLong" || !recovery.retry || now - entry.recoverySince < 15000 ||
         (entry.autoRetries || 0) >= STREAM_AUTO_RETRIES) return false;
     entry.autoRetries = (entry.autoRetries || 0) + 1;
