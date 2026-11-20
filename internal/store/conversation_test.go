@@ -545,6 +545,11 @@ func TestConversationDeviceEnvelopesReachTheirDevice(t *testing.T) {
 // owner can hold only a few of them for any one user.
 func TestConversationInvitesCannotExhaustAnotherUsersQuota(t *testing.T) {
 	s, _ := conversationTestStore(t)
+	for i := range maxJoinedConversations - 1 {
+		if _, err := s.CreateConversation(t.Context(), "member", fmt.Sprintf("joined %d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for i := range maxPendingInvitesPerOwner + 1 {
 		c, err := s.CreateConversation(t.Context(), "owner", fmt.Sprintf("spam %d", i))
 		if err != nil {
@@ -558,7 +563,31 @@ func TestConversationInvitesCannotExhaustAnotherUsersQuota(t *testing.T) {
 			t.Fatalf("invite over the per-owner cap = %v, want ErrConversationInvalid", err)
 		}
 	}
+	// 63 joined + 8 pending: the 64th joined group must still be allowed.
 	if _, err := s.CreateConversation(t.Context(), "member", "own group"); err != nil {
 		t.Fatalf("pending invites blocked the target's own group: %v", err)
+	}
+}
+
+// A full joined quota plus pending invites must all be listed.
+func TestConversationListIncludesJoinedAndPendingBeyond64(t *testing.T) {
+	s, _ := conversationTestStore(t)
+	for i := range maxJoinedConversations {
+		if _, err := s.CreateConversation(t.Context(), "member", fmt.Sprintf("joined %d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range maxPendingInvitesPerOwner {
+		c, err := s.CreateConversation(t.Context(), "owner", fmt.Sprintf("invite %d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := s.ChangeConversation(t.Context(), "owner", netproto.ConversationRequest{ID: c.ID, Revision: c.Revision, Action: "invite", Target: "member"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := conversationTestRead(t, s, "member", netproto.ConversationRequest{Action: "list"})
+	if want := maxJoinedConversations + maxPendingInvitesPerOwner; len(got.Conversations) != want {
+		t.Fatalf("listed %d conversations, want %d", len(got.Conversations), want)
 	}
 }

@@ -208,7 +208,7 @@ func (s *Store) WithConversations(ctx context.Context, uid string, request netpr
 	ids := []string{request.ID}
 	if request.Action == "list" {
 		ids = nil
-		rows, err := tx.QueryContext(ctx, `SELECT conversation_id::text FROM private_conversation_members WHERE unique_id=$1 ORDER BY conversation_id LIMIT 64`, uid)
+		rows, err := tx.QueryContext(ctx, `SELECT conversation_id::text FROM private_conversation_members WHERE unique_id=$1 ORDER BY conversation_id LIMIT $2`, uid, maxJoinedConversations+maxPendingInvites)
 		if err != nil {
 			return err
 		}

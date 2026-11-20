@@ -204,10 +204,11 @@ func (s *TCPServer) handlePoke(ctx context.Context, client *Client, f *netproto.
 	return s.rolePoke(ctx, client, msg)
 }
 
+// sendPoke runs while rolePoke holds roleMetadataMu: replies use its ceiling.
 func (s *TCPServer) sendPoke(ctx context.Context, client, target *Client, msg netproto.Poke) error {
 	key := client.ID + "→" + target.ID
 	if !s.pokes.allow(key, time.Now()) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "poke cooldown: wait before poking this client again")
+		return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeMalformed, "poke cooldown: wait before poking this client again")
 	}
 
 	payload, err := eventEnvelope(eventPoke, pokeEvent{
@@ -216,10 +217,10 @@ func (s *TCPServer) sendPoke(ctx context.Context, client, target *Client, msg ne
 		Message:      msg.Message,
 	})
 	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "encoding poke failed")
+		return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "encoding poke failed")
 	}
 	if err := s.deps.Broadcast.BroadcastToClient(target.ID, payload); err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target unreachable")
+		return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target unreachable")
 	}
 	if target.isWebTransport() {
 		s.pushNotify(target.uniqueID(), pushNotice{Kind: pushKindPoke, Tag: "poke:" + client.uniqueID(), From: client.nickname()})
@@ -229,7 +230,7 @@ func (s *TCPServer) sendPoke(ctx context.Context, client, target *Client, msg ne
 		zap.String("to", target.ID),
 	)
 	if msg.AckRequested {
-		return s.writeCommittedReply(client, netproto.MsgPokeAccepted, netproto.PokeAccepted{ClientID: target.ID})
+		return s.writeMetadataReply(client, netproto.MsgPokeAccepted, netproto.PokeAccepted{ClientID: target.ID})
 	}
 	return nil
 }
