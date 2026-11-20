@@ -3580,6 +3580,7 @@ async function loadPage(key, beforeID) {
         st.truncated = !!resp.truncated;
     } else {
         st.msgs = page.concat(st.msgs);
+        boundHistory(st, false);
         // (103) a gap anywhere in the loaded window is still a gap in it, so
         // one truncated page keeps the notice up until the scope is reloaded.
         st.truncated = st.truncated || !!resp.truncated;
@@ -3601,6 +3602,19 @@ const AROUND_WINDOW = 100;
 const DETACHED_BUFFER = 500;
 // READING_CEILING bounds scrollback kept while reading, as a multiple of the cap.
 const READING_CEILING = 10;
+const readingCeiling = () => Math.max(V().state.settings?.chat_max_lines || 200, PAGE) * READING_CEILING;
+
+// boundHistory keeps a paged channel store under the reading ceiling by
+// dropping the end away from the user. Dropping the newest rows detaches the
+// window; forward paging (ChatHistoryAfter) fetches them again.
+function boundHistory(st, keepNewest) {
+    const excess = st.msgs.length - readingCeiling();
+    if (excess <= 0) return;
+    const dropped = keepNewest ? st.msgs.splice(0, excess) : st.msgs.splice(-excess);
+    for (const m of dropped) if (m.clientMsgID) receipts.delete(m.clientMsgID);
+    if (keepNewest) { st.end = false; return; }
+    if (!st.detached) Object.assign(st, { detached: true, pendingLive: [], pendingOverflow: false });
+}
 
 async function loadAroundWindow(key, st, id, scope, current) {
     if (typeof app().ChatHistoryAroundForTab !== "function") return false;
@@ -3655,6 +3669,7 @@ async function maybeLoadNewer() {
     st.truncated = st.truncated || !!resp.truncated;
     const known = new Set(st.msgs.map(m => m.id));
     st.msgs = st.msgs.concat(page.filter(m => !known.has(m.id)));
+    boundHistory(st, true);
     if (page.length < PAGE) {
         if (st.pendingOverflow) { returnToPresent(key); return; }
         const all = new Set(st.msgs.map(m => m.id));
@@ -3916,7 +3931,7 @@ function pushMsg(key, m) {
     // Reading must not grow the store forever (a client left scrolled up
     // overnight). Past the ceiling a channel detaches, as after a jump: the
     // rows being read stay put and scrolling down pages forward (601).
-    if (reading && key.startsWith("ch:") && st.msgs.length >= Math.max(max, PAGE) * READING_CEILING) {
+    if (reading && key.startsWith("ch:") && st.msgs.length >= readingCeiling()) {
         Object.assign(st, { detached: true, pendingLive: [m], pendingOverflow: false });
         return "detached";
     }
