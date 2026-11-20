@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"sync/atomic"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -482,6 +483,18 @@ func (s *TCPServer) canPublishVideo(clientID string) bool {
 			e.Evaluate(client.userID(), channelID, authorization.ShareScreen).Allowed
 		return nil
 	})
+	if errors.Is(err, authorization.ErrAuthorizationBusy) {
+		// No decision for this channel yet (a share starting during a policy
+		// commit): wait once, because a refusal here ends the track for good.
+		// Every later packet reuses the decision and never waits.
+		if previous := client.videoDecision.Load(); previous == nil || previous.channelID != channelID {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			allowed = s.roleAllowed(ctx, client, channelID, authorization.ShareCamera) || s.roleAllowed(ctx, client, channelID, authorization.ShareScreen)
+			client.videoDecision.Store(&talkDecision{channelID: channelID, allowed: allowed})
+			return allowed
+		}
+	}
 	return resolveTalk(&client.videoDecision, channelID, allowed, err)
 }
 
