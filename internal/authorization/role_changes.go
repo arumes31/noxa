@@ -42,6 +42,9 @@ type RoleChange struct {
 	UserID           int64          `json:"user_id"`
 	MemberUniqueID   string         `json:"member_unique_id,omitempty"`
 	Channel          ChannelPolicy  `json:"channel"`
+	// KeepDeletionProtection is set by transports whose role message cannot
+	// carry deletion_protected (gRPC): an update then keeps the stored flag.
+	KeepDeletionProtection bool `json:"-"`
 }
 
 // ApplyRoleChange checks all authority against the previous snapshot and returns
@@ -106,6 +109,9 @@ func ApplyRoleChange(p RolePolicy, actorID int64, change RoleChange) (RolePolicy
 		}
 		if !e.CanManageRole(actorID, old.ID) {
 			return RolePolicy{}, ErrRoleForbidden
+		}
+		if change.KeepDeletionProtection {
+			change.Role.DeletionProtected = old.DeletionProtected
 		}
 		if old.DeletionProtected != change.Role.DeletionProtected && !owner {
 			return RolePolicy{}, ErrRoleForbidden

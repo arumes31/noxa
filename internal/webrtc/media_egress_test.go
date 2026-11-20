@@ -152,10 +152,12 @@ func TestMediaTicketsAreBoundedPerStream(t *testing.T) {
 func TestMediaTicketsRetainAnEntireAdmittedPacingQueue(t *testing.T) {
 	registry := &mediaEgressRegistry{}
 	stream := &mediaEgressStream{active: true, registry: registry}
+	r := NewRouter(zap.NewNop())
+	ticket := mediaTicket{router: r, videoRevision: r.videoPolicySnapshot().revision, delivery: MediaDelivery{Slot: SlotCam, Tap: true}}
 	source := &rtp.Packet{Header: rtp.Header{Version: 2}, Payload: []byte{1}}
-	packet, _ := stream.prepare(source, mediaTicket{})
+	packet, _ := stream.prepare(source, ticket)
 	for range mediaPacerPackets - 1 {
-		stream.prepare(source, mediaTicket{})
+		stream.prepare(source, ticket)
 	}
 	written := false
 	_, err := stream.write(&packet.Header, packet.Payload, nil, interceptor.RTPWriterFunc(func(*rtp.Header, []byte, interceptor.Attributes) (int, error) {
@@ -164,5 +166,26 @@ func TestMediaTicketsRetainAnEntireAdmittedPacingQueue(t *testing.T) {
 	}))
 	if err != nil || !written {
 		t.Fatalf("a valid queued keyframe lost its first packet before pacing: %v", err)
+	}
+}
+
+// An unused track holds no ticket ring and a voice track holds the small one.
+func TestMediaTicketRingIsLazyAndSizedByKind(t *testing.T) {
+	registry := &mediaEgressRegistry{}
+	source := &rtp.Packet{Header: rtp.Header{Version: 2}, Payload: []byte{1}}
+	voice := &mediaEgressStream{active: true, registry: registry}
+	if voice.order != nil {
+		t.Fatal("ring allocated before the first packet")
+	}
+	for range 10 {
+		voice.prepare(source, mediaTicket{})
+	}
+	if len(voice.order) != mediaAudioTicketCount || len(voice.tickets) != 10 {
+		t.Fatalf("voice ring %d, tickets %d", len(voice.order), len(voice.tickets))
+	}
+	video := &mediaEgressStream{active: true, registry: registry}
+	video.prepare(source, mediaTicket{delivery: MediaDelivery{Slot: SlotCam}})
+	if len(video.order) != mediaTicketCount {
+		t.Fatalf("video ring %d", len(video.order))
 	}
 }

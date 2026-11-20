@@ -62,6 +62,8 @@ type Client struct {
 
 	// talkDecision caches the last uncontended Speak evaluation (canTalk).
 	talkDecision atomic.Pointer[talkDecision]
+	// videoDecision is the same cache for canPublishVideo.
+	videoDecision atomic.Pointer[talkDecision]
 
 	mu                   sync.RWMutex
 	lastOwnChannelMove   *broadcast.OwnChannelMove // recipient-only cause, protected by mu

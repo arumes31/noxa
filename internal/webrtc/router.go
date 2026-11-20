@@ -215,6 +215,7 @@ type Router struct {
 
 	videoBitrateLimit int
 	videoBudgets      map[string]videoBudget // publisher session; retained across moves/ICE rebuilds
+	videoBudgetMu     sync.Mutex             // leaf lock for videoBudgets, taken after mu
 	// Policy writes drain earlier video output writes. Acquire this lock only
 	// inside a media guard's write callback, never while entering that guard.
 	videoPolicyMu contextRWMutex
@@ -1662,7 +1663,9 @@ func (r *Router) detachPeer(clientID string, leaveChannel bool, only *PeerConnec
 	}
 	if leaveChannel {
 		r.mu.Lock()
+		r.videoBudgetMu.Lock()
 		delete(r.videoBudgets, clientID)
+		r.videoBudgetMu.Unlock()
 		r.mu.Unlock()
 	}
 }
@@ -2043,6 +2046,12 @@ func (r *Router) recordingVideoSlotLocked(publisherID string) string {
 	return SlotCam
 }
 
+// videoAdmissionWait is how long a new video track retries a refused publish
+// gate. It is longer than the longest bounded write a policy commit can wait
+// behind (the server's 5 s control write ceiling), so contention alone cannot
+// outlast it.
+var videoAdmissionWait = 6 * time.Second
+
 // ReadVideoLoop reads RTP packets from an incoming video track until the
 // track ends or errors and forwards each packet on the given slot. Video from
 // clients without publish permission is dropped; the gate is rechecked for
@@ -2072,7 +2081,14 @@ func (r *Router) readVideoLoop(clientID, slot string, track VideoTrackReader, na
 	if policy.bounds != (VideoBounds{}) && (currentCodec == nil || !strings.EqualFold(currentCodec().MimeType, webrtc.MimeTypeVP8) && (!encrypted || !strings.EqualFold(currentCodec().MimeType, webrtc.MimeTypeH264))) {
 		return
 	}
-	if !r.allowVideo(clientID) {
+	// The gate never waits (it also runs per packet), so it reads a policy
+	// commit in progress as "no". Ending the reader on that would leave a new
+	// share black until re-shared: retry briefly before treating it as denied.
+	allowed := r.allowVideo(clientID)
+	for deadline := time.Now().Add(videoAdmissionWait); !allowed && time.Now().Before(deadline); allowed = r.allowVideo(clientID) {
+		time.Sleep(25 * time.Millisecond)
+	}
+	if !allowed {
 		r.logger.Info("router: video publish denied",
 			zap.String("client_id", clientID),
 		)

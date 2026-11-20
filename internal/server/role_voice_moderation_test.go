@@ -76,6 +76,9 @@ func TestRoleVoiceModerationEnforcesHierarchyAndAudioDirections(t *testing.T) {
 	check(memberID, ownerID, webrtc.SlotScreenAudio, false)
 	check(memberID, ownerID, webrtc.SlotCam, true)
 	check(ownerID, memberID, webrtc.SlotMic, true)
+	if !env.srv.canPublishVideo(memberID) || env.srv.canPublishVideo("missing") {
+		t.Fatal("video publish gate: member must pass, unknown client must not")
+	}
 	if env.srv.canTalk(memberID) {
 		t.Fatal("server-muted member retained talk permission")
 	}

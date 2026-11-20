@@ -9,8 +9,7 @@ import (
 	"noxa/internal/netproto"
 )
 
-// Exercise decoded list limits independently of the default 4096-byte command
-// line bound, which rejects this input earlier and closes the text session.
+// Exercise decoded list limits independently of the command line bound.
 func TestRoleFilterOversizedPatchBeforeBackend(t *testing.T) {
 	b := &metadataQueryBackend{roleQueryBackend: &roleQueryBackend{}}
 	s := New("", zap.NewNop(), b)

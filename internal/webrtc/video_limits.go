@@ -65,23 +65,23 @@ func (r *Router) setVideoLimitsLocked(bitsPerSecond int, bounds VideoBounds) err
 	}
 	if r.videoBitrateLimit != bitsPerSecond {
 		r.videoBitrateLimit = bitsPerSecond
+		r.videoBudgetMu.Lock()
 		r.videoBudgets = make(map[string]videoBudget)
+		r.videoBudgetMu.Unlock()
 	}
 	return nil
 }
 
 func (r *Router) allowVideoPacket(clientID string, bytes int, now time.Time) bool {
+	// Per packet: only a shared router lock, so a bitrate limit does not
+	// serialize every publisher against all video fan-out readers.
 	r.mu.RLock()
-	unlimited := r.videoBitrateLimit == 0
-	r.mu.RUnlock()
-	if unlimited {
-		return true
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.mu.RUnlock()
 	if r.videoBitrateLimit == 0 {
 		return true
 	}
+	r.videoBudgetMu.Lock()
+	defer r.videoBudgetMu.Unlock()
 	if _, joined := r.clientChan[clientID]; !joined {
 		return false
 	}

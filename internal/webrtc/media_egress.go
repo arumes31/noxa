@@ -17,6 +17,10 @@ import (
 // Retain the whole bounded pacing queue plus recent NACK retransmissions.
 // Count and lifetime remain bounded; every write still rechecks authority.
 const mediaTicketCount = mediaPacerPackets + 4096
+
+// Voice never queues more than the pacer's audio ring, so its tracks keep a
+// much smaller ticket ring than video.
+const mediaAudioTicketCount = mediaAudioPackets + 4096
 const mediaTicketLifetime = time.Second
 const mediaVideoTicketLifetime = mediaPacerLifetime + mediaTicketLifetime
 
@@ -147,9 +151,11 @@ type mediaEgressStream struct {
 	// Ticket admission uses its shared side: a slow socket must not block the
 	// publisher's sequential fan-out to other recipients. ticketsMu protects
 	// the bounded map/ring only, always acquired after mu, never across writes.
-	ticketsMu       sync.Mutex
-	tickets         map[uint64]*mediaTicket
-	order           [mediaTicketCount]uint64
+	ticketsMu sync.Mutex
+	tickets   map[uint64]*mediaTicket
+	// order is the ticket ring, allocated on the first packet and sized by
+	// kind: a track that never carries media costs nothing.
+	order           []uint64
 	nextTicket      int
 	outputSSRC      atomic.Uint32
 	videoDiagnostic videoForwardDiagnostic
@@ -204,9 +210,16 @@ func (s *mediaEgressStream) prepare(pkt *rtp.Packet, ticket mediaTicket) (rtp.Pa
 	if s.tickets == nil {
 		s.tickets = make(map[uint64]*mediaTicket)
 	}
+	if s.order == nil {
+		size := mediaAudioTicketCount
+		if lifetime == mediaVideoTicketLifetime {
+			size = mediaTicketCount
+		}
+		s.order = make([]uint64, size)
+	}
 	delete(s.tickets, s.order[s.nextTicket])
 	s.order[s.nextTicket] = id
-	s.nextTicket = (s.nextTicket + 1) % mediaTicketCount
+	s.nextTicket = (s.nextTicket + 1) % len(s.order)
 	s.tickets[id] = &ticket
 	s.admitted.Add(1)
 	out := *pkt
@@ -224,7 +237,7 @@ func (s *mediaEgressStream) stop() bool {
 	s.active = false
 	s.ticketsMu.Lock()
 	clear(s.tickets)
-	clear(s.order[:])
+	clear(s.order)
 	s.ticketsMu.Unlock()
 	return wasActive
 }
@@ -392,7 +405,7 @@ func (s *mediaEgressStream) backOff(isTimeout bool) (uint32, bool) {
 	}
 	s.ticketsMu.Lock()
 	clear(s.tickets)
-	clear(s.order[:])
+	clear(s.order)
 	s.ticketsMu.Unlock()
 	delay := mediaSocketWriteTimeout
 	var failures uint32

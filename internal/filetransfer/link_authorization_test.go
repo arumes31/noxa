@@ -195,3 +195,19 @@ func TestDownloadOutlivesLinkExpiry(t *testing.T) {
 		t.Fatal("expired link survived the end of its download")
 	}
 }
+
+// One account must not use up the shared link registry for everyone else.
+func TestLinksAreCappedPerPrincipal(t *testing.T) {
+	r, path := newTestLinkRegistry(t, []byte("x"))
+	for range maxLinksPerPrincipal {
+		if _, _, err := r.create(path, "f.txt", &Principal{UserID: 2, SessionID: "a"}, 7, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := r.create(path, "f.txt", &Principal{UserID: 2, SessionID: "b"}, 7, ""); !errors.Is(err, ErrTooManyLinks) {
+		t.Fatalf("link over the per-account cap: %v", err)
+	}
+	if _, _, err := r.create(path, "f.txt", &Principal{UserID: 3, SessionID: "c"}, 7, ""); err != nil {
+		t.Fatalf("another account was refused: %v", err)
+	}
+}

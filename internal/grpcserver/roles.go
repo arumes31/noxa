@@ -141,6 +141,7 @@ func roleChangeFromProto(req *noxav1.ChangeRolesRequest) authorization.RoleChang
 	change := authorization.RoleChange{
 		Kind: authorization.RoleChangeKind(req.GetKind()), ExpectedRevision: req.GetExpectedRevision(),
 		RoleID: req.GetRoleId(), RoleIDs: slices.Clone(req.GetRoleIds()), UserID: req.GetUserId(),
+		KeepDeletionProtection: true, // RoleDefinition has no deletion_protected field
 		Role: authorization.Role{
 			ID: r.GetId(), Name: r.GetName(), Position: int(r.GetPosition()),
 			Color: r.GetColor(), Icon: r.GetIcon(), Hoist: r.GetHoist(), Mentionable: r.GetMentionable(),

@@ -111,7 +111,7 @@ func TestBlockedMediaWriteAllowsBoundedTicketEvictionWithoutRepairReuse(t *testi
 	<-entered
 	admitted := make(chan bool, 1)
 	go func() {
-		for range mediaTicketCount {
+		for range mediaAudioTicketCount + 8 {
 			if _, ok := stream.prepare(&packet, mediaTicket{}); !ok {
 				admitted <- false
 				return
@@ -137,7 +137,7 @@ func TestBlockedMediaWriteAllowsBoundedTicketEvictionWithoutRepairReuse(t *testi
 	stream.ticketsMu.Unlock()
 	close(release)
 	<-finished
-	if count != mediaTicketCount {
+	if count != mediaAudioTicketCount {
 		t.Fatalf("ticket cache escaped its bound: %d", count)
 	}
 	_, reason, err := stream.writeResult(&packet.Header, packet.Payload, nil, interceptor.RTPWriterFunc(func(*rtp.Header, []byte, interceptor.Attributes) (int, error) {
