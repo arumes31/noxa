@@ -2,7 +2,7 @@ import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
 import { streamRequest, stopPublications, publicationSnapshot, reconcilePublications, reconcilePublicationUploads, isCurrentPublication } from "./stream-publication.js";
 import { t } from "./i18n.js";
 import { updateShareViewers } from "./share-status.js";
-import { streamRecovery } from "./stream-recovery.js";
+import { streamAutoRetry, streamRecovery } from "./stream-recovery.js";
 import { receiverVideoCodecs } from "./video-codecs.js";
 import { receiverHEVCSupport, hevcReadmissionDelay } from "./video-hevc.js";
 import { createReceiverRegistry } from "./remote-receivers.js";
@@ -145,6 +145,7 @@ async function toggleWatch(s, entry, retry = false) {
     const focusButton = retry ? entry.retryButton : entry.watchButton;
     const restoreFocus = document.activeElement === focusButton;
     const active = retry || !entry.watching;
+    if (!retry) entry.autoRetries = 0; // a user-started watch gets a full automatic retry budget
     const retainedHEVC = retry && entry.watching ? entry.hevcRetry : null;
     entry.pending = true;
     entry.error = "";
@@ -334,7 +335,7 @@ function createEntry(s, stream) {
     entry.retryButton = document.createElement("button");
     entry.retryButton.className = "stream-retry";
     entry.retryButton.type = "button";
-    entry.retryButton.onclick = () => { void toggleWatch(s, entry, true); };
+    entry.retryButton.onclick = () => { entry.autoRetries = 0; void toggleWatch(s, entry, true); };
     entry.liveControls.onclick = event => event.stopPropagation();
     entry.liveControls.oncontextmenu = event => event.stopPropagation();
     card.querySelector(".stream-watch").onclick = () => { void toggleWatch(s, entry); };
@@ -413,6 +414,7 @@ async function poll(s) {
                 }
             }
             renderEntry(s, entry);
+            if (streamAutoRetry(entry, streamRecovery(entry, s.tracks.get(id)?.track))) void toggleWatch(s, entry, true);
         }
         s.container.hidden = ![...s.streams.values()].some(entry => !entry.card.hidden);
     } catch (error) {

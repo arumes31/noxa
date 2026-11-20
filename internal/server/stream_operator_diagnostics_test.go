@@ -1,12 +1,17 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"noxa/internal/health"
 	"noxa/internal/netproto"
@@ -188,5 +193,28 @@ func TestStreamOperatorDiagnosticsRechecksCurrentMembership(t *testing.T) {
 	response = operatorDiagnosticRead(t, s, http.MethodGet, "", "127.0.0.1:1234")
 	if json.Unmarshal(response.Body.Bytes(), &result) != nil || len(result.Publications) != 0 {
 		t.Fatalf("publisher moved after backend snapshot: %s", response.Body.String())
+	}
+}
+
+// The periodic status line carries the viewers' watch state, so a viewer
+// without a picture can be diagnosed after the stream ended.
+func TestLogStreamStatusWritesOneLinePerPublication(t *testing.T) {
+	s, _ := operatorDiagnosticFixture()
+	core, logs := observer.New(zap.InfoLevel)
+	s.logger = zap.New(core)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); s.LogStreamStatus(ctx, time.Millisecond) }()
+	for logs.Len() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-done
+	entry := logs.All()[0]
+	fields := entry.ContextMap()
+	encoded := fmt.Sprintf("%s", fields["publication"])
+	if entry.Message != "stream status" || fields["publisher"] != "Name publisher" || fields["viewers"] != int64(2) ||
+		!strings.Contains(encoded, `"nickname":"Name watcher"`) || !strings.Contains(encoded, `"watching":true`) {
+		t.Fatalf("stream status line = %s %v", entry.Message, fields)
 	}
 }
