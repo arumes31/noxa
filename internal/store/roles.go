@@ -160,7 +160,14 @@ func (s *Store) changeRolePolicy(ctx context.Context, actorID int64, change auth
 	if err := appendRoleAudit(ctx, tx, actorID, string(change.Kind), roleAuditDetail(before, after, change)); err != nil {
 		return authorization.RolePolicy{}, err
 	}
-	return after, tx.Commit()
+	// Return the stored form (row order, nil empty sets), as channel changes
+	// do: the Authority caches it and compares later reads with DeepEqual, so
+	// the in-memory form would force a needless exclusive reload on next login.
+	persisted, err := readRolePolicy(ctx, tx, false)
+	if err != nil {
+		return authorization.RolePolicy{}, err
+	}
+	return persisted, tx.Commit()
 }
 
 func rollbackRoleTx(tx *sql.Tx, retErr *error) {

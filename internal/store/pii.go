@@ -55,7 +55,17 @@ func LoadOrCreatePIICipher(path string) (*PIICipher, error) {
 		if readErr != nil {
 			return nil, fmt.Errorf("reading PII key: %w", readErr)
 		}
-		return NewPIICipher(key)
+		if len(key) > 0 {
+			return NewPIICipher(key)
+		}
+		// Empty: creation below crashed before writing. No data can be
+		// encrypted under an empty key, so replace it instead of refusing
+		// every later start.
+		_ = rf.Close()
+		if err := os.Remove(path); err != nil {
+			return nil, fmt.Errorf("removing empty PII key: %w", err)
+		}
+		err = os.ErrNotExist
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("reading PII key: %w", err)

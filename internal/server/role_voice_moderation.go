@@ -29,7 +29,7 @@ func (s *TCPServer) handleMemberVoiceSet(ctx context.Context, client *Client, f 
 		if err != nil {
 			return err
 		}
-		return s.writeMessage(client, netproto.MsgMemberVoiceState, result)
+		return s.writeMetadataReply(client, netproto.MsgMemberVoiceState, result)
 	})
 }
 

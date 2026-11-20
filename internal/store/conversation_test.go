@@ -540,3 +540,25 @@ func TestConversationDeviceEnvelopesReachTheirDevice(t *testing.T) {
 		t.Fatalf("outsider device envelope err = %v", err)
 	}
 }
+
+// Pending invites never use up the target's joined-group quota, and one
+// owner can hold only a few of them for any one user.
+func TestConversationInvitesCannotExhaustAnotherUsersQuota(t *testing.T) {
+	s, _ := conversationTestStore(t)
+	for i := range maxPendingInvitesPerOwner + 1 {
+		c, err := s.CreateConversation(t.Context(), "owner", fmt.Sprintf("spam %d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = s.ChangeConversation(t.Context(), "owner", netproto.ConversationRequest{ID: c.ID, Revision: c.Revision, Action: "invite", Target: "member"})
+		if i < maxPendingInvitesPerOwner && err != nil {
+			t.Fatalf("invite %d: %v", i, err)
+		}
+		if i == maxPendingInvitesPerOwner && !errors.Is(err, netproto.ErrConversationInvalid) {
+			t.Fatalf("invite over the per-owner cap = %v, want ErrConversationInvalid", err)
+		}
+	}
+	if _, err := s.CreateConversation(t.Context(), "member", "own group"); err != nil {
+		t.Fatalf("pending invites blocked the target's own group: %v", err)
+	}
+}

@@ -251,7 +251,7 @@ func (s *TCPServer) startPrivateCall(ctx context.Context, client *Client, reques
 		s.privateCallByClient = map[string]string{}
 	}
 	if s.privateCallByClient[client.ID] != "" || len(s.privateCalls) >= 1024 {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "already in a call or call capacity reached")
+		return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "already in a call or call capacity reached")
 	}
 	build := func(uids []string) (netproto.CallSession, error) {
 		now := time.Now().Unix()
@@ -304,13 +304,13 @@ func (s *TCPServer) startPrivateCall(ctx context.Context, client *Client, reques
 	}
 	if err != nil {
 		if errors.Is(err, errCallKeyUnavailable) {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, err.Error())
+			return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeUnavailable, err.Error())
 		}
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "call unavailable: no available participants or storage failure")
+		return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "call unavailable: no available participants or storage failure")
 	}
 	s.publishPrivateCallLocked(call)
 	time.AfterFunc(30*time.Second, func() { s.expirePrivateCall(call.ID) })
-	return s.writeCommittedReply(client, netproto.MsgCallResult, netproto.CallResult{Action: "start", Call: &call})
+	return s.writeMetadataReply(client, netproto.MsgCallResult, netproto.CallResult{Action: "start", Call: &call})
 }
 
 // Caller holds privateCallsMu. Events carry only an invalidation; clients fetch

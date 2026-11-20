@@ -128,3 +128,20 @@ func TestLoadOrCreatePIICipherReloadsSameKey(t *testing.T) {
 		t.Fatalf("open with reloaded key = %q, want original plaintext", plain)
 	}
 }
+
+// A crash between creating and writing the key leaves an empty file; it
+// must not block every later start.
+func TestLoadOrCreatePIICipherReplacesEmptyKey(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "pii.key")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := LoadOrCreatePIICipher(path); err != nil {
+		t.Fatalf("LoadOrCreatePIICipher over an empty key: %v", err)
+	}
+	if key, err := os.ReadFile(path); err != nil || len(key) != 32 {
+		t.Fatalf("replacement key = %d bytes, %v; want 32", len(key), err)
+	}
+}

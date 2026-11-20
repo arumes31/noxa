@@ -139,7 +139,7 @@ func (s *TCPServer) handleSetStatus(ctx context.Context, client *Client, f *netp
 		previous, hadPrevious := s.deps.State.GetClient(client.ID)
 		if msg.PrivacyOnly {
 			if !hadPrevious {
-				return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "session presence unavailable")
+				return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "session presence unavailable")
 			}
 			status, msg.Message = previous.Status, previous.StatusMessage
 		} else {
@@ -150,7 +150,7 @@ func (s *TCPServer) handleSetStatus(ctx context.Context, client *Client, f *netp
 		}
 		current, ok := s.deps.State.GetClient(client.ID)
 		if !ok || current.Status != status || current.StatusMessage != msg.Message {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "session presence unavailable")
+			return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "session presence unavailable")
 		}
 		// A repeated identical request changes nothing anyone can see, so it
 		// must not cost a publisher refresh and a snapshot per recipient.
@@ -165,7 +165,7 @@ func (s *TCPServer) handleSetStatus(ctx context.Context, client *Client, f *netp
 			if msg.HideLobbyPresence != nil {
 				lobbyPrivacy = &current.HideLobbyPresence
 			}
-			return s.writeCommittedReply(client, netproto.MsgStatusSaved, netproto.StatusSaved{
+			return s.writeMetadataReply(client, netproto.MsgStatusSaved, netproto.StatusSaved{
 				ClientID: client.ID, Status: status, Message: msg.Message,
 				HideLobbyPresence: lobbyPrivacy,
 			})

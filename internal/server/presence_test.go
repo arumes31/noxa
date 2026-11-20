@@ -345,3 +345,36 @@ func TestInvisibleSnapshotFiltering(t *testing.T) {
 		t.Fatal("admin missing after returning online")
 	}
 }
+
+// An invisible admin's departure must not reach non-admins even as an
+// unchanged snapshot, whose arrival would time the hidden presence (381).
+func TestInvisibleDepartureSendsNonAdminsNothing(t *testing.T) {
+	env := startTestEnv(t, nil)
+	defer env.stop()
+
+	adminConn, _ := dialAuthed(t, env.addr, "admin-uid")
+	userConn, _ := dialAuthed(t, env.addr, "user-uid")
+	defer func() { _ = userConn.Close() }()
+	send(t, adminConn, netproto.MsgSetStatus, netproto.SetStatus{Status: "invisible"})
+	waitFor(t, "admin to become invisible", func() bool {
+		for _, client := range env.state.ListClients() {
+			if client.UniqueID == "admin-uid" {
+				return client.Status == "invisible"
+			}
+		}
+		return false
+	})
+	drainFrames(userConn)
+	_ = adminConn.Close()
+	waitFor(t, "admin session removed", func() bool {
+		for _, client := range env.state.ListClients() {
+			if client.UniqueID == "admin-uid" {
+				return false
+			}
+		}
+		return true
+	})
+	if drainFrames(userConn)[netproto.MsgSnapshot] {
+		t.Fatal("non-admin received a snapshot when the invisible admin left")
+	}
+}

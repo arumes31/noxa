@@ -36,17 +36,51 @@ func lockConversation(ctx context.Context, tx *sql.Tx, id string, write bool) (n
 	return c, rows.Err()
 }
 
-// A user's row serializes group quota checks across different conversations.
-func conversationQuota(ctx context.Context, tx *sql.Tx, uid string) error {
+const (
+	maxJoinedConversations = 64
+	maxPendingInvites      = 64
+	// Per conversation owner, so one account cannot fill another's invites.
+	maxPendingInvitesPerOwner = 8
+)
+
+// lockConversationUser serializes group quota checks across conversations.
+func lockConversationUser(ctx context.Context, tx *sql.Tx, uid string) error {
 	var id int64
 	if err := tx.QueryRowContext(ctx, `SELECT id FROM users WHERE unique_id=$1 FOR NO KEY UPDATE`, uid).Scan(&id); err != nil {
 		return netproto.ErrConversationDenied
 	}
-	var count int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM private_conversation_members WHERE unique_id=$1`, uid).Scan(&count); err != nil {
+	return nil
+}
+
+// conversationQuota bounds the groups a user has joined (created or
+// accepted). Pending invites do not count: others must not be able to use
+// them up.
+func conversationQuota(ctx context.Context, tx *sql.Tx, uid string) error {
+	if err := lockConversationUser(ctx, tx, uid); err != nil {
 		return err
 	}
-	if count >= 64 {
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM private_conversation_members WHERE unique_id=$1 AND NOT pending`, uid).Scan(&count); err != nil {
+		return err
+	}
+	if count >= maxJoinedConversations {
+		return netproto.ErrConversationInvalid
+	}
+	return nil
+}
+
+// inviteQuota bounds a user's pending invites, overall and per owner.
+func inviteQuota(ctx context.Context, tx *sql.Tx, target, owner string) error {
+	if err := lockConversationUser(ctx, tx, target); err != nil {
+		return err
+	}
+	var total, fromOwner int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*), count(*) FILTER (WHERE c.owner_uid=$2)
+		FROM private_conversation_members m JOIN private_conversations c ON c.id=m.conversation_id
+		WHERE m.unique_id=$1 AND m.pending`, target, owner).Scan(&total, &fromOwner); err != nil {
+		return err
+	}
+	if total >= maxPendingInvites || fromOwner >= maxPendingInvitesPerOwner {
 		return netproto.ErrConversationInvalid
 	}
 	return nil
@@ -111,8 +145,13 @@ func (s *Store) ChangeConversation(ctx context.Context, uid string, request netp
 			return nil, false, err
 		}
 	}
-	if request.Action == "invite" {
-		if err := conversationQuota(ctx, tx, request.Target); err != nil {
+	switch request.Action {
+	case "invite":
+		if err := inviteQuota(ctx, tx, request.Target, current.Owner); err != nil {
+			return nil, false, err
+		}
+	case "accept":
+		if err := conversationQuota(ctx, tx, uid); err != nil {
 			return nil, false, err
 		}
 	}

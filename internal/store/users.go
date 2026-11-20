@@ -29,8 +29,10 @@ func (s *Store) RegisterUserWithDefaultRole(ctx context.Context, uniqueID, nickn
 		return 0, fmt.Errorf("reading registration role policy: %w", err)
 	}
 	var userID int64
-	err = tx.QueryRowContext(ctx, `INSERT INTO users(unique_id,nickname,password_hash,public_key,created_at)
-		VALUES($1,$2,$3,$4,NOW()) RETURNING id`, uniqueID, nickname, passwordHash, publicKey).Scan(&userID)
+	// The registration key only derives the account ID; its private half is
+	// discarded, so it is unproven: the first client key may replace it.
+	err = tx.QueryRowContext(ctx, `INSERT INTO users(unique_id,nickname,password_hash,public_key,public_key_proven,created_at)
+		VALUES($1,$2,$3,$4,FALSE,NOW()) RETURNING id`, uniqueID, nickname, passwordHash, publicKey).Scan(&userID)
 	if err != nil {
 		return 0, err
 	}

@@ -405,7 +405,7 @@ func (s *TCPServer) expireUpdatingDeparture(key, clientID, uniqueID, nickname st
 	if hidden {
 		// An invisible member's leave is admin-only (381), as in onDisconnect.
 		// Role snapshots filter it per recipient; the legacy event names nobody.
-		s.broadcastToAdmins(eventUserLeft, userEvent{ClientID: clientID})
+		s.broadcastToAdmins(eventUserLeft, userEvent{ClientID: clientID}, uniqueID)
 		return
 	}
 	s.broadcastEvent(eventUserLeft, userEvent{ClientID: clientID, UniqueID: uniqueID, Nickname: nickname})

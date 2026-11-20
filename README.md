@@ -31,7 +31,7 @@
 **noXa** combines voice channels, camera and screen sharing, direct and group
 conversations, and channel forums in a desktop client and an installable web app. Its Go server uses a
 framed control protocol, a **Pion WebRTC SFU**, PostgreSQL for persistent state,
-and optional Redis pub/sub. Named roles control access and moderation.
+and an optional Redis readiness dependency (one server process; Redis carries no fan-out). Named roles control access and moderation.
 
 The published desktop binary targets **Windows x64**. The Wails source also has
 Linux/macOS platform code; CI exercises Windows and Linux, but does not publish
@@ -313,7 +313,7 @@ graph TD
 
     subgraph DataStore["Persistence & Messaging"]
         Postgres[(PostgreSQL 16\nStore, State, Audit Logs)]
-        Redis[(Redis 7\nOptional pub/sub)]
+        Redis[(Redis 7\nOptional, readiness only)]
     end
 
     PWA <-->|HTTPS / WebSocket| Web["Web Listener :12342\n/app/, /ws, /ft, /api/v1/web/info"]
@@ -550,7 +550,7 @@ retained beside the executable for manual recovery.
 * **Wails CLI**: `go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.0` (match `client/go.mod`)
 * **PostgreSQL**: `>= 16`
 * **Desktop platform dependencies**: WebView2 on Windows; GTK 3, WebKitGTK 4.1, Ayatana AppIndicator, X11/XTest development libraries on Linux. The [CI workflow](.github/workflows/ci.yml) lists the Linux packages it installs.
-* **Optional services**: Redis 7 for pub/sub, TURN for restrictive NATs, and FFmpeg for server recording (included in the Docker image).
+* **Optional services**: Redis 7 (only pinged for readiness; noXa runs as one process and keeps live state in memory), TURN for restrictive NATs, and FFmpeg for server recording (included in the Docker image).
 
 #### Build Backend Server
 
@@ -902,7 +902,7 @@ and validation, [`config.yaml`](config.yaml) for a development example, and
 | `NOXA_INGRESS_SHIELD_DIFFICULTY` | `18` | Proof-of-work leading zero bits, `12`–`24` (18 ≈ 260k hashes, well under a second on a phone) |
 | `NOXA_INGRESS_SHIELD_HOLD` | `5m` | How long an automatically raised shield stays up after the last surge second (`1m`–`1h`) |
 | `NOXA_DATABASE_URL` | `postgres://...` | PostgreSQL connection URL |
-| `NOXA_REDIS_ADDR` | `localhost:6379` | Optional Redis address for pub/sub fanout |
+| `NOXA_REDIS_ADDR` | `localhost:6379` | Optional Redis address (readiness check only; no fan-out) |
 | `NOXA_REDIS_ENABLED` | `true` | Set `false` to run without Redis; the supplied Compose stack starts Redis by default |
 | `NOXA_REDIS_PASSWORD` | empty | Redis password; required in production when `NOXA_REDIS_ADDR` is not loopback (Compose passes `REDIS_PASSWORD`) |
 | `NOXA_TLS_ENABLED` | `true` | Enable TLS 1.3 encryption on control port |
