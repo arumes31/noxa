@@ -2,6 +2,7 @@ package server
 
 import (
 	"noxa/internal/authorization"
+	"noxa/internal/state"
 	"noxa/internal/webrtc"
 )
 
@@ -40,22 +41,22 @@ func (s *TCPServer) guardRoleMedia(delivery webrtc.MediaDelivery, write func() e
 			}
 			defer second.mediaFence.RUnlock()
 		}
-		channelID, _, present := s.deps.State.ClientChannelState(sender.ID)
-		if !present || channelID != delivery.ChannelID {
+		// One shared read per session: this runs for every recipient of
+		// every voice packet.
+		source, present := s.deps.State.MediaState(sender.ID)
+		if !present || source.ChannelID != delivery.ChannelID {
 			return nil
 		}
-		audio := delivery.Slot == webrtc.SlotMic || delivery.Slot == webrtc.SlotScreenAudio
-		if audio {
-			source, ok := s.deps.State.GetClient(sender.ID)
-			if !ok || source.ServerMuted {
+		channelID := source.ChannelID
+		var target state.MediaState
+		if !delivery.Tap {
+			if target, present = s.deps.State.MediaState(recipient.ID); !present {
 				return nil
 			}
-			if !delivery.Tap {
-				target, ok := s.deps.State.GetClient(recipient.ID)
-				if !ok || target.ServerDeafened {
-					return nil
-				}
-			}
+		}
+		audio := delivery.Slot == webrtc.SlotMic || delivery.Slot == webrtc.SlotScreenAudio
+		if audio && (source.ServerMuted || (!delivery.Tap && target.ServerDeafened)) {
+			return nil
 		}
 		capability := authorization.Speak
 		switch delivery.Slot {
@@ -84,12 +85,11 @@ func (s *TCPServer) guardRoleMedia(delivery webrtc.MediaDelivery, write func() e
 				return nil
 			}
 		} else {
-			source, ok := s.deps.State.GetClient(sender.ID)
-			if !ok || (s.deps.State.PresenceHidden(source) && sender.uniqueID() != recipient.uniqueID() && !e.Evaluate(recipient.userID(), 0, authorization.ViewConnectionInfo).Allowed) {
+			if source.Hidden && sender.uniqueID() != recipient.uniqueID() && !e.Evaluate(recipient.userID(), 0, authorization.ViewConnectionInfo).Allowed {
 				return nil
 			}
-			receiverChannelID, _, present := s.deps.State.ClientChannelState(recipient.ID)
-			if !present || receiverChannelID <= 0 || receiverChannelID != delivery.RecipientChannelID || !e.Evaluate(recipient.userID(), receiverChannelID, authorization.Connect).Allowed {
+			receiverChannelID := target.ChannelID
+			if receiverChannelID <= 0 || receiverChannelID != delivery.RecipientChannelID || !e.Evaluate(recipient.userID(), receiverChannelID, authorization.Connect).Allowed {
 				return nil
 			}
 			if delivery.Whisper {

@@ -1,6 +1,8 @@
 package server
 
 import (
+	"sync"
+
 	"noxa/internal/authorization"
 	"noxa/internal/webrtc"
 )
@@ -33,21 +35,50 @@ func (s *TCPServer) refreshRolePublishers(e *authorization.RoleEvaluator) {
 		}
 		identities[client.ID] = roleMediaIdentity{client.userID(), client.uniqueID(), s.deps.State.PresenceHidden(member), client.rulesBlocked()}
 	}
+	allowed := memoizedEvaluate(e)
 	s.deps.Voice.SetPublisherGuard(func(pair webrtc.PublisherAccess) bool {
 		sender, senderOK := identities[pair.PublisherID]
 		receiver, receiverOK := identities[pair.SubscriberID]
 		if !senderOK || !receiverOK || sender.blocked || receiver.blocked || pair.ChannelID <= 0 || pair.SubscriberChannelID <= 0 {
 			return false
 		}
-		if !e.Evaluate(sender.userID, pair.ChannelID, authorization.Connect).Allowed ||
-			!e.Evaluate(receiver.userID, pair.SubscriberChannelID, authorization.Connect).Allowed ||
-			!e.Evaluate(receiver.userID, pair.ChannelID, authorization.ViewChannel).Allowed {
+		if !allowed(sender.userID, pair.ChannelID, authorization.Connect) ||
+			!allowed(receiver.userID, pair.SubscriberChannelID, authorization.Connect) ||
+			!allowed(receiver.userID, pair.ChannelID, authorization.ViewChannel) {
 			return false
 		}
-		if sender.invisible && sender.uniqueID != receiver.uniqueID && !e.Evaluate(receiver.userID, 0, authorization.ViewConnectionInfo).Allowed {
+		if sender.invisible && sender.uniqueID != receiver.uniqueID && !allowed(receiver.userID, 0, authorization.ViewConnectionInfo) {
 			return false
 		}
 		return pair.ChannelID == pair.SubscriberChannelID ||
-			(e.Evaluate(sender.userID, pair.ChannelID, authorization.Whisper).Allowed && e.Evaluate(sender.userID, pair.SubscriberChannelID, authorization.Whisper).Allowed)
+			(allowed(sender.userID, pair.ChannelID, authorization.Whisper) && allowed(sender.userID, pair.SubscriberChannelID, authorization.Whisper))
 	})
+}
+
+type evaluationKey struct {
+	userID, channelID int64
+	capability        authorization.Capability
+}
+
+// memoizedEvaluate caches decisions of one immutable evaluator. The router
+// checks every subscriber/publisher pair under its exclusive lock on each
+// refresh; the distinct (user, channel, capability) questions grow with the
+// members, not with the pairs. Safe for concurrent callers.
+func memoizedEvaluate(e *authorization.RoleEvaluator) func(int64, int64, authorization.Capability) bool {
+	var mu sync.RWMutex
+	cache := make(map[evaluationKey]bool)
+	return func(userID, channelID int64, capability authorization.Capability) bool {
+		key := evaluationKey{userID, channelID, capability}
+		mu.RLock()
+		result, ok := cache[key]
+		mu.RUnlock()
+		if ok {
+			return result
+		}
+		result = e.Evaluate(userID, channelID, capability).Allowed
+		mu.Lock()
+		cache[key] = result
+		mu.Unlock()
+		return result
+	}
 }

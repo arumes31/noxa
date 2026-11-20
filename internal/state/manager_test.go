@@ -745,3 +745,22 @@ func TestTextChannelRefusesVoiceMembership(t *testing.T) {
 		t.Fatal("TextOnly patch ignored")
 	}
 }
+
+func TestMediaStateMatchesClientState(t *testing.T) {
+	m := newTestManager(t)
+	if _, ok := m.MediaState("missing"); ok {
+		t.Fatal("unknown client reported present")
+	}
+	m.AddClient(&Client{ClientID: "a", UniqueID: "a", ChannelID: 0})
+	muted, deafened := true, true
+	if _, err := m.SetServerVoiceState("a", &muted, &deafened); err != nil {
+		t.Fatal(err)
+	}
+	m.SetStatus("a", "invisible", "")
+	got, ok := m.MediaState("a")
+	c, _ := m.GetClient("a")
+	want := MediaState{ChannelID: c.ChannelID, ServerMuted: c.ServerMuted, ServerDeafened: c.ServerDeafened, Hidden: m.PresenceHidden(c)}
+	if !ok || got != want || !got.ServerMuted || !got.ServerDeafened || !got.Hidden {
+		t.Fatalf("MediaState = %+v, %v; want %+v", got, ok, want)
+	}
+}

@@ -754,6 +754,31 @@ func (m *Manager) ClientChannelState(clientID string) (channelID int64, e2ePubli
 	return c.ChannelID, c.E2EPublicKey, true
 }
 
+// MediaState is the per-packet voice guard's view of one session.
+type MediaState struct {
+	ChannelID      int64
+	ServerMuted    bool
+	ServerDeafened bool
+	Hidden         bool // PresenceHidden
+}
+
+// MediaState reads what the voice guard needs in one shared lock and without
+// copying the client (GetClient clones it, metadata map included), since it
+// runs for every recipient of every voice packet.
+func (m *Manager) MediaState(clientID string) (MediaState, bool) {
+	m.mu.RLock()
+	c, ok := m.clients[clientID]
+	if !ok {
+		m.mu.RUnlock()
+		return MediaState{}, false
+	}
+	st := MediaState{ChannelID: c.ChannelID, ServerMuted: c.ServerMuted, ServerDeafened: c.ServerDeafened}
+	presence := Client{Status: c.Status, HideLobbyPresence: c.HideLobbyPresence, ChannelID: c.ChannelID}
+	m.mu.RUnlock()
+	st.Hidden = m.PresenceHidden(&presence)
+	return st, true
+}
+
 // ChannelSubscribers returns a snapshot of the clients that explicitly
 // subscribed to channelID.
 func (m *Manager) ChannelSubscribers(channelID int64) []*Client {
