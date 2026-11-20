@@ -80,6 +80,7 @@ import * as chatUI from "./chat-ui.js";
 import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, removeStreamTrack, receiveShareAudio, removeShareAudio, refreshStreamUploads, streamReceiverRecoveryTarget, noteResumeWatch } from "./stream-controls.js";
 import { startRemoteMedia, reconcileRemoteMedia, gatePresents } from "./remote-media.js";
 import { startChannelMedia, stopChannelMedia, channelMedia, receiveMediaKey, mediaErrorText, onChannelMediaStatus } from "./channel-media.js";
+import { beginVoiceJoin, markVoiceJoin, markVoiceJoinKeys, slowVoiceJoinSummary, voiceJoinTiming } from "./voice-join-timing.js";
 import { MediaKeyStartupInbox } from "./media-keys.js";
 import { remoteTrackID } from "./media-track-id.js";
 import { createReceiverRegistry, attributeReceiver, releaseReceiver } from "./remote-receivers.js";
@@ -2055,6 +2056,7 @@ export function renderVoiceEncryptionStatus(status) {
     videoRefreshNames(); // tiles follow the verified key accounts
 }
 onChannelMediaStatus(renderVoiceEncryptionStatus);
+onChannelMediaStatus(status => { markVoiceJoinKeys(status); reportSlowVoiceJoin(); });
 
 // ---------------------------------------------------------------------------
 // Channel tree
@@ -2223,6 +2225,12 @@ function addChat(d) {
         trayMention(); // (290)
     }
     if (result?.announcement) announceLive(result.announcement);
+}
+
+// A join that took 3 s or longer leaves one line saying where the time went.
+function reportSlowVoiceJoin() {
+    const detail = slowVoiceJoinSummary();
+    if (detail) sysMsg(t("voice.joinTiming", { detail }));
 }
 
 function sysMsg(text) {
@@ -2580,6 +2588,9 @@ async function startVoiceAttempt(expectedEpoch, startup) {
     // permits receiving media, sharing a screen, and explicitly enabling video.
     let micErr = null;
     let capturedStream;
+    beginVoiceJoin();
+    // The relay settings do not depend on the microphone: fetch them while it opens.
+    const iceServersPending = Promise.resolve().then(() => window.go.main.App.GetICEServersForTab(tabID)).catch(() => null);
     try {
         capturedStream = await navigator.mediaDevices.getUserMedia({
             audio: audioConstraints(),
@@ -2593,6 +2604,7 @@ async function startVoiceAttempt(expectedEpoch, startup) {
         capturedStream.getTracks().forEach((track) => track.stop());
         return false;
     }
+    markVoiceJoin("microphone");
     state.localStream = capturedStream;
     setMicState(micErr === null ? "ok" : microphoneFailureState(micErr));
     // (25) record which profile this capture was taken with, so a later move
@@ -2604,10 +2616,8 @@ async function startVoiceAttempt(expectedEpoch, startup) {
 
     // ICE servers delivered by the server at connect (STUN/TURN); an empty
     // list means "client defaults" (plain RTCPeerConnection).
-    let iceServers = null;
-    try {
-        iceServers = await window.go.main.App.GetICEServersForTab(tabID);
-    } catch { /* fall back to client defaults */ }
+    const iceServers = await iceServersPending; // null: fall back to client defaults
+    markVoiceJoin("relay_settings");
     let mediaLimits = null;
     let limitsSequence = mediaLimitsSequence;
     try {
@@ -2628,6 +2638,7 @@ async function startVoiceAttempt(expectedEpoch, startup) {
         return false;
     }
     state.mediaLimits = mediaLimits;
+    markVoiceJoin("media_limits");
     // Encryption first: without a working encrypted-media session no peer is
     // created (explicit error, never plaintext channel media).
     let media;
@@ -2661,6 +2672,7 @@ async function startVoiceAttempt(expectedEpoch, startup) {
         if (state.localStream === capturedStream) state.localStream = null;
         return false;
     }
+    markVoiceJoin("key_session_started");
     startup.keys.drain(control => media.receive(control));
     const pc = media.protectPeer(iceServers && iceServers.length
         ? new RTCPeerConnection(media.peerConfig({ iceServers }))
@@ -2723,6 +2735,8 @@ async function startVoiceAttempt(expectedEpoch, startup) {
         else if (pc.connectionState === "connected") {
             resetICERestart(pc);
             if (state.myChannelID > 0) setVoiceStatus("voice on");
+            markVoiceJoin("transport_connected");
+            reportSlowVoiceJoin();
         }
     });
     updateVoiceLink({ type: "transport", state: pc.connectionState });
@@ -3821,6 +3835,7 @@ async function refreshPermissions() {
 // ---------------------------------------------------------------------------
 
 window.__noxa = {
+    voiceJoinTiming,
     videoPresentationDiagnostics, connectionOverlay,
     prefillLogin: loginMemory.select,
     soundEngine,
