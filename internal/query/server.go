@@ -283,7 +283,7 @@ func (s *Server) serve(ctx context.Context, conn net.Conn) {
 		setReadDeadline:  conn.SetReadDeadline,
 		setWriteDeadline: conn.SetWriteDeadline,
 		closeTransport:   conn.Close,
-		remoteIP:         remoteIP(conn),
+		remoteIP:         auth.HostOnly(conn.RemoteAddr().String()),
 	})
 }
 
@@ -354,13 +354,4 @@ func (sess *session) armIdleTimeout(d time.Duration) {
 	if d > 0 && sess.setReadDeadline != nil {
 		_ = sess.setReadDeadline(time.Now().Add(d))
 	}
-}
-
-// remoteIP extracts the host part of a connection's remote address.
-func remoteIP(conn net.Conn) string {
-	host, _, err := net.SplitHostPort(conn.RemoteAddr().String())
-	if err != nil {
-		return conn.RemoteAddr().String()
-	}
-	return host
 }

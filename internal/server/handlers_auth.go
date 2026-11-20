@@ -486,9 +486,5 @@ func remoteIP(conn net.Conn) string {
 	if conn == nil {
 		return ""
 	}
-	host, _, err := net.SplitHostPort(conn.RemoteAddr().String())
-	if err != nil {
-		return conn.RemoteAddr().String()
-	}
-	return host
+	return auth.HostOnly(conn.RemoteAddr().String())
 }
