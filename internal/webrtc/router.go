@@ -2046,6 +2046,10 @@ func (r *Router) recordingVideoSlotLocked(publisherID string) string {
 	return SlotCam
 }
 
+// videoAdmissionWait is how long a new video track retries a refused publish
+// gate. It covers the bounded writes a policy commit can wait behind.
+var videoAdmissionWait = 2 * time.Second
+
 // ReadVideoLoop reads RTP packets from an incoming video track until the
 // track ends or errors and forwards each packet on the given slot. Video from
 // clients without publish permission is dropped; the gate is rechecked for
@@ -2075,7 +2079,14 @@ func (r *Router) readVideoLoop(clientID, slot string, track VideoTrackReader, na
 	if policy.bounds != (VideoBounds{}) && (currentCodec == nil || !strings.EqualFold(currentCodec().MimeType, webrtc.MimeTypeVP8) && (!encrypted || !strings.EqualFold(currentCodec().MimeType, webrtc.MimeTypeH264))) {
 		return
 	}
-	if !r.allowVideo(clientID) {
+	// The gate never waits (it also runs per packet), so it reads a policy
+	// commit in progress as "no". Ending the reader on that would leave a new
+	// share black until re-shared: retry briefly before treating it as denied.
+	allowed := r.allowVideo(clientID)
+	for deadline := time.Now().Add(videoAdmissionWait); !allowed && time.Now().Before(deadline); allowed = r.allowVideo(clientID) {
+		time.Sleep(25 * time.Millisecond)
+	}
+	if !allowed {
 		r.logger.Info("router: video publish denied",
 			zap.String("client_id", clientID),
 		)

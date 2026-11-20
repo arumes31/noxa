@@ -4,6 +4,7 @@ package webrtc
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/pion/rtcp"
@@ -476,5 +477,23 @@ func TestOwnerKeyframeRequiresActivePublicationAndSource(t *testing.T) {
 	}
 	if r.RequestViewerKeyframe("pub", "pub", SlotScreen) {
 		t.Fatal("stopped publication requested keyframe")
+	}
+}
+
+// The publish gate never waits, so it answers "no" while a policy commit is
+// in progress. Admission of a new track must retry instead of ending the
+// reader for good.
+func TestVideoAdmissionRetriesARefusedGate(t *testing.T) {
+	r := NewRouter(nil)
+	var calls atomic.Int32
+	r.SetVideoHandlers(func(string) bool { return calls.Add(1) > 3 })
+	r.JoinChannel(1, "publisher")
+	track := &fakeVideoTrack{
+		fakeTrackReader: fakeTrackReader{packets: []*rtp.Packet{makeAudioPacket(t, 1, -1)}},
+		ssrc:            9002,
+	}
+	r.ReadVideoLoop("publisher", SlotCam, track)
+	if calls.Load() < 4 {
+		t.Fatalf("admission gave up after %d gate calls", calls.Load())
 	}
 }

@@ -466,7 +466,9 @@ type talkDecision struct {
 
 // canPublishVideo checks the client's current video capabilities and channel.
 // Like canTalk it runs for every packet and must never block on the policy
-// gate; guardRoleMedia re-authorizes each recipient write.
+// gate; guardRoleMedia re-authorizes each recipient write. A momentarily
+// busy gate without a remembered decision reads as false: the router retries
+// track admission (videoAdmissionWait) instead of this gate waiting.
 func (s *TCPServer) canPublishVideo(clientID string) bool {
 	client, ok := s.clientByID(clientID)
 	if !ok || s.deps == nil || s.deps.Authority == nil {
@@ -477,21 +479,11 @@ func (s *TCPServer) canPublishVideo(clientID string) bool {
 		return false
 	}
 	allowed := false
-	evaluate := func(e *authorization.RoleEvaluator) error {
+	err := s.deps.Authority.TryWithPolicy(func(e *authorization.RoleEvaluator) error {
 		allowed = e.Evaluate(client.userID(), channelID, authorization.ShareCamera).Allowed ||
 			e.Evaluate(client.userID(), channelID, authorization.ShareScreen).Allowed
 		return nil
-	}
-	err := s.deps.Authority.TryWithPolicy(evaluate)
-	if errors.Is(err, authorization.ErrAuthorizationBusy) {
-		// No decision for this channel yet (a share starting during a policy
-		// commit): wait once for the gate, because a refusal here ends the
-		// track for good. No deadline, so contention can never read as a
-		// denial. Every later packet reuses the decision and never waits.
-		if previous := client.videoDecision.Load(); previous == nil || previous.channelID != channelID {
-			err = s.deps.Authority.WithPolicy(context.Background(), evaluate)
-		}
-	}
+	})
 	return resolveTalk(&client.videoDecision, channelID, allowed, err)
 }
 
