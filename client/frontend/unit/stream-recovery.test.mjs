@@ -4,18 +4,19 @@ import { STREAM_AUTO_RETRIES, streamAutoRetry, streamRecovery } from "../src/str
 
 test("a watch stuck without a picture retries itself a bounded number of times", () => {
     const entry = { watching: true, pending: false, recoverySince: 0 };
-    const stuck = () => streamRecovery(entry, null, 9000);
-    assert.equal(stuck().state, "waitingLong");
-    for (let i = 0; i < STREAM_AUTO_RETRIES; i++) assert.equal(streamAutoRetry(entry, stuck()), true);
-    assert.equal(streamAutoRetry(entry, stuck()), false, "the manual button remains after the budget");
+    const stuck = now => streamRecovery(entry, null, now);
+    assert.equal(stuck(9000).state, "waitingLong");
+    assert.equal(streamAutoRetry(entry, stuck(9000), 9000), false, "the button shows first; the automatic retry waits 15 s");
+    for (let i = 0; i < STREAM_AUTO_RETRIES; i++) assert.equal(streamAutoRetry(entry, stuck(16000), 16000), true);
+    assert.equal(streamAutoRetry(entry, stuck(16000), 16000), false, "the manual button remains after the budget");
 });
 
 test("no automatic retry before the wait is long, while pending, or when not watching", () => {
     assert.equal(streamAutoRetry({ watching: true }, streamRecovery({ watching: true, recoverySince: 0 }, null, 3000)), false);
     const pending = { watching: true, pending: true, recoverySince: 0 };
-    assert.equal(streamAutoRetry(pending, streamRecovery(pending, null, 9000)), false);
+    assert.equal(streamAutoRetry(pending, streamRecovery(pending, null, 16000), 16000), false);
     const idle = { watching: false };
-    assert.equal(streamAutoRetry(idle, streamRecovery(idle, null, 9000)), false);
+    assert.equal(streamAutoRetry(idle, streamRecovery(idle, null, 16000), 16000), false);
 });
 
 test("a live picture refills the retry budget", () => {

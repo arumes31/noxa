@@ -86,15 +86,18 @@ func (s *TCPServer) LogStreamStatus(ctx context.Context, interval time.Duration)
 			continue
 		}
 		for _, publication := range s.enrichStreamOperatorSnapshot(snapshot, "", "", time.Now()).Publications {
-			encoded, err := json.Marshal(publication)
-			if err != nil || len(encoded) > 64*1024 {
-				continue
-			}
-			s.logger.Info("stream status",
+			fields := []zap.Field{
 				zap.String("publisher", publication.PublisherNickname),
 				zap.String("slot", publication.Slot),
 				zap.Int("viewers", len(publication.Viewers)),
-				zap.Any("publication", json.RawMessage(encoded)))
+			}
+			// An oversized or unencodable snapshot still leaves its summary line.
+			if encoded, err := json.Marshal(publication); err == nil && len(encoded) <= 64*1024 {
+				fields = append(fields, zap.Any("publication", json.RawMessage(encoded)))
+			} else {
+				fields = append(fields, zap.Bool("publication_omitted", true))
+			}
+			s.logger.Info("stream status", fields...)
 		}
 	}
 }
