@@ -206,3 +206,41 @@ func TestUnprovenBindingNeverRoutesAndProvenWins(t *testing.T) {
 		t.Fatalf("upgraded binding challenge login = %v, %v", ok, err)
 	}
 }
+
+// An older client's password login (unproven, different key) must not
+// replace the key a newer client proved, or key login stops working.
+func TestUnprovenBindingKeepsProvenKey(t *testing.T) {
+	svc, db := testAuthServiceWithStore(t)
+	ctx := t.Context()
+	uid, err := svc.RegisterUser(ctx, uniqueNickname("proven-keeper"), "binding-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.DB().ExecContext(context.Background(), "DELETE FROM users WHERE unique_id = $1", uid)
+	})
+	owner, err := svc.LookupUser(ctx, uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proven, _, err := GenerateIdentityKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, _, err := GenerateIdentityKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.BindPublicKey(ctx, owner.ID, proven, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.BindPublicKey(ctx, owner.ID, legacy, false); err != nil {
+		t.Fatalf("older client's password login: %v", err)
+	}
+	if got, err := svc.LookupUserByPublicKey(ctx, proven); err != nil || got.ID != owner.ID {
+		t.Fatalf("proven key lost after an unproven login: %+v, %v", got, err)
+	}
+	if _, err := svc.LookupUserByPublicKey(ctx, legacy); !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("unproven key routes a key login: %v", err)
+	}
+}

@@ -170,7 +170,7 @@ func (s *TCPServer) handleJoinChannel(ctx context.Context, client *Client, f *ne
 			client.lockRoleAction()
 			defer client.unlockRoleAction()
 			if err := s.leaveOwnChannelInContext(ctx, client); err != nil {
-				return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, err.Error())
+				return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeUnavailable, err.Error())
 			}
 			return s.acknowledgeJoin(client, requested)
 		})
@@ -232,28 +232,28 @@ func (s *TCPServer) joinChannelAllowed(ctx context.Context, client *Client, msg 
 	// rules prompt keeps the client in the lobby, where the only thing it can
 	// still do is answer.
 	if client.rulesBlocked() {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "accept the server rules before joining a channel")
+		return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "accept the server rules before joining a channel")
 	}
 	ch, ok := s.deps.State.GetChannel(msg.ChannelID)
 	if !ok {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "channel not found")
+		return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeNotFound, "channel not found")
 	}
 	// Text channels are read and written through chat subscriptions. Refuse
 	// before the password check so a voice join never probes the password.
 	if ch.TextOnly {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, state.ErrTextChannel.Error())
+		return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, state.ErrTextChannel.Error())
 	}
 
 	bypassPassword := s.clientInChannel(client.ID, msg.ChannelID) || s.roleAllowed(ctx, client, msg.ChannelID, authorization.BypassChannelPassword)
 	if ch.PasswordHash != "" && !bypassPassword && ch.PasswordHash != verifiedHash {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "channel password changed, retry joining")
+		return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "channel password changed, retry joining")
 	}
 
 	if err := s.moveClient(ctx, client.ID, msg.ChannelID, client.ID); err != nil {
 		if errors.Is(err, errMediaE2EEChannelFull) {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, err.Error())
+			return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, err.Error())
 		}
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, err.Error())
+		return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeNotFound, err.Error())
 	}
 	return s.acknowledgeJoin(client, msg)
 }

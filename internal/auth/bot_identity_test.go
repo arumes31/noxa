@@ -20,7 +20,7 @@ func TestBotIdentitySurvivesEveryAccountLookup(t *testing.T) {
 		t.Fatalf("new account bot flag: %+v, %v", u, err)
 	}
 	key := "test-public-key-" + uid
-	if _, err := db.DB().ExecContext(t.Context(), "UPDATE users SET is_bot = TRUE, public_key = $2 WHERE unique_id = $1", uid, key); err != nil {
+	if _, err := db.DB().ExecContext(t.Context(), "UPDATE users SET is_bot = TRUE, public_key = $2, public_key_proven = TRUE WHERE unique_id = $1", uid, key); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {

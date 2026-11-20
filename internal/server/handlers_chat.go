@@ -136,16 +136,26 @@ func (s *TCPServer) sendSessionChat(ctx context.Context, client *Client, f *netp
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "direct-message edits need per-device copies")
 	}
 
+	// Writes to the sender happen after release: every delivery waits for
+	// roleMetadataMu, so a sender that stopped reading must not hold it.
+	held := false
+	release := func() {
+		if held {
+			held = false
+			s.roleMetadataMu.Unlock()
+		}
+	}
+	defer release()
 	if msg.ToUniqueID == "" {
 		s.roleMetadataMu.Lock()
-		defer s.roleMetadataMu.Unlock()
+		held = true
 		lease := ctx.Value(roleLeaseKey{}).(roleLease)
 		target, exists := s.clientByID(msg.ToClientID)
 		if !exists || !target.isAuthed() || !s.rolePokeTargetVisible(lease.evaluator, client, msg.ToClientID) {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target client not reachable")
+			return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target client not reachable")
 		}
 		if target.isWebTransport() {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, errDMUpdateRequired)
+			return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeUnavailable, errDMUpdateRequired)
 		}
 	}
 
@@ -172,11 +182,11 @@ func (s *TCPServer) sendSessionChat(ctx context.Context, client *Client, f *netp
 	if msg.RecipientPublicKey != "" {
 		recipientKey, valid := canonicalDMKey(msg.RecipientPublicKey)
 		if !msg.Enc || msg.KeyID != 0 || !valid {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid direct-message key binding")
+			return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid direct-message key binding")
 		}
 		senderKey, published := s.senderDMKey(client)
 		if !published {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "publish an encryption key before sending a bound direct message")
+			return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "publish an encryption key before sending a bound direct message")
 		}
 		msg.RecipientPublicKey = recipientKey
 		chat.SenderPublicKey, chat.RecipientPublicKey = senderKey, recipientKey
@@ -184,6 +194,7 @@ func (s *TCPServer) sendSessionChat(ctx context.Context, client *Client, f *netp
 		if msg.ToClientID != "" {
 			target, _ := s.boundDMRecipient(chat.ToUniqueID, msg.ToClientID, recipientKey)
 			if target == nil {
+				release()
 				return s.rejectStaleDMKey(client)
 			}
 		}
@@ -197,7 +208,9 @@ func (s *TCPServer) sendSessionChat(ctx context.Context, client *Client, f *netp
 	case msg.ToUniqueID != "":
 		return s.sendDirectByUniqueID(ctx, client, msg, payload, binding...)
 	default: // msg.ToClientID != ""
-		if err := s.deps.Broadcast.BroadcastToClient(msg.ToClientID, payload); err != nil {
+		err := s.deps.Broadcast.BroadcastToClient(msg.ToClientID, payload)
+		release()
+		if err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target client not reachable")
 		}
 		// Echo the direct message back to the sender.

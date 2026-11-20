@@ -375,9 +375,13 @@ func (a *AuthService) BindPublicKey(ctx context.Context, userID int64, publicKey
 			return fmt.Errorf("binding public key: %w", err)
 		}
 	}
-	// An unproven rebind of the key an account already proved keeps it proven.
-	const q = `UPDATE users SET public_key = $2,
-			public_key_proven = $5::boolean OR COALESCE(public_key_proven AND public_key IN ($2, $4), FALSE)
+	// An unproven bind never displaces a proven key: an older client's
+	// password login must not break the newer client's key login. The
+	// conflict checks still run, so the session may use its key.
+	const q = `UPDATE users SET public_key = CASE
+				WHEN NOT $5::boolean AND public_key_proven AND public_key IS NOT NULL AND public_key NOT IN ($2, $4) THEN public_key
+				ELSE $2 END,
+			public_key_proven = $5::boolean OR COALESCE(public_key_proven AND public_key IS NOT NULL, FALSE)
 		WHERE id = $1 AND NOT EXISTS (
 			SELECT 1 FROM users other
 			WHERE other.id <> $1 AND (other.public_key = $2 OR other.public_key = $4 OR other.unique_id = $3)

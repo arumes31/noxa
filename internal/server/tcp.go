@@ -1750,7 +1750,7 @@ func (s *TCPServer) onDisconnect(client *Client) {
 				UniqueID: client.UniqueID,
 				Nickname: client.nickname(),
 				Reason:   departure,
-			})
+			}, client.UniqueID)
 		default:
 			s.broadcastEvent(eventUserLeft, userEvent{
 				ClientID: client.ID,
@@ -1893,6 +1893,12 @@ func (s *TCPServer) writeFrameLocked(ctx context.Context, client *Client, frame 
 func (s *TCPServer) sendErrorFor(client *Client, origin netproto.MessageType, code uint16, message string) error {
 	errMsg := netproto.Error{Code: code, Message: message, OriginType: uint16(origin)}
 	return s.writeMessage(client, netproto.MsgError, errMsg)
+}
+
+// sendMetadataErrorFor is sendErrorFor while holding roleMetadataMu, which
+// every other delivery waits for: it shares their short write ceiling.
+func (s *TCPServer) sendMetadataErrorFor(client *Client, origin netproto.MessageType, code uint16, message string) error {
+	return s.writeMetadataReply(client, netproto.MsgError, netproto.Error{Code: code, Message: message, OriginType: uint16(origin)})
 }
 
 // sendGlobalError is for asynchronous server-originated failures, which have

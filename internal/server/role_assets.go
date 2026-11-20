@@ -16,12 +16,12 @@ func (s *TCPServer) roleAvatarGet(ctx context.Context, client *Client, msg netpr
 		defer s.roleMetadataMu.Unlock()
 		if msg.UniqueID != client.uniqueID() {
 			if s.deps.State == nil {
-				return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "state backend unavailable")
+				return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "state backend unavailable")
 			}
 			member, ok := s.deps.State.GetClientByUniqueID(msg.UniqueID)
 			if !ok || !e.Evaluate(client.userID(), member.ChannelID, authorization.ViewChannel).Allowed ||
 				(s.deps.State.PresenceHidden(member) && !e.Evaluate(client.userID(), 0, authorization.ViewConnectionInfo).Allowed) {
-				return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "no avatar for this user")
+				return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeNotFound, "no avatar for this user")
 			}
 		}
 		return s.readAvatar(ctx, client, msg)

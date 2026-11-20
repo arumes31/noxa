@@ -67,6 +67,9 @@ type LinkRegistry struct {
 	newToken    func() (string, error)
 	revoked     map[string]struct{}
 	active      map[*os.File]string
+	// serving counts running downloads per token. Expiry only stops new
+	// requests: it must not cut off a download that began in time.
+	serving map[string]int
 	// beforeServeOpen is a deterministic concurrency hook used by tests. It
 	// runs while mu is held immediately before a link file is opened.
 	beforeServeOpen func()
@@ -83,6 +86,7 @@ func NewLinkRegistry(rootDir string) *LinkRegistry {
 		newToken:    func() (string, error) { return randomHex(linkTokenBytes) },
 		revoked:     map[string]struct{}{},
 		active:      map[*os.File]string{},
+		serving:     map[string]int{},
 	}
 }
 
@@ -195,9 +199,10 @@ func (r *LinkRegistry) take(token string) (link, bool) {
 func (r *LinkRegistry) openActive(token string) (link, *os.File, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.pruneExpiredLocked(r.now())
+	now := r.now()
+	r.pruneExpiredLocked(now)
 	l, ok := r.links[token]
-	if !ok {
+	if !ok || !now.Before(l.expires) {
 		return link{}, nil, false
 	}
 	channel := linkChannel(l.path)
@@ -225,12 +230,13 @@ func (r *LinkRegistry) openActive(token string) (link, *os.File, bool) {
 	}
 	r.active[f] = channel
 	r.activeLinks[f] = l
+	r.serving[token]++
 	return l, f, true
 }
 
 func (r *LinkRegistry) pruneExpiredLocked(now time.Time) {
 	for t, l := range r.links {
-		if !now.Before(l.expires) {
+		if !now.Before(l.expires) && r.serving[t] == 0 {
 			delete(r.links, t)
 		}
 	}
@@ -261,6 +267,9 @@ func (r *LinkRegistry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		r.mu.Lock()
 		delete(r.active, f)
 		delete(r.activeLinks, f)
+		if r.serving[token]--; r.serving[token] <= 0 {
+			delete(r.serving, token)
+		}
 		r.mu.Unlock()
 		_ = f.Close()
 	}()

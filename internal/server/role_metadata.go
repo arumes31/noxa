@@ -20,12 +20,12 @@ func (s *TCPServer) roleClientInfo(ctx context.Context, client *Client, targetID
 		defer s.roleMetadataMu.Unlock()
 		resp, err := s.buildRoleClientInfo(e, client.userID(), client.uniqueID(), client.ID, targetID)
 		if errors.Is(err, authorization.ErrRoleForbidden) {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "client not found")
+			return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeNotFound, "client not found")
 		}
 		if err != nil {
 			return err
 		}
-		return s.writeMessage(client, netproto.MsgClientInfoResponse, resp)
+		return s.writeMetadataReply(client, netproto.MsgClientInfoResponse, resp)
 	})
 }
 
@@ -86,7 +86,7 @@ func (s *TCPServer) roleServerInfo(ctx context.Context, client *Client) error {
 		if err != nil {
 			return err
 		}
-		return s.writeMessage(client, netproto.MsgServerInfoResponse, resp)
+		return s.writeMetadataReply(client, netproto.MsgServerInfoResponse, resp)
 	})
 }
 

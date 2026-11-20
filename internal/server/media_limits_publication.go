@@ -77,7 +77,8 @@ func (s *TCPServer) notifyMediaLimitsChanged() {
 }
 
 func (s *TCPServer) writeAuthenticationResponse(ctx context.Context, client *Client, response netproto.AuthResponse) error {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// Written while holding roleMetadataMu (finishAuth).
+	ctx, cancel := context.WithTimeout(ctx, metadataWriteCeiling)
 	defer cancel()
 	if err := client.wmu.LockContext(ctx); err != nil {
 		return err

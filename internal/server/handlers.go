@@ -119,7 +119,7 @@ func (s *TCPServer) sendSnapshot(client *Client) error {
 		defer s.roleMetadataMu.Unlock()
 		snapshot := buildRoleSnapshot(s.deps.State, e, client.userID(), client.uniqueID())
 		s.decorateConnecting(snapshot)
-		if err := s.writeMessage(client, netproto.MsgSnapshot, snapshot); err != nil {
+		if err := s.writeMetadataReply(client, netproto.MsgSnapshot, snapshot); err != nil {
 			return err
 		}
 		client.recordSnapshot(snapshot)
@@ -152,13 +152,37 @@ func (s *TCPServer) broadcastEvent(eventType string, payload any) {
 	s.deps.Broadcast.BroadcastEvent(eventType, raw)
 }
 
-// broadcastToAdmins sends an event to every online server admin (used by
-// the invisible-status semantics, 381).
-func (s *TCPServer) broadcastToAdmins(eventType string, payload any) {
+// broadcastToAdmins sends an invisible member's event only to sessions that
+// may see it (381): ViewConnectionInfo, or the member's own other sessions.
+// Others must not even get the (unchanged) snapshot it would cause, whose
+// arrival times the hidden member's presence.
+func (s *TCPServer) broadcastToAdmins(eventType string, payload userEvent, uniqueID string) {
 	if s.deps == nil || s.deps.Broadcast == nil {
 		return
 	}
-	s.broadcastEvent(eventType, payload)
+	if s.deps.Authority == nil {
+		// Legacy mode sends no snapshots; callers' events name nobody there.
+		s.broadcastEvent(eventType, payload)
+		return
+	}
+	raw, err := eventEnvelope(eventType, payload)
+	if err != nil {
+		return
+	}
+	s.mu.RLock()
+	clients := make([]*Client, 0, len(s.clients))
+	for _, c := range s.clients {
+		clients = append(clients, c)
+	}
+	s.mu.RUnlock()
+	_ = s.deps.Authority.WithPolicy(context.Background(), func(e *authorization.RoleEvaluator) error {
+		for _, c := range clients {
+			if c.uniqueID() == uniqueID || e.Evaluate(c.userID(), 0, authorization.ViewConnectionInfo).Allowed {
+				_ = s.deps.Broadcast.BroadcastToClient(c.ID, raw)
+			}
+		}
+		return nil
+	})
 }
 
 // eventEnvelope wraps payload in the {"type": ..., "data": ...} envelope used

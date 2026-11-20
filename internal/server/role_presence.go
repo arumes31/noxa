@@ -14,7 +14,7 @@ func (s *TCPServer) rolePoke(ctx context.Context, client *Client, msg netproto.P
 		e := ctx.Value(roleLeaseKey{}).(roleLease).evaluator
 		target, ok := s.clientByID(msg.ClientID)
 		if !ok || !target.isAuthed() || !s.rolePokeTargetVisible(e, client, target.ID) {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target client not found")
+			return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target client not found")
 		}
 		return s.sendPoke(ctx, client, target, msg)
 	})

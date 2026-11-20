@@ -1,5 +1,6 @@
-// Package redisx wraps a go-redis client for noxa. Redis backs later-phase
-// features (pub/sub fan-out, rate limiting) and is treated as optional: a
+// Package redisx wraps a go-redis client for noxa. Redis is only a readiness
+// dependency today (live state stays in the one server process) and is
+// treated as optional: a
 // startup Ping failure leaves the client retained in degraded mode so later
 // readiness probes can observe recovery without restarting the server.
 package redisx
@@ -129,8 +130,7 @@ func (c *Client) Ping(ctx context.Context) error {
 	return nil
 }
 
-// Raw exposes the underlying *redis.Client for later phases (pub/sub, rate
-// limiting).
+// Raw exposes the underlying *redis.Client (tests inspect its options).
 func (c *Client) Raw() *redis.Client {
 	return c.rdb
 }

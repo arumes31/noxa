@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"reflect"
 	"testing"
 
 	"noxa/internal/authorization"
@@ -162,4 +163,49 @@ func scratchStoreDSN(t *testing.T, s *Store) string {
 	u.Path = "/" + databaseName
 	u.RawPath = ""
 	return u.String()
+}
+
+// A role change returns the policy exactly as later reads see it. The
+// Authority caches the result and compares reads with DeepEqual, so any
+// difference forces an exclusive reload (dropping voice) on the next login.
+func TestRoleChangeReturnsStoredPolicy(t *testing.T) {
+	s := testMigratedStore(t)
+	if err := s.MigrateContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var ownerID, memberID int64
+	if err := s.db.QueryRowContext(t.Context(), `INSERT INTO users(unique_id,nickname) VALUES('stored-owner','Owner') RETURNING id`).Scan(&ownerID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRowContext(t.Context(), `INSERT INTO users(unique_id,nickname) VALUES('stored-member','Member') RETURNING id`).Scan(&memberID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PrepareRolePolicy(t.Context(), ownerID); err != nil {
+		t.Fatal(err)
+	}
+	activated, err := s.ActivatePreparedRolePolicy(t.Context(), "stored-owner", func() (uint16, []byte, error) {
+		return 1, []byte{1, 2, 3}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	roleIDs := make([]int64, 0, len(activated.Policy.Roles))
+	for i := len(activated.Policy.Roles) - 1; i >= 0; i-- { // deliberately not sorted
+		if role := activated.Policy.Roles[i]; role.ID != activated.Policy.EveryoneID && role.Name == "Member" {
+			roleIDs = append(roleIDs, role.ID)
+		}
+	}
+	changed, err := s.ChangeRolePolicy(t.Context(), ownerID, authorization.RoleChange{
+		Kind: authorization.MemberRolesSet, ExpectedRevision: activated.Policy.Revision, UserID: memberID, RoleIDs: roleIDs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := s.RolePolicy(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(changed, stored) {
+		t.Fatalf("returned policy differs from stored policy:\n%+v\n%+v", changed, stored)
+	}
 }

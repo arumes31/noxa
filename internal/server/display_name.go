@@ -35,11 +35,11 @@ func (s *TCPServer) handleDisplayNameSet(ctx context.Context, client *Client, f 
 		}
 		for _, member := range s.deps.State.ListClients() {
 			if member.ClientID != client.ID && member.Nickname == name {
-				return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "display name is already in use")
+				return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeMalformed, "display name is already in use")
 			}
 		}
 		if !s.deps.State.SetNickname(client.ID, name) {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "session unavailable")
+			return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "session unavailable")
 		}
 		client.mu.Lock()
 		client.Username = name

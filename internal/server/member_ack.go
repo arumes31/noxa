@@ -6,7 +6,8 @@ func (s *TCPServer) acknowledgeJoin(client *Client, msg netproto.JoinChannel) er
 	if !msg.AckRequested {
 		return nil
 	}
-	return s.writeCommittedReply(client, netproto.MsgChannelJoined, netproto.ChannelJoined{ClientID: client.ID, ChannelID: msg.ChannelID})
+	// Both callers hold roleMetadataMu.
+	return s.writeMetadataReply(client, netproto.MsgChannelJoined, netproto.ChannelJoined{ClientID: client.ID, ChannelID: msg.ChannelID})
 }
 
 func (s *TCPServer) acknowledgeMove(client *Client, msg netproto.MoveClient) error {

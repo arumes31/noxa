@@ -14,7 +14,7 @@ type requestBucket struct {
 }
 type sessionRequestBudget struct {
 	mu      sync.Mutex
-	buckets [9]requestBucket
+	buckets [10]requestBucket
 }
 
 func (b *sessionRequestBudget) allow(mt netproto.MessageType, now time.Time) bool {
@@ -41,6 +41,10 @@ func (b *sessionRequestBudget) allow(mt netproto.MessageType, now time.Time) boo
 	case netproto.MsgSpokenNameGet:
 		// One per member entering the channel; cached clips are cheap.
 		class, burst, rate = 7, 40, 1
+	case netproto.MsgAudioStateSet:
+		// A real change rebuilds a snapshot for every recipient; repeats are
+		// only acknowledged. Loose enough for rapid mute toggling.
+		class, burst, rate = 9, 20, 4
 	case netproto.MsgSetStatus, netproto.MsgDisplayNameSet:
 		// Each change rebuilds a snapshot for every recipient.
 		class, burst, rate = 5, 5, 0.5

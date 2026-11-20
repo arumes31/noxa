@@ -145,3 +145,53 @@ func TestLinkGuardSeesLinkFolder(t *testing.T) {
 		}
 	}
 }
+
+// expiringResponse runs onFirstWrite before the first body chunk is written.
+type expiringResponse struct {
+	*httptest.ResponseRecorder
+	onFirstWrite func()
+}
+
+func (w *expiringResponse) Write(b []byte) (int, error) {
+	if w.onFirstWrite != nil {
+		hook := w.onFirstWrite
+		w.onFirstWrite = nil
+		hook()
+	}
+	return w.ResponseRecorder.Write(b)
+}
+
+// Expiry stops new requests, not a download that began in time, even when
+// another request prunes expired links while it is running.
+func TestDownloadOutlivesLinkExpiry(t *testing.T) {
+	data := bytes.Repeat([]byte("0123456789abcdef"), 16<<10) // 256 KiB: many copy chunks
+	r, path := newTestLinkRegistry(t, data)
+	now := time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC)
+	r.now = func() time.Time { return now }
+	r.accessGuard = func(ctx context.Context, _ Principal, _ int64, _ string, effect func(context.Context) error) error {
+		return effect(ctx)
+	}
+	principal := &Principal{UserID: 2, SessionID: "session"}
+	token, _, err := r.create(path, "big.bin", principal, 7, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := &expiringResponse{ResponseRecorder: httptest.NewRecorder(), onFirstWrite: func() {
+		now = now.Add(LinkTTL + time.Minute)
+		if _, _, err := r.create(path, "other.bin", principal, 7, ""); err != nil { // prunes
+			t.Error(err)
+		}
+		late := httptest.NewRecorder()
+		r.ServeHTTP(late, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/dl/"+token, nil))
+		if late.Code != http.StatusNotFound {
+			t.Errorf("new request on an expired link = %d, want 404", late.Code)
+		}
+	}}
+	r.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/dl/"+token, nil))
+	if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), data) {
+		t.Fatalf("running download cut off: status %d, %d of %d bytes", response.Code, response.Body.Len(), len(data))
+	}
+	if _, ok := r.take(token); ok {
+		t.Fatal("expired link survived the end of its download")
+	}
+}

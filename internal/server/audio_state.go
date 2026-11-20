@@ -24,11 +24,16 @@ func (s *TCPServer) handleAudioStateSet(ctx context.Context, client *Client, fra
 		client.roleActionMu.Lock()
 		defer client.roleActionMu.Unlock()
 		muted := msg.Muted || msg.Deafened
-		if !s.deps.State.SetAudioState(client.ID, muted, msg.Deafened) {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "session unavailable")
+		changed, ok := s.deps.State.SetAudioState(client.ID, muted, msg.Deafened)
+		if !ok {
+			return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "session unavailable")
 		}
 		saved := netproto.AudioStateSaved{ClientID: client.ID, Muted: muted, Deafened: msg.Deafened}
-		s.broadcastEvent(eventAudioStateChanged, saved)
-		return s.writeCommittedReply(client, netproto.MsgAudioStateSaved, saved)
+		// Each broadcast rebuilds a snapshot for every recipient: a repeat
+		// of the current state is only acknowledged.
+		if changed {
+			s.broadcastEvent(eventAudioStateChanged, saved)
+		}
+		return s.writeMetadataReply(client, netproto.MsgAudioStateSaved, saved)
 	})
 }

@@ -25,7 +25,7 @@ func (s *TCPServer) handleVoiceQueue(ctx context.Context, client *Client, frame 
 		defer s.roleMetadataMu.Unlock()
 		self, exists := s.deps.State.GetClient(client.ID)
 		if !exists || self.ChannelID != request.ChannelID || !e.Evaluate(client.userID(), request.ChannelID, authorization.Connect).Allowed {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "join this voice channel first")
+			return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "join this voice channel first")
 		}
 		target := request.ClientID
 		if target == "" {
@@ -33,12 +33,12 @@ func (s *TCPServer) handleVoiceQueue(ctx context.Context, client *Client, frame 
 		}
 		moderating := request.Action == "next" || request.Action == "clear" || target != client.ID
 		if (request.Action == "raise" && target != client.ID) || (moderating && !e.Evaluate(client.userID(), request.ChannelID, authorization.MuteMembers).Allowed) {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "queue moderation requires Mute members")
+			return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "queue moderation requires Mute members")
 		}
 		if target != client.ID && request.Action == "lower" {
 			member, ok := s.deps.State.GetClient(target)
 			if !ok || member.ChannelID != request.ChannelID || (member.Status == "invisible" && member.UniqueID != client.uniqueID() && !e.Evaluate(client.userID(), 0, authorization.ViewConnectionInfo).Allowed) {
-				return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "member not found")
+				return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeNotFound, "member not found")
 			}
 		}
 		// The metadata barrier serializes queue and membership changes. Check
@@ -61,12 +61,12 @@ func (s *TCPServer) handleVoiceQueue(ctx context.Context, client *Client, frame 
 			affected = affected || request.Action == "clear" && (member.HandRaisedOrder > 0 || member.HandCalled)
 			affected = affected || request.Action == "next" && firstID != "" && (member.ClientID == firstID || member.HandCalled)
 			if affected && (!e.CanManageMember(client.userID(), member.UserID) || (member.Status == "invisible" && member.UniqueID != client.uniqueID() && !e.Evaluate(client.userID(), 0, authorization.ViewConnectionInfo).Allowed)) {
-				return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "queue moderation denied")
+				return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "queue moderation denied")
 			}
 		}
 		chosen, err := s.deps.State.UpdateVoiceQueue(request.ChannelID, target, request.Action)
 		if err != nil {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "voice queue member unavailable")
+			return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeNotFound, "voice queue member unavailable")
 		}
 		// A repeated raise or lower (or an empty clear) changes nothing; it
 		// must not cost every connected client a fresh snapshot.
@@ -80,7 +80,7 @@ func (s *TCPServer) handleVoiceQueue(ctx context.Context, client *Client, frame 
 		if request.Action == "next" || request.Action == "clear" {
 			chosen = ""
 		}
-		return s.writeCommittedReply(client, netproto.MsgVoiceQueueResult, netproto.VoiceQueueResult{ChannelID: request.ChannelID, Action: request.Action, ClientID: chosen})
+		return s.writeMetadataReply(client, netproto.MsgVoiceQueueResult, netproto.VoiceQueueResult{ChannelID: request.ChannelID, Action: request.Action, ClientID: chosen})
 	})
 }
 
