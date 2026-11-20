@@ -918,3 +918,11 @@ test("a queued name is not played after Announce names is turned off", () => {
     f.tick(150);
     assert.equal(f.played[0].id, "speech_en_user_join");
 });
+
+test("every join/leave announcement in main.js names its speaker", () => {
+    // Role-filtered servers report membership by snapshot; that path once dropped the speaker.
+    const source = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+    const calls = source.split('notify("join_leave"').slice(1).map(rest => rest.slice(0, rest.indexOf("});")));
+    assert.ok(calls.length >= 4);
+    for (const call of calls) assert.match(call, /speaker:/);
+});
