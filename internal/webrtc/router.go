@@ -215,6 +215,7 @@ type Router struct {
 
 	videoBitrateLimit int
 	videoBudgets      map[string]videoBudget // publisher session; retained across moves/ICE rebuilds
+	videoBudgetMu     sync.Mutex             // leaf lock for videoBudgets, taken after mu
 	// Policy writes drain earlier video output writes. Acquire this lock only
 	// inside a media guard's write callback, never while entering that guard.
 	videoPolicyMu contextRWMutex
@@ -1662,7 +1663,9 @@ func (r *Router) detachPeer(clientID string, leaveChannel bool, only *PeerConnec
 	}
 	if leaveChannel {
 		r.mu.Lock()
+		r.videoBudgetMu.Lock()
 		delete(r.videoBudgets, clientID)
+		r.videoBudgetMu.Unlock()
 		r.mu.Unlock()
 	}
 }

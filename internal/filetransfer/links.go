@@ -21,10 +21,11 @@ import (
 const LinkTTL = 15 * time.Minute
 
 const (
-	maxActiveLinks     = 4096
-	linkTokenBytes     = 16
-	linkTokenHexLength = linkTokenBytes * 2
-	linkTokenAttempts  = 4
+	maxActiveLinks       = 4096
+	maxLinksPerPrincipal = 64
+	linkTokenBytes       = 16
+	linkTokenHexLength   = linkTokenBytes * 2
+	linkTokenAttempts    = 4
 )
 
 // ErrTooManyLinks prevents an unbounded in-memory link registry.
@@ -125,6 +126,18 @@ func (r *LinkRegistry) create(path, name string, principal *Principal, scope int
 	r.pruneExpiredLocked(now)
 	if len(r.links) >= r.maxLinks {
 		return "", time.Time{}, ErrTooManyLinks
+	}
+	// One account must not fill the shared registry for everyone else.
+	if key, ok := principalKeyOf(principal); ok {
+		n := 0
+		for _, l := range r.links {
+			if k, ok := principalKeyOf(l.principal); ok && k == key {
+				n++
+			}
+		}
+		if n >= maxLinksPerPrincipal {
+			return "", time.Time{}, ErrTooManyLinks
+		}
 	}
 	for range linkTokenAttempts {
 		token, err := r.newToken()

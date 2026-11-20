@@ -230,16 +230,3 @@ export function linksIn(nodes) {
     walk(nodes);
     return out;
 }
-
-/** Classifies a URL for the server's preview service. */
-export function previewProvider(url) {
-    let host;
-    try { host = new URL(url).hostname.toLowerCase().replace(/^www\./, ""); } catch { return null; }
-    if (host === "youtube.com" || host === "m.youtube.com" || host === "youtu.be") return "youtube";
-    if (host === "x.com" || host === "twitter.com") return "x";
-    if (host === "twitch.tv" || host === "m.twitch.tv" || host === "clips.twitch.tv") return "twitch";
-    if (host === "vimeo.com") return "vimeo";
-    if (host === "dailymotion.com" || host === "dai.ly") return "dailymotion";
-    if (host === "whatnot.com") return "whatnot";
-    return url.startsWith("https://") ? "web" : null;
-}

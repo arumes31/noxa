@@ -39,3 +39,21 @@ func dialNamedIdentity(t *testing.T, addr, uniqueID, public, private, nickname s
 	readOfType(t, conn, netproto.MsgSnapshot)
 	return conn, response
 }
+
+// A guest with a linked device has a second session without a verified key;
+// lookup must find the verified one whatever the map order.
+func TestRoleGuestFindsVerifiedSessionAmongSeveral(t *testing.T) {
+	s := &TCPServer{clients: map[string]*Client{}}
+	for i := range 8 {
+		s.clients[string(rune('a'+i))] = &Client{UniqueID: "g", authed: true}
+	}
+	s.clients["verified"] = &Client{UniqueID: "g", authed: true, verifiedGuestKey: "key"}
+	for range 20 {
+		if c, ok := s.roleGuest("g"); !ok || c.verifiedGuestKey == "" {
+			t.Fatal("verified guest session not found")
+		}
+	}
+	if _, ok := s.roleGuest("other"); ok {
+		t.Fatal("unknown guest found")
+	}
+}

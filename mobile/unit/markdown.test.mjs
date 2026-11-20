@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { linksIn, parseMarkdown, plainText, previewProvider } from "../src/core/markdown.js";
+import { linksIn, parseMarkdown, plainText } from "../src/core/markdown.js";
 
 test("inline markup nests and keeps text verbatim", () => {
     const nodes = parseMarkdown("say **hi *there*** and __under__ ~~gone~~ `x < y`");
@@ -57,17 +57,6 @@ test("tables parse header and rows and newlines become breaks", () => {
     assert.equal(table.rows.length, 2);
     assert.equal(table.rows[0][1][0].type, "strong");
     assert.equal(plainText(nodes), "a\nb\nh1 | h2\n1 | 2\n3 | 4\ntail");
-});
-
-test("preview providers are classified by host", () => {
-    assert.equal(previewProvider("https://youtu.be/abc"), "youtube");
-    assert.equal(previewProvider("https://www.youtube.com/watch?v=1"), "youtube");
-    assert.equal(previewProvider("https://x.com/a/status/1"), "x");
-    assert.equal(previewProvider("https://clips.twitch.tv/x"), "twitch");
-    assert.equal(previewProvider("https://vimeo.com/1"), "vimeo");
-    assert.equal(previewProvider("https://example.org/page"), "web");
-    assert.equal(previewProvider("http://example.org/page"), null);
-    assert.equal(previewProvider("not a url"), null);
 });
 
 test("block markdown becomes heading, list, quote and rule nodes", () => {

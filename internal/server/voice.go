@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"sync/atomic"
-	"time"
 
 	"go.uber.org/zap"
 
@@ -32,10 +31,6 @@ const (
 	// cue, flash the taskbar (32) and remember who to whisper back to (33).
 	eventWhisper = "whisper"
 )
-
-// mediaPermissionTimeout bounds backend permission work triggered by voice
-// callbacks, which have no request context to inherit.
-const mediaPermissionTimeout = time.Second
 
 // whisperTargeter is the optional VoiceBackend capability that reports which
 // clients a speaker's active whisper currently reaches. webrtc.Voice
@@ -470,16 +465,24 @@ type talkDecision struct {
 }
 
 // canPublishVideo checks the client's current video capabilities and channel.
+// Like canTalk it runs for every packet and must never block on the policy
+// gate; guardRoleMedia re-authorizes each recipient write.
 func (s *TCPServer) canPublishVideo(clientID string) bool {
 	client, ok := s.clientByID(clientID)
-	if !ok {
+	if !ok || s.deps == nil || s.deps.Authority == nil {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), mediaPermissionTimeout)
-	defer cancel()
 	channelID, _, present := s.deps.State.ClientChannelState(clientID)
-	return present && channelID > 0 && !client.rulesBlocked() &&
-		(s.roleAllowed(ctx, client, channelID, authorization.ShareCamera) || s.roleAllowed(ctx, client, channelID, authorization.ShareScreen))
+	if !present || channelID <= 0 || client.rulesBlocked() || client.sessionRevoked() {
+		return false
+	}
+	allowed := false
+	err := s.deps.Authority.TryWithPolicy(func(e *authorization.RoleEvaluator) error {
+		allowed = e.Evaluate(client.userID(), channelID, authorization.ShareCamera).Allowed ||
+			e.Evaluate(client.userID(), channelID, authorization.ShareScreen).Allowed
+		return nil
+	})
+	return resolveTalk(&client.videoDecision, channelID, allowed, err)
 }
 
 // onSpeakingChanged is the router's speaking-state callback: it updates the

@@ -10,14 +10,20 @@ type roleGuestStore interface {
 	AssignGuestRoles(context.Context, int64, string, string, string, authorization.RoleChange) (authorization.RolePolicy, int64, error)
 }
 
+// roleGuest returns a live key-verified guest session. A guest may also hold
+// linked-device sessions without a verified key, so every session is checked.
 func (s *TCPServer) roleGuest(uniqueID string) (*Client, bool) {
-	client, ok := s.clientByUniqueID(uniqueID)
-	if !ok {
-		return nil, false
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, client := range s.clients {
+		client.mu.RLock()
+		ok := client.UniqueID == uniqueID && client.authed && !client.revoked && client.UserID == 0 && client.verifiedGuestKey != ""
+		client.mu.RUnlock()
+		if ok {
+			return client, true
+		}
 	}
-	client.mu.RLock()
-	defer client.mu.RUnlock()
-	return client, client.authed && !client.revoked && client.UserID == 0 && client.verifiedGuestKey != ""
+	return nil, false
 }
 
 func (s *TCPServer) assignGuestRoles(ctx context.Context, actor *Client, change authorization.RoleChange, validate func(context.Context) error) (authorization.RolePolicy, error) {

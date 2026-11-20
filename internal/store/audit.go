@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/lib/pq"
+	"go.uber.org/zap"
 )
 
 // AuditEntry is one audit log row.
@@ -22,7 +23,10 @@ type AuditEntry struct {
 // AuditScoped writes scope separately from potentially user-authored detail.
 func (s *Store) AuditScoped(ctx context.Context, actor, action, target, detail string, channelIDs []int64) {
 	const q = `INSERT INTO audit_log (actor_unique_id,action,target,detail,scope_channel_ids) VALUES($1,$2,$3,$4,$5)`
-	_, _ = s.db.ExecContext(ctx, q, actor, action, target, detail, pq.Array(channelIDs))
+	// Best-effort: an audit failure must not break the action, but it must not vanish either.
+	if _, err := s.db.ExecContext(ctx, q, actor, action, target, detail, pq.Array(channelIDs)); err != nil && s.logger != nil {
+		s.logger.Warn("audit write failed", zap.String("action", action), zap.String("target", target), zap.Error(err))
+	}
 }
 
 // Audit writes an audit log entry.

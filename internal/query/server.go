@@ -44,7 +44,9 @@ type Server struct {
 	// IdleTimeout closes connections that send no command for this long.
 	// Defaults to 5 minutes.
 	IdleTimeout time.Duration
-	// MaxLineLength is the longest accepted command line. Defaults to 4096.
+	// MaxLineLength is the longest accepted command line. The default fits the
+	// largest valid command: 64 KiB of server text, where escaping can double
+	// every byte, plus JSON overhead.
 	MaxLineLength int
 	// MaxLoginFailures is the number of failed logins from one scoped
 	// principal before it is locked out. Defaults to 5.
@@ -88,7 +90,7 @@ func New(addr string, logger *zap.Logger, backend Backend) *Server {
 		Addr:                   addr,
 		MaxConns:               10,
 		IdleTimeout:            5 * time.Minute,
-		MaxLineLength:          4096,
+		MaxLineLength:          defaultMaxLineLength,
 		MaxLoginFailures:       auth.DefaultLoginFailureMaxFailures,
 		LockoutDuration:        auth.DefaultLoginFailureLockout,
 		LoginFailureTTL:        auth.DefaultLoginFailureTTL,
@@ -325,13 +327,15 @@ func (s *Server) runSession(ctx context.Context, sess *session) {
 	}
 }
 
+const defaultMaxLineLength = 256 * 1024
+
 var errQueryLineTooLong = errors.New("query command line too long")
 
 // readQueryLine bounds accumulation even when the peer never sends a newline.
 // One optional CR before LF does not count toward the command length.
 func readQueryLine(r *bufio.Reader, limit int) (string, error) {
 	if limit <= 0 {
-		limit = 4096
+		limit = defaultMaxLineLength
 	}
 	var line []byte
 	for {

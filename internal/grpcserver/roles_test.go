@@ -41,7 +41,8 @@ func TestRoleGRPCMutationAndClosedLegacySurfaces(t *testing.T) {
 	var authCalls, changes atomic.Int32
 	var denied atomic.Bool
 	want := authorization.RoleChange{
-		Kind: authorization.MemberRolesSet, ExpectedRevision: 7, RoleID: 42, RoleIDs: []int64{42, 43}, UserID: 99,
+		KeepDeletionProtection: true,
+		Kind:                   authorization.MemberRolesSet, ExpectedRevision: 7, RoleID: 42, RoleIDs: []int64{42, 43}, UserID: 99,
 		Role:    authorization.Role{ID: 42, Name: "Support", Position: 2, Color: "#123456", Icon: "S", Hoist: true, Mentionable: true, Permissions: []authorization.Capability{authorization.ViewChannel}},
 		Channel: authorization.ChannelPolicy{ChannelID: 2, ParentID: 1, Synced: true, Overrides: []authorization.RoleOverride{{RoleID: 42, UserID: 99, Capability: authorization.ViewChannel, Effect: authorization.Deny}}},
 	}
