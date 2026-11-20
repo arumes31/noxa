@@ -45,8 +45,8 @@ type Server struct {
 	// Defaults to 5 minutes.
 	IdleTimeout time.Duration
 	// MaxLineLength is the longest accepted command line. The default fits the
-	// largest valid command: 64 KiB of server text, where escaping can double
-	// every byte, plus JSON overhead.
+	// largest valid command: 64 KiB of server text where JSON and query
+	// escaping turn one byte into up to seven, plus framing.
 	MaxLineLength int
 	// MaxLoginFailures is the number of failed logins from one scoped
 	// principal before it is locked out. Defaults to 5.
@@ -327,7 +327,7 @@ func (s *Server) runSession(ctx context.Context, sess *session) {
 	}
 }
 
-const defaultMaxLineLength = 256 * 1024
+const defaultMaxLineLength = 512 * 1024
 
 var errQueryLineTooLong = errors.New("query command line too long")
 

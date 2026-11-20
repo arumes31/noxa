@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"sync/atomic"
-	"time"
 
 	"go.uber.org/zap"
 
@@ -488,10 +487,13 @@ func (s *TCPServer) canPublishVideo(clientID string) bool {
 		// commit): wait once, because a refusal here ends the track for good.
 		// Every later packet reuses the decision and never waits.
 		if previous := client.videoDecision.Load(); previous == nil || previous.channelID != channelID {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
+			// The wait is bounded by the policy lease's own limits. Only a
+			// grant is remembered: a timeout must not read as a denial later.
+			ctx := context.Background()
 			allowed = s.roleAllowed(ctx, client, channelID, authorization.ShareCamera) || s.roleAllowed(ctx, client, channelID, authorization.ShareScreen)
-			client.videoDecision.Store(&talkDecision{channelID: channelID, allowed: allowed})
+			if allowed {
+				client.videoDecision.Store(&talkDecision{channelID: channelID, allowed: true})
+			}
 			return allowed
 		}
 	}
