@@ -772,10 +772,9 @@ func (m *Manager) MediaState(clientID string) (MediaState, bool) {
 		m.mu.RUnlock()
 		return MediaState{}, false
 	}
-	st := MediaState{ChannelID: c.ChannelID, ServerMuted: c.ServerMuted, ServerDeafened: c.ServerDeafened}
-	presence := Client{Status: c.Status, HideLobbyPresence: c.HideLobbyPresence, ChannelID: c.ChannelID}
+	st := MediaState{ChannelID: c.ChannelID, ServerMuted: c.ServerMuted, ServerDeafened: c.ServerDeafened,
+		Hidden: presenceHidden(c, func(id int64) (*Channel, bool) { ch, ok := m.channels[id]; return ch, ok })}
 	m.mu.RUnlock()
-	st.Hidden = m.PresenceHidden(&presence)
 	return st, true
 }
 
@@ -957,6 +956,12 @@ func (m *Manager) PresenceHidden(c *Client) bool {
 	if c == nil {
 		return false
 	}
+	return presenceHidden(c, m.GetChannel)
+}
+
+// presenceHidden is the PresenceHidden rule; channel looks up a channel
+// without locking when the caller already holds m.mu.
+func presenceHidden(c *Client, channel func(int64) (*Channel, bool)) bool {
 	if c.Status == "invisible" {
 		return true
 	}
@@ -966,7 +971,7 @@ func (m *Manager) PresenceHidden(c *Client) bool {
 	if c.ChannelID == 0 {
 		return true
 	}
-	ch, ok := m.GetChannel(c.ChannelID)
+	ch, ok := channel(c.ChannelID)
 	return ok && ch.SystemKind == "home"
 }
 
