@@ -1,11 +1,14 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 
 	"noxa/internal/netproto"
 	"noxa/internal/state"
@@ -56,6 +59,44 @@ func (s *TCPServer) StreamOperatorDiagnosticsHandler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(encoded)
 	})
+}
+
+// LogStreamStatus writes one info line per live publication every interval
+// until ctx ends: the same bounded snapshot as /debug/streams (no media, no
+// addresses). A viewer that never got a picture can then be diagnosed after
+// the stream is over. It logs nothing while nobody shares.
+func (s *TCPServer) LogStreamStatus(ctx context.Context, interval time.Duration) {
+	if s.deps == nil || s.deps.State == nil {
+		return
+	}
+	backend, ok := s.deps.Voice.(videoOperatorDiagnosticsBackend)
+	if !ok {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		snapshot := backend.VideoOperatorDiagnostics()
+		if snapshot == nil || len(snapshot.Publications) == 0 {
+			continue
+		}
+		for _, publication := range s.enrichStreamOperatorSnapshot(snapshot, "", "", time.Now()).Publications {
+			encoded, err := json.Marshal(publication)
+			if err != nil || len(encoded) > 64*1024 {
+				continue
+			}
+			s.logger.Info("stream status",
+				zap.String("publisher", publication.PublisherNickname),
+				zap.String("slot", publication.Slot),
+				zap.Int("viewers", len(publication.Viewers)),
+				zap.Any("publication", json.RawMessage(encoded)))
+		}
+	}
 }
 
 func streamOperatorFilter(raw string) (id, nickname string, valid bool) {

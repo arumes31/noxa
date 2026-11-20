@@ -2,7 +2,7 @@ import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
 import { streamRequest, stopPublications, publicationSnapshot, reconcilePublications, reconcilePublicationUploads, isCurrentPublication } from "./stream-publication.js";
 import { t } from "./i18n.js";
 import { updateShareViewers } from "./share-status.js";
-import { streamRecovery } from "./stream-recovery.js";
+import { streamAutoRetry, streamRecovery } from "./stream-recovery.js";
 import { receiverVideoCodecs } from "./video-codecs.js";
 import { receiverHEVCSupport, hevcReadmissionDelay } from "./video-hevc.js";
 import { createReceiverRegistry } from "./remote-receivers.js";
@@ -413,6 +413,7 @@ async function poll(s) {
                 }
             }
             renderEntry(s, entry);
+            if (streamAutoRetry(entry, streamRecovery(entry, s.tracks.get(id)?.track))) void toggleWatch(s, entry, true);
         }
         s.container.hidden = ![...s.streams.values()].some(entry => !entry.card.hidden);
     } catch (error) {

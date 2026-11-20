@@ -16,3 +16,14 @@ export function streamRecovery(entry, track, now = Date.now()) {
     if (state === "waiting" && persistent) state = "waitingLong";
     return { state, retry: !entry.pending && (persistent || !!entry.error) };
 }
+
+// A watch stuck without a picture repairs itself with the same request as the
+// Retry button, at most three times per watch; after that the button remains.
+// It only repeats a watch the user started and never starts one.
+export const STREAM_AUTO_RETRIES = 3;
+export function streamAutoRetry(entry, recovery) {
+    if (recovery.state === "live" || recovery.state === "paused" || !entry.watching) entry.autoRetries = 0;
+    if (recovery.state !== "waitingLong" || !recovery.retry || (entry.autoRetries || 0) >= STREAM_AUTO_RETRIES) return false;
+    entry.autoRetries = (entry.autoRetries || 0) + 1;
+    return true;
+}
