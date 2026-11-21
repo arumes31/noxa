@@ -338,6 +338,11 @@ func (s *Store) SendConversation(ctx context.Context, uid string, request netpro
 	if err != nil {
 		return 0, nil, err
 	}
+	// Membership first, as in netproto.ChangeConversation: the revision is
+	// not for non-members.
+	if member, found := c.Member(uid); !found || member.Pending {
+		return 0, nil, netproto.ErrConversationDenied
+	}
 	if request.Revision != c.Revision {
 		return 0, nil, netproto.ErrConversationConflict
 	}

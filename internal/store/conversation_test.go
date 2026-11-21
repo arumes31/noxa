@@ -612,3 +612,21 @@ func TestConversationTransferRespectsPendingInviteCap(t *testing.T) {
 		t.Fatalf("transfer over the new owner's invite cap = %v, want ErrConversationInvalid", err)
 	}
 }
+
+// Membership is checked before the revision: someone who is not an accepted
+// member gets the same refusal whatever revision the request carries.
+func TestConversationSendRefusesNonMemberBeforeRevision(t *testing.T) {
+	s, c := conversationTestStore(t)
+	for _, revision := range []int64{c.Revision, c.Revision + 98} {
+		request := conversationTestSend(c, 1)
+		request.Revision = revision
+		if _, _, err := s.SendConversation(t.Context(), "outsider", request); !errors.Is(err, netproto.ErrConversationDenied) {
+			t.Fatalf("non-member send at revision %d: %v, want access denied", revision, err)
+		}
+	}
+	stale := conversationTestSend(c, 2)
+	stale.Revision++
+	if _, _, err := s.SendConversation(t.Context(), "owner", stale); !errors.Is(err, netproto.ErrConversationConflict) {
+		t.Fatalf("member send at a stale revision: %v, want a conflict", err)
+	}
+}
