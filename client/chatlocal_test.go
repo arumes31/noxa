@@ -360,6 +360,46 @@ func TestChatExportHistoryPagesWholeChannel(t *testing.T) {
 	}
 }
 
+// One stored message is exactly one transcript line: line breaks and control
+// characters in a body are escaped, so the text after a line break cannot be
+// read as a further record. Channel and direct-message exports share this.
+func TestChatExportKeepsOneMessageOnOneLine(t *testing.T) {
+	other := chatExportLine(netproto.ChatHistoryEntry{FromNickname: "Mia", Body: "I agree", SentAt: 1767261600}, "server")
+	body := "ok\r\n" + other + "\tend\\"
+	wantBody := `ok\r\n` + other + `\tend\\`
+
+	key := randKey(t)
+	var cm *connManager
+	app, cm := newPipedApp(t, func(f *netproto.Frame) (netproto.MessageType, any, bool) {
+		if netproto.MessageType(f.Type) != netproto.MsgChatHistory {
+			return 0, nil, false
+		}
+		return netproto.MsgChatHistoryResponse, netproto.ChatHistoryResponse{
+			ChannelID: 7,
+			Keys:      []netproto.ChannelKey{sealKeyFor(t, cm, 7, 1, key)},
+			Messages:  []netproto.ChatHistoryEntry{{ID: 1, KeyID: 1, SentAt: 1767261700, FromNickname: "Eve", BodyEnc: mustSeal(t, body, key)}},
+		}, true
+	})
+	res, err := app.ChatExportHistory(7, 0)
+	if err != nil {
+		t.Fatalf("ChatExportHistory: %v", err)
+	}
+	dm := dmExportMessages([]DMEntry{{FromNickname: "Eve", Body: body, SentAt: 1767261700, EncVerified: true, EncMode: "e2e"}})
+	for name, text := range map[string]string{"channel": res.Text, "dm": dm.Text} {
+		lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+		if len(lines) != 1 || strings.ContainsAny(lines[0], "\r\t") {
+			t.Fatalf("%s export rendered one message as %d lines: %q", name, len(lines), text)
+		}
+		if !strings.HasSuffix(lines[0], "Eve: "+wantBody) {
+			t.Fatalf("%s export line = %q, want the escaped body %q", name, lines[0], wantBody)
+		}
+	}
+	// A name is escaped the same way.
+	if line := chatExportLine(netproto.ChatHistoryEntry{FromNickname: "a\nb", Body: "hi", SentAt: 1}, "e2e"); strings.Contains(line, "\n") || !strings.Contains(line, `a\nb: hi`) {
+		t.Fatalf("name not escaped: %q", line)
+	}
+}
+
 // --- 103 / 101 ----------------------------------------------------------------
 
 // TestScrollbackIntoUngrantedGenerations walks history back into generations
