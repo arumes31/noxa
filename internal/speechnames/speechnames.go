@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -109,8 +110,37 @@ func Open(dir string, logger *zap.Logger) *Service {
 // Enabled reports whether clips can still be produced.
 func (s *Service) Enabled() bool { return s != nil && !s.disabled.Load() }
 
-func (s *Service) path(language, name string) string {
-	return filepath.Join(s.dir, language, Key(language, name)+".wav")
+// PronunciationsFile, in the clip directory, lists names the voice reads
+// wrongly with the spelling it should read instead, per language:
+// {"de": {"Dave": "Däiv"}, "en": {"Joshibär": "Yoshi bear"}}.
+const PronunciationsFile = "pronunciations.json"
+
+// spoken returns the text the engine reads for a normalized name and the
+// clip's key. A listed spelling is part of the key, so editing the list
+// makes a new clip; a name that is not listed keeps the key it always had.
+func (s *Service) spoken(language, name string) (text, key string) {
+	// shortcut: the list is read on every request, like the clip itself; cache it if it grows past a few hundred names.
+	data, err := os.ReadFile(filepath.Join(s.dir, PronunciationsFile)) // #nosec G304 -- fixed file in the clip directory
+	if err != nil {
+		return name, Key(language, name)
+	}
+	var list map[string]map[string]string
+	if err := json.Unmarshal(data, &list); err != nil {
+		s.logger.Debug("spoken names: pronunciation list ignored", zap.Error(err))
+		return name, Key(language, name)
+	}
+	for written, as := range list[language] {
+		if strings.EqualFold(Normalize(written), name) {
+			if as = Normalize(as); as != "" && as != name {
+				return as, Key(language, name+"\n"+as)
+			}
+		}
+	}
+	return name, Key(language, name)
+}
+
+func (s *Service) path(language, key string) string {
+	return filepath.Join(s.dir, language, key+".wav")
 }
 
 // Clip returns the stored WAV for nickname. A clip not stored yet is
@@ -125,7 +155,8 @@ func (s *Service) Clip(language, nickname string, allowSynthesis func() bool) (k
 	if name == "" {
 		return "", nil, ErrUnspeakable
 	}
-	key, path := Key(language, name), s.path(language, name)
+	text, key := s.spoken(language, name)
+	path := s.path(language, key)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Under s.mu: Prune cannot delete the clip between this read and its touch,
@@ -146,7 +177,7 @@ func (s *Service) Clip(language, nickname string, allowSynthesis func() bool) (k
 	}
 	s.inflight[key] = struct{}{}
 	go func() {
-		err := s.generate(language, name, path)
+		err := s.generate(language, text, path)
 		if err != nil && !errors.Is(err, ErrUnavailable) {
 			s.logger.Debug("spoken name not synthesized", zap.Error(err))
 		}
@@ -236,10 +267,11 @@ func (s *Service) Touch(nickname string) {
 		return
 	}
 	now := time.Now()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	for _, language := range Languages {
-		_ = os.Chtimes(s.path(language, name), now, now)
+		_, key := s.spoken(language, name)
+		s.mu.Lock()
+		_ = os.Chtimes(s.path(language, key), now, now)
+		s.mu.Unlock()
 	}
 }
 

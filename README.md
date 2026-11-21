@@ -1580,6 +1580,21 @@ announcement, so nothing waits for the server. Builds without the engine
 (`go build`, non-Docker installs) log once that spoken names are unavailable,
 do not advertise the feature, and clients keep the generic announcements.
 
+A name the voice reads wrongly can be given a spelling it reads correctly, in
+`<file_root>/speech-names/pronunciations.json`, per language (upper and lower
+case of the name do not matter):
+
+```json
+{
+  "de": { "Dave": "Däiv", "becksn": "Becksen" },
+  "en": { "Joshibär": "Yoshi bear" }
+}
+```
+
+The file is read on every request, so no restart is needed: the next request
+for that name makes a new clip. A desktop client that already played the old
+clip keeps it until it reconnects. A file that is not valid JSON is ignored.
+
 ### Voice diagnostics
 
 **Client Info** shows ping and reported client version for visible members.

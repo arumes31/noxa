@@ -65,10 +65,12 @@ type fakeSynth struct {
 	release chan struct{}
 	err     error
 	failFor string // only this text fails with err
+	said    atomic.Value
 }
 
 func (f *fakeSynth) Synthesize(ctx context.Context, _, text string) ([]float64, error) {
 	f.calls.Add(1)
+	f.said.Store(text)
 	if f.failFor != "" && text != f.failFor {
 		return speech(), nil
 	}
@@ -161,7 +163,7 @@ func TestPruneDeletesClipsUnusedFor30Days(t *testing.T) {
 	now := time.Now()
 	stale := now.Add(-Retention - time.Hour)
 	for _, nick := range []string{"Old", "Touched"} {
-		if err := os.Chtimes(svc.path("de", nick), stale, stale); err != nil {
+		if err := os.Chtimes(svc.path("de", Key("de", nick)), stale, stale); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -170,7 +172,7 @@ func TestPruneDeletesClipsUnusedFor30Days(t *testing.T) {
 		t.Fatal(err)
 	}
 	for nick, kept := range map[string]bool{"Old": false, "Fresh": true, "Touched": true} {
-		if _, err := os.Stat(svc.path("de", nick)); (err == nil) != kept {
+		if _, err := os.Stat(svc.path("de", Key("de", nick))); (err == nil) != kept {
 			t.Errorf("%s kept=%v, err %v", nick, kept, err)
 		}
 	}
@@ -325,5 +327,38 @@ func TestFailedNameIsNotRetriedForAnHour(t *testing.T) {
 	svc.mu.Unlock()
 	if size > maxFailures {
 		t.Fatalf("failure cache grew to %d", size)
+	}
+}
+
+func TestPronunciationListRespellsAName(t *testing.T) {
+	dir, synth := t.TempDir(), &fakeSynth{}
+	svc := New(dir, synth, zap.NewNop())
+	list := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, PronunciationsFile), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plain, _, _ := svc.Clip("en", "Dave", func() bool { return false })
+	list(`{"de": {"dave": "Däiv"}}`)
+	// Case and the duplicate suffix do not matter; other languages are untouched.
+	if _, err := clip(t, svc, "de", "Dave#2"); err != nil || synth.said.Load() != "Däiv" {
+		t.Fatalf("said %v, %v", synth.said.Load(), err)
+	}
+	first, _, _ := svc.Clip("de", "Dave", nil)
+	if same, _, _ := svc.Clip("en", "Dave", func() bool { return false }); same != plain {
+		t.Fatal("an unlisted language changed its key")
+	}
+	// A changed spelling is a new clip; a broken list falls back to the name.
+	list(`{"de": {"Dave": "Dejv"}}`)
+	if _, err := clip(t, svc, "de", "Dave"); err != nil || synth.said.Load() != "Dejv" || synth.calls.Load() != 2 {
+		t.Fatalf("said %v, calls %d, %v", synth.said.Load(), synth.calls.Load(), err)
+	}
+	if second, _, _ := svc.Clip("de", "Dave", nil); second == first {
+		t.Fatal("the key did not follow the spelling")
+	}
+	list(`{"de": `)
+	if _, err := clip(t, svc, "de", "Dave"); err != nil || synth.said.Load() != "Dave" {
+		t.Fatalf("said %v, %v", synth.said.Load(), err)
 	}
 }
