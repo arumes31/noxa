@@ -1592,8 +1592,9 @@ case of the name do not matter):
 ```
 
 The file is read on every request, so no restart is needed: the next request
-for that name makes a new clip. A desktop client that already played the old
-clip keeps it until it reconnects. A file that is not valid JSON is ignored.
+for that name makes a new clip. A desktop client that already fetched the old
+clip keeps it until the app is restarted. If two entries differ only in upper
+and lower case, the first in sorted order is used. A file that is not valid JSON is ignored.
 
 ### Voice diagnostics
 

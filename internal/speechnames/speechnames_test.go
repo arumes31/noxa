@@ -339,23 +339,33 @@ func TestPronunciationListRespellsAName(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	plain, _, _ := svc.Clip("en", "Dave", func() bool { return false })
-	list(`{"de": {"dave": "Däiv"}}`)
+	if _, err := clip(t, svc, "en", "Dave"); err != nil {
+		t.Fatal(err)
+	}
+	plain, _, _ := svc.Clip("en", "Dave", nil)
+	list(`{"de": {"dave": "Däiv", "DAVE": "Däiv"}}`)
 	// Case and the duplicate suffix do not matter; other languages are untouched.
 	if _, err := clip(t, svc, "de", "Dave#2"); err != nil || synth.said.Load() != "Däiv" {
 		t.Fatalf("said %v, %v", synth.said.Load(), err)
 	}
 	first, _, _ := svc.Clip("de", "Dave", nil)
-	if same, _, _ := svc.Clip("en", "Dave", func() bool { return false }); same != plain {
+	if same, _, err := svc.Clip("en", "Dave", nil); err != nil || plain == "" || same != plain {
 		t.Fatal("an unlisted language changed its key")
 	}
 	// A changed spelling is a new clip; a broken list falls back to the name.
 	list(`{"de": {"Dave": "Dejv"}}`)
-	if _, err := clip(t, svc, "de", "Dave"); err != nil || synth.said.Load() != "Dejv" || synth.calls.Load() != 2 {
+	if _, err := clip(t, svc, "de", "Dave"); err != nil || synth.said.Load() != "Dejv" || synth.calls.Load() != 3 {
 		t.Fatalf("said %v, calls %d, %v", synth.said.Load(), synth.calls.Load(), err)
 	}
 	if second, _, _ := svc.Clip("de", "Dave", nil); second == first {
 		t.Fatal("the key did not follow the spelling")
+	}
+	// Entries that differ only in case: always the same one.
+	list(`{"de": {"dave": "Zwei", "Dave": "Eins"}}`)
+	for range 20 {
+		if text, _ := svc.spoken("de", "Dave"); text != "Eins" {
+			t.Fatalf("picked %q", text)
+		}
 	}
 	list(`{"de": `)
 	if _, err := clip(t, svc, "de", "Dave"); err != nil || synth.said.Load() != "Dave" {

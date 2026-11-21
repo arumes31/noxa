@@ -129,14 +129,18 @@ func (s *Service) spoken(language, name string) (text, key string) {
 		s.logger.Debug("spoken names: pronunciation list ignored", zap.Error(err))
 		return name, Key(language, name)
 	}
+	// Entries that differ only in case all match: the first in sorted order
+	// wins, so every request picks the same one.
+	first, text := "", ""
 	for written, as := range list[language] {
-		if strings.EqualFold(Normalize(written), name) {
-			if as = Normalize(as); as != "" && as != name {
-				return as, Key(language, name+"\n"+as)
-			}
+		if as = Normalize(as); as != "" && strings.EqualFold(Normalize(written), name) && (text == "" || written < first) {
+			first, text = written, as
 		}
 	}
-	return name, Key(language, name)
+	if text == "" || text == name {
+		return name, Key(language, name)
+	}
+	return text, Key(language, name+"\n"+text)
 }
 
 func (s *Service) path(language, key string) string {
