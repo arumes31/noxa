@@ -53,9 +53,10 @@ var ErrUploadInProgress = errors.New("this upload is already in progress")
 // adopted when its owner resumes it, and an abandoned one is removed by the
 // orphan sweep after resumablePartialTTL.
 type partialUpload struct {
-	path     string // relative to RootDir
-	uploader string
-	size     int64
+	path      string // relative to RootDir
+	channelID int64
+	uploader  string
+	size      int64
 	// active is the transfer currently writing the partial (nil when idle).
 	active *activeTransfer
 	// released closes when the active transfer has closed the file.
@@ -118,7 +119,8 @@ func isHex(s string, n int) bool {
 // SHA-256. It returns the offset the client should resume from (0 for a new
 // upload) and whether the transfer is resumable at all: when the uploader
 // already keeps the maximum number of partials, or the partials would push
-// them past their quota, the upload is issued as a plain single-shot one.
+// them or the channel past a quota, the upload is issued as a plain
+// single-shot one.
 func (s *Server) InitResumableUpload(ctx context.Context, channelID int64, folder, name string, size int64, uploader string, uploaderQuotaMB int64, sum string) (string, string, int64, bool, error) {
 	if !validSHA256(sum) || uploader == "" {
 		id, token, err := s.InitUpload(ctx, channelID, folder, name, size, uploader, uploaderQuotaMB)
@@ -140,7 +142,16 @@ func (s *Server) InitResumableUpload(ctx context.Context, channelID int64, folde
 	var offset int64
 	resumable := false
 	if !s.partialIsStoredFile(ctx, channelID, cleanFolder, path) {
-		offset, resumable = s.partialOffset(channelID, path, uploader, size, uploaderQuotaMB)
+		// Bytes the channel quota still leaves for unfinished uploads (-1:
+		// no channel quota). A failed usage lookup leaves none.
+		channelFree := int64(-1)
+		if s.cfg.ChannelQuotaMB > 0 && channelID != 0 {
+			channelFree = 0
+			if q, err := s.ChannelQuotaState(ctx, channelID); err == nil {
+				channelFree = max(0, q.Limit-q.Used)
+			}
+		}
+		offset, resumable = s.partialOffset(channelID, path, uploader, size, uploaderQuotaMB, channelFree)
 	}
 	var complete func(*transfer)
 	if resumable {
@@ -168,11 +179,17 @@ func (s *Server) partialIsStoredFile(ctx context.Context, channelID int64, folde
 }
 
 // partialOffset reports the bytes already held for path and whether this
-// uploader may keep another resumable partial.
-func (s *Server) partialOffset(channelID int64, path, uploader string, size, uploaderQuotaMB int64) (int64, bool) {
+// uploader may keep another resumable partial. channelFree is what the
+// channel quota leaves for unfinished uploads (negative: unlimited).
+func (s *Server) partialOffset(channelID int64, path, uploader string, size, uploaderQuotaMB, channelFree int64) (int64, bool) {
 	// Reservations whose token expired unused, or whose partial is gone,
-	// must not count against this uploader's limit.
-	s.pruneIdlePartials(uploader, time.Now())
+	// must not count against this uploader's limit, nor anyone's against
+	// the channel's.
+	if channelFree >= 0 {
+		s.pruneIdlePartials("", time.Now())
+	} else {
+		s.pruneIdlePartials(uploader, time.Now())
+	}
 	var held int64
 	if root, err := s.openBlobRoot(); err == nil {
 		if info, statErr := root.Lstat(path); statErr == nil && info.Mode().IsRegular() {
@@ -191,15 +208,28 @@ func (s *Server) partialOffset(channelID int64, path, uploader string, size, upl
 		return 0, false
 	}
 	count := 0
-	var otherBytes int64
+	var otherBytes, channelBytes int64
 	for p, partial := range s.partials {
-		if p == path || partial.uploader != uploader {
+		if p == path {
+			continue
+		}
+		if partial.channelID == channelID {
+			channelBytes += partial.size
+		}
+		if partial.uploader != uploader {
 			continue
 		}
 		count++
 		otherBytes += partial.size
 	}
 	if count >= maxResumablePartialsPerUploader {
+		return 0, false
+	}
+	// The same for the channel, whoever uploads: unfinished uploads kept in
+	// it must fit into what its quota has left.
+	// shortcut: the registry is per process, so partials left by a previous
+	// run count only once resumed; scan the channel directory if that matters.
+	if channelFree >= 0 && channelBytes+size > channelFree {
 		return 0, false
 	}
 	// Partials are not charged to the quota. To keep users from parking
@@ -209,7 +239,7 @@ func (s *Server) partialOffset(channelID int64, path, uploader string, size, upl
 		return 0, false
 	}
 	if _, ok := s.partials[path]; !ok {
-		s.partials[path] = &partialUpload{path: path, uploader: uploader, size: size}
+		s.partials[path] = &partialUpload{path: path, channelID: channelID, uploader: uploader, size: size}
 	}
 	return held, true
 }
@@ -270,7 +300,7 @@ func (s *Server) claimPartial(tr *transfer, active *activeTransfer) (func(), err
 	s.mu.Lock()
 	partial, ok := s.partials[tr.PartialPath]
 	if !ok {
-		partial = &partialUpload{path: tr.PartialPath, uploader: tr.Uploader, size: tr.Size}
+		partial = &partialUpload{path: tr.PartialPath, channelID: tr.ChannelID, uploader: tr.Uploader, size: tr.Size}
 		s.partials[tr.PartialPath] = partial
 	}
 	if partial.uploader != tr.Uploader {

@@ -231,27 +231,30 @@ func (s *TCPServer) changeRoleChannel(ctx context.Context, actor int64, request 
 		if request.ChannelID < 1 || request.TextOnly || request.Access != nil || (request.Password != "" && !request.SetPassword) || len(request.Password) > 4096 || request.ChannelType != 0 || (request.Kind == authorization.ChannelEdit) != (request.Settings != nil) || (request.Kind != authorization.ChannelMove && (request.ParentID != 0 || request.SyncToParent)) {
 			return netproto.RoleChannelResult{}, authorization.ErrRoleInvalid
 		}
+		// Storage re-checks this inside its transaction; refusing here
+		// skips the password hash for a request that cannot succeed.
+		if request.SetPassword && request.Password != "" && s.deps.State != nil {
+			if ch, found := s.deps.State.GetChannel(request.ChannelID); found && ch.TextOnly {
+				return netproto.RoleChannelResult{}, authorization.ErrRoleInvalid
+			}
+		}
+		// Preflight under a shared lease, as for creation: a request the
+		// policy refuses must not queue the exclusive gate, which makes every
+		// other session wait.
+		err := s.withRolePolicy(ctx, func(ctx context.Context) error {
+			if validate != nil {
+				if err := validate(ctx); err != nil {
+					return err
+				}
+			}
+			p := ctx.Value(roleLeaseKey{}).(roleLease).evaluator.Policy()
+			_, err := authorization.ApplyChannelTreeChange(p, actor, change)
+			return err
+		})
+		if err != nil {
+			return netproto.RoleChannelResult{}, err
+		}
 		if request.SetPassword {
-			// Storage re-checks this inside its transaction; refusing here
-			// skips the password hash for a request that cannot succeed.
-			if request.Password != "" && s.deps.State != nil {
-				if ch, found := s.deps.State.GetChannel(request.ChannelID); found && ch.TextOnly {
-					return netproto.RoleChannelResult{}, authorization.ErrRoleInvalid
-				}
-			}
-			err := s.withRolePolicy(ctx, func(ctx context.Context) error {
-				if validate != nil {
-					if err := validate(ctx); err != nil {
-						return err
-					}
-				}
-				p := ctx.Value(roleLeaseKey{}).(roleLease).evaluator.Policy()
-				_, err := authorization.ApplyChannelTreeChange(p, actor, change)
-				return err
-			})
-			if err != nil {
-				return netproto.RoleChannelResult{}, err
-			}
 			hash := ""
 			if request.Password != "" {
 				hash, err = auth.HashPassword(request.Password)

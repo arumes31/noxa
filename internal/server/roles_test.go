@@ -3,8 +3,10 @@ package server
 import (
 	"context"
 	"errors"
+	"net"
 	"sync"
 	"testing"
+	"time"
 
 	"noxa/internal/authorization"
 	"noxa/internal/netproto"
@@ -176,5 +178,102 @@ func TestRoleAPIAcknowledgesSavedChangeWhenEnforcementFails(t *testing.T) {
 	send(t, conn, netproto.MsgRoleQuery, netproto.RoleQuery{})
 	if got := readError(t, conn); got.Code != errCodeUnavailable {
 		t.Fatalf("failed authority served data: %+v", got)
+	}
+}
+
+// A kick, ban, role or channel change the current policy refuses is refused
+// under a shared policy lease. It must not queue the exclusive gate, where it
+// would make every other session wait for the shared leases in flight.
+func TestRefusedPolicyChangesDoNotQueueExclusiveGate(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		mt      netproto.MessageType
+		request func(otherID string) any
+	}{
+		{"kick from server", netproto.MsgKickClient, func(id string) any { return netproto.KickClient{ClientID: id, FromServer: true} }},
+		{"ban", netproto.MsgKickClient, func(id string) any { return netproto.KickClient{ClientID: id, Ban: true} }},
+		{"role change", netproto.MsgRoleChange, func(string) any {
+			return authorization.RoleChange{Kind: authorization.RoleCreate, ExpectedRevision: 1, Role: authorization.Role{Name: "x"}}
+		}},
+		{"channel access", netproto.MsgRoleChange, func(string) any {
+			return authorization.RoleChange{Kind: authorization.ChannelAccessSet, ExpectedRevision: 1, Channel: authorization.ChannelPolicy{ChannelID: 1}}
+		}},
+		{"guest roles", netproto.MsgRoleChange, func(string) any {
+			return authorization.RoleChange{Kind: authorization.MemberRolesSet, ExpectedRevision: 1, MemberUniqueID: "guest:0000000000000001", RoleIDs: []int64{10}}
+		}},
+		{"channel edit", netproto.MsgRoleChannelChange, func(string) any {
+			return netproto.RoleChannelChange{Kind: authorization.ChannelEdit, ExpectedRevision: 1, ChannelID: 1, Settings: &netproto.RoleChannelSettings{Name: "Room"}}
+		}},
+		{"channel move", netproto.MsgRoleChannelChange, func(string) any {
+			return netproto.RoleChannelChange{Kind: authorization.ChannelMove, ExpectedRevision: 1, ChannelID: 1}
+		}},
+		{"channel delete", netproto.MsgRoleChannelChange, func(string) any {
+			return netproto.RoleChannelChange{Kind: authorization.ChannelDelete, ExpectedRevision: 1, ChannelID: 1}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := serverRoleFixture()
+			backend.policy.OwnerID = 3 // neither session is the owner
+			backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel, authorization.Connect}
+			authority, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			env := startTestEnvDeps(t, nil, nil, func(d *Deps) {
+				d.Authority = authority
+				d.Channels = &memoryRoleChannels{ChannelBackend: d.Channels, backend: backend}
+			})
+			defer env.stop()
+			env.state.AddChannel(testChannel(1))
+			requester, _ := dialAuthed(t, env.addr, "admin-uid")
+			defer func() { _ = requester.Close() }()
+			other, otherID := dialAuthed(t, env.addr, "user-uid")
+			defer func() { _ = other.Close() }()
+
+			// One shared lease in flight, as a write to a slow peer holds one.
+			held, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			go func() {
+				defer close(done)
+				_ = authority.WithPolicy(context.Background(), func(*authorization.RoleEvaluator) error {
+					close(held)
+					<-release
+					return nil
+				})
+			}()
+			<-held
+			defer func() { close(release); <-done }()
+
+			// reply reads conn's next error or role state while the lease is held.
+			reply := func(conn net.Conn) netproto.Error {
+				t.Helper()
+				_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+				defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
+				for {
+					f, err := netproto.ReadFrame(conn)
+					if err != nil {
+						t.Fatalf("no reply while a shared lease is in flight: %v", err)
+					}
+					var e netproto.Error
+					switch netproto.MessageType(f.Type) {
+					case netproto.MsgRoleState:
+						return e
+					case netproto.MsgError:
+						if err := netproto.Decode(f, &e); err != nil {
+							t.Fatal(err)
+						}
+						return e
+					}
+				}
+			}
+			send(t, requester, tc.mt, tc.request(otherID))
+			if got := reply(requester); got.Code != errCodePermissionDenied {
+				t.Fatalf("refused request: %+v, want permission denied", got)
+			}
+			send(t, other, netproto.MsgRoleQuery, netproto.RoleQuery{})
+			reply(other)
+			if _, ok := env.state.GetClient(otherID); !ok {
+				t.Fatal("the refused request removed the other session")
+			}
+		})
 	}
 }

@@ -22,6 +22,24 @@ func (s *TCPServer) handleKickClient(ctx context.Context, client *Client, f *net
 		(msg.AckRequested && !msg.FromServer && !msg.Ban && msg.ExpectedChannelID == 0) {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid channel-disconnect scope; refresh the member list")
 	}
+	if msg.Ban || msg.FromServer {
+		// Refuse a requester without the capability under a shared lease, so
+		// only an authorized one queues the exclusive gate, which makes every
+		// other session wait. The exclusive section checks again.
+		capability := authorization.KickMembers
+		if msg.Ban {
+			capability = authorization.BanMembers
+		}
+		if err := s.withRolePolicy(ctx, func(ctx context.Context) error {
+			if client.sessionRevoked() || client.rulesBlocked() ||
+				!ctx.Value(roleLeaseKey{}).(roleLease).evaluator.Evaluate(client.userID(), 0, capability).Allowed {
+				return authorization.ErrRoleForbidden
+			}
+			return nil
+		}); err != nil {
+			return s.roleError(ctx, client, err)
+		}
+	}
 	if msg.Ban {
 		var result roleBanResult
 		err := s.withExclusiveRolePolicy(ctx, func(ctx context.Context) error {

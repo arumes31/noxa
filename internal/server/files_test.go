@@ -283,6 +283,28 @@ func TestFileTransferInitResumableUpload(t *testing.T) {
 	}
 }
 
+// An ephemeral guest's unique ID is new on every login, so a partial it left
+// could never be resumed and its partial budget would start again each time:
+// such a session always gets a plain upload.
+func TestFileTransferInitGuestUploadIsNotResumable(t *testing.T) {
+	env := startTestEnvWithCapabilities(t, authorization.UploadFiles)
+	defer env.stop()
+	env.state.AddChannel(testChannel(1))
+	conn, _ := dialGuest(t, env.addr, "visitor", "")
+	defer closeFileTestResource(t, conn)
+
+	send(t, conn, netproto.MsgFileTransferInit, netproto.FileTransferInit{ChannelID: 1, Direction: "upload", Name: "big.bin", Size: 42, SHA256: strings.Repeat("ab", 32)})
+	var resp netproto.FileTransferInitResponse
+	if err := netproto.Decode(readOfType(t, conn, netproto.MsgFileTransferInitResponse), &resp); err != nil {
+		t.Fatal(err)
+	}
+	env.ft.mu.Lock()
+	defer env.ft.mu.Unlock()
+	if resp.Resumable || resp.Token != "tok-1" || len(env.ft.resumeDigests) != 0 || len(env.ft.uploads) != 1 {
+		t.Fatalf("response = %+v, resumable calls = %d", resp, len(env.ft.resumeDigests))
+	}
+}
+
 // TestFileTransferInitDenied verifies UploadFiles is required for token issuance.
 func TestFileTransferInitDenied(t *testing.T) {
 	env := startTestEnvWithCapabilities(t)

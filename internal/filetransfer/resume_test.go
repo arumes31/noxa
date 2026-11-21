@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -339,5 +341,48 @@ func TestResumeNeverWritesIntoAStoredFile(t *testing.T) {
 	}
 	if got, err := os.ReadFile(victimPath); err != nil || !bytes.Equal(got, victim) {
 		t.Fatalf("victim file changed: %q, %v", got, err)
+	}
+}
+
+// Unfinished uploads of several uploaders in one channel stay within the
+// channel quota: once the pending partials reach it, further uploads are
+// issued single-shot, whose partial does not outlive its connection.
+func TestResumablePartialsStayWithinChannelQuota(t *testing.T) {
+	addr, s := startServer(t, newFakeFileStore())
+	s.cfg.ChannelQuotaMB = 1
+	ctx := context.Background()
+	const size = 1 << 20 // the whole channel quota
+	for i := range 4 {
+		uploader, name := fmt.Sprintf("uid-%d", i), fmt.Sprintf("f%d.bin", i)
+		content := bytes.Repeat([]byte{byte('a' + i)}, size)
+		id, token, _, resumable, err := s.InitResumableUpload(ctx, 7, "", name, size, uploader, 0, sha256Hex(content))
+		if err != nil || resumable != (i == 0) {
+			t.Fatalf("uploader %d: err=%v resumable=%v", i, err, resumable)
+		}
+		conn := dialTransferAt(t, addr, id, token, 0)
+		sendChunks(t, conn, content[:size-chunkSize]) // interrupted one chunk short
+		_ = conn.Close()
+	}
+	channelBytes := func() (n int64) {
+		_ = filepath.WalkDir(filepath.Join(s.cfg.RootDir, "7"), func(_ string, d fs.DirEntry, err error) error {
+			if err == nil && !d.IsDir() {
+				if info, err := d.Info(); err == nil {
+					n += info.Size()
+				}
+			}
+			return nil
+		})
+		return n
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for channelBytes() > size && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := channelBytes(); got > size || got == 0 {
+		t.Fatalf("%d bytes of unfinished uploads on disk, channel quota %d", got, size)
+	}
+	// Another channel has its own budget.
+	if _, _, _, resumable, err := s.InitResumableUpload(ctx, 8, "", "other.bin", size, "uid-9", 0, sha256Hex([]byte("other"))); err != nil || !resumable {
+		t.Fatalf("other channel: err=%v resumable=%v", err, resumable)
 	}
 }

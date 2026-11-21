@@ -374,6 +374,7 @@ type TCPServer struct {
 	mediaSeats            mediaSeats // encrypted voice seats (media_seats.go)
 	olmDoorbell           olmDoorbells
 	keyLookupRate         *chatRateLimiter
+	speechSynthRate       *chatRateLimiter // new name clips per account (speech_names.go)
 	previewOnce           sync.Once
 	previewService        *linkpreview.Service
 	previewInFlight       sync.Map // unique ID -> struct{}: one preview fetch per user
@@ -528,6 +529,7 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 		mediaE2EE:           true,
 		olmBudget:           newOlmBudgets(),
 		keyLookupRate:       newChatRateLimiter(keyLookups, olmBudgetWindow),
+		speechSynthRate:     newChatRateLimiter(speechSynthesisBurst, speechSynthesisWindow),
 		cfg:                 cfg,
 		logger:              logger,
 		deps:                deps,

@@ -6,10 +6,29 @@ import (
 	"errors"
 	"time"
 
+	"noxa/internal/auth"
 	"noxa/internal/authorization"
 	"noxa/internal/netproto"
 	"noxa/internal/speechnames"
 )
+
+// New name clips are bounded per account, so a session cannot use the server
+// as a TTS service and a reconnect does not refill the budget.
+const (
+	speechSynthesisBurst  = 10
+	speechSynthesisWindow = 10 * time.Minute
+)
+
+// allowSpeechSynthesis charges one new clip to the requester's account. A
+// guest's unique ID can be new on every login, so guests are charged by
+// source address (the keyLookupRate pattern).
+func (s *TCPServer) allowSpeechSynthesis(client *Client) bool {
+	key := "uid:" + client.uniqueID()
+	if client.userID() == 0 {
+		key = "ip:" + auth.SourceAddressKey(remoteIP(client.Conn))
+	}
+	return s.speechSynthRate.allow(key, time.Now())
+}
 
 // handleSpokenNameGet answers with the spoken name of a session the requester
 // can see.
@@ -41,7 +60,7 @@ func (s *TCPServer) handleSpokenNameGet(ctx context.Context, client *Client, f *
 	// A stored clip is a file read. A new one is synthesized in the background
 	// and answered as pending at once, so no request waits for the engine.
 	key, wav, err := s.deps.SpeechNames.Clip(msg.Language, nickname,
-		func() bool { return client.requestBudget.allowSpeechSynthesis(time.Now()) })
+		func() bool { return s.allowSpeechSynthesis(client) })
 	reply := netproto.SpokenNameData{ClientID: msg.ClientID, Language: msg.Language, Nickname: nickname, Key: key}
 	switch {
 	case errors.Is(err, speechnames.ErrPending):
