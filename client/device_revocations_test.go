@@ -277,3 +277,20 @@ func TestOwnRevokedDeviceCannotIssuePasskeyCertificates(t *testing.T) {
 		})
 	}
 }
+
+func TestOwnDeviceRevocationRefusesAListingWithAnotherKey(t *testing.T) {
+	s := newRelistedDevice(t)
+	s.directory = netproto.KeyResponse{UniqueID: "account", Devices: []netproto.DMDevice{s.first, s.approved}}
+	if devices, err := s.cm.dmDeviceList("account", true); err != nil || len(devices) != 2 {
+		t.Fatalf("verified device list = %+v, %v", devices, err)
+	}
+	// The listing the revoke request is built on names another key as "phone".
+	other := newTestDevice(t, "tablet", "web")
+	s.listing = []netproto.DeviceInfo{{DeviceID: "phone", Kind: "web", Ed25519Public: other.deviceInfo.Ed25519Public, X25519Public: other.deviceInfo.X25519Public}}
+	if err := s.cm.revokeOwnDevice("phone"); err == nil {
+		t.Fatal("revoked on a listing whose key differs from the verified one")
+	}
+	if revoked, err := s.cm.ownRevokedDevices(); err != nil || len(revoked.Devices) != 0 || len(revoked.SigningKeys) != 0 {
+		t.Fatalf("recorded %+v, %v", revoked, err)
+	}
+}

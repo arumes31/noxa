@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/pem"
@@ -273,9 +274,16 @@ func (m *connManager) revokeOwnDevice(deviceID string) error {
 	// Taken before the request: the answer and the device event that follows
 	// drop the verified list.
 	signing := m.verifiedOwnDeviceKey(deviceID)
-	req, err := m.signedRevokeRequest(deviceID)
+	req, listed, err := m.signedRevokeRequest(deviceID)
 	if err != nil {
 		return err
+	}
+	// The record may name only the key the request targets: two listings of
+	// the same device ID with different keys revoke nothing.
+	if target, keyErr := auth.LoadPublicKey(listed); keyErr != nil {
+		signing = nil
+	} else if signing != nil && !bytes.Equal(target, signing) {
+		return errors.New("the device list changed while revoking; try again")
 	}
 	if _, err = m.deviceRequest(req); err != nil {
 		return err
@@ -288,17 +296,18 @@ func (m *connManager) revokeOwnDevice(deviceID string) error {
 // verify that this account revoked the device. A desktop that is not a
 // trusted device yet, or a target without published keys, revokes unsigned:
 // the server still revokes it, and clients show it as revoked by the server.
-func (m *connManager) signedRevokeRequest(deviceID string) (netproto.DeviceRequest, error) {
-	req := netproto.DeviceRequest{Action: netproto.DeviceActionRevoke, DeviceID: deviceID}
+// listed is the target's signing key in the listing the request was built on.
+func (m *connManager) signedRevokeRequest(deviceID string) (req netproto.DeviceRequest, listed string, err error) {
+	req = netproto.DeviceRequest{Action: netproto.DeviceActionRevoke, DeviceID: deviceID}
 	m.mu.Lock()
 	principal, selfDevice := m.uniqueID, m.deviceID
 	m.mu.Unlock()
 	if principal == "" || selfDevice == "" {
-		return req, nil
+		return req, "", nil
 	}
 	list, err := m.deviceRequest(netproto.DeviceRequest{Action: netproto.DeviceActionList})
 	if err != nil {
-		return req, err
+		return req, "", err
 	}
 	var target, self *netproto.DeviceInfo
 	for i := range list.Devices {
@@ -310,24 +319,24 @@ func (m *connManager) signedRevokeRequest(deviceID string) (netproto.DeviceReque
 		}
 	}
 	if target == nil {
-		return req, errors.New("device not found")
+		return req, "", errors.New("device not found")
 	}
 	if self == nil || !self.FirstDevice && !self.Confirmed || target.Ed25519Public == "" ||
 		!validClaimedDeviceKeys(target.Ed25519Public, target.X25519Public) {
-		return req, nil
+		return req, target.Ed25519Public, nil
 	}
 	id, err := m.identity()
 	if err != nil {
-		return req, err
+		return req, "", err
 	}
 	signedAt := time.Now().Unix()
 	transcript := netproto.DeviceRevocationTranscript(principal, selfDevice, deviceID, target.Ed25519Public, target.X25519Public, signedAt, netproto.DeviceRevocationReasonUser)
 	signature, err := auth.SignChallenge(id.PrivateKey, transcript)
 	if err != nil {
-		return req, err
+		return req, "", err
 	}
 	req.Signature, req.RevokedAt = signature, signedAt
-	return req, nil
+	return req, target.Ed25519Public, nil
 }
 
 // persistOwnDeviceRevocation records a revocation this user made here,
