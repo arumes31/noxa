@@ -97,6 +97,9 @@ func ApplyChannelTreeChange(p RolePolicy, actorID int64, change ChannelTreeChang
 			if err := authorizeOverrideChanges(e, actorID, change.ParentID, inherited, custom); err != nil {
 				return RolePolicy{}, err
 			}
+			if err := authorizeOverrideGains(e, candidate, actorID, change.ParentID, change.ChannelID, e.roleSetGroups(), inherited, custom); err != nil {
+				return RolePolicy{}, err
+			}
 		}
 	case ChannelMove:
 		old, exists := e.channels[change.ChannelID]
