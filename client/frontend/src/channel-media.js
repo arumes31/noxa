@@ -17,6 +17,7 @@ let lastStatus = { state: "off" };
 // for it instead of failing on the first try.
 export function desktopMediaAdapter(tabID, { app = () => window.go?.main?.App, wait = SECURE_WAIT_MS } = {}) {
     return {
+        connection: tabID, // one tab is one server connection, kept across its reconnects
         async status() {
             const deadline = Date.now() + wait;
             for (;;) {
