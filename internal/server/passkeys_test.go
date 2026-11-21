@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -322,10 +323,24 @@ func testPasskeyPhoneLogin(t *testing.T, signOut, delegate bool) {
 		beginRequest.Ed25519PublicKey, beginRequest.X25519PublicKey = newPhone.public, newPhone.x25519
 	}
 	loginBegin := deviceCall(t, fresh, beginRequest)
-	loginFinish := deviceCall(t, fresh, netproto.DeviceRequest{
+	// The passkey links only a key the device proves it holds: no signature,
+	// or one by another key, is refused and nothing is stored.
+	linkRequest := netproto.DeviceRequest{
 		Action: netproto.DeviceActionPasskeyLoginFinish, WebAuthn: authenticator.get(t, loginBegin.WebAuthn),
 		Ed25519PublicKey: newPhone.public, X25519PublicKey: newPhone.x25519, Platform: "Pixel · Chrome",
-	})
+	}
+	if e := deviceCallError(t, fresh, linkRequest); e.Message == "" {
+		t.Fatalf("unsigned passkey link = %+v", e)
+	}
+	if e := deviceCallError(t, fresh, passkeyClaim(t, loginBegin, linkRequest, phone)); !strings.Contains(e.Message, "did not prove its key") {
+		t.Fatalf("passkey link signed by another key = %+v", e)
+	}
+	if _, err := devices.DeviceByKey(t.Context(), newPhone.public); !errors.Is(err, store.ErrDeviceNotFound) {
+		t.Fatalf("refused passkey link stored a device: %v", err)
+	}
+	loginBegin = deviceCall(t, fresh, beginRequest)
+	linkRequest.WebAuthn = authenticator.get(t, loginBegin.WebAuthn)
+	loginFinish := deviceCall(t, fresh, passkeyClaim(t, loginBegin, linkRequest, newPhone))
 	if loginFinish.State != netproto.LinkStateApproved || loginFinish.Device == nil || loginFinish.Device.Name != "Pixel · Chrome" {
 		t.Fatalf("passkey login = %+v", loginFinish)
 	}
@@ -362,18 +377,37 @@ func testPasskeyPhoneLogin(t *testing.T, signOut, delegate bool) {
 	// A replayed assertion is rejected: the ceremony is single use.
 	e := deviceCallError(t, fresh, netproto.DeviceRequest{
 		Action: netproto.DeviceActionPasskeyLoginFinish, WebAuthn: authenticator.get(t, loginBegin.WebAuthn),
-		Ed25519PublicKey: newLinkTestKeys(t).public, X25519PublicKey: "x",
+		Ed25519PublicKey: newLinkTestKeys(t).public, X25519PublicKey: "x", Signature: make([]byte, 64),
 	})
 	if !strings.Contains(e.Message, "start the passkey sign-in again") {
 		t.Fatalf("replayed assertion = %+v", e)
 	}
 	if delegate {
 		bound := deviceCall(t, fresh, beginRequest)
-		rejected := deviceCallError(t, fresh, netproto.DeviceRequest{Action: netproto.DeviceActionPasskeyLoginFinish, WebAuthn: authenticator.get(t, bound.WebAuthn), Ed25519PublicKey: newLinkTestKeys(t).public, X25519PublicKey: newPhone.x25519})
+		rejected := deviceCallError(t, fresh, netproto.DeviceRequest{Action: netproto.DeviceActionPasskeyLoginFinish, WebAuthn: authenticator.get(t, bound.WebAuthn), Ed25519PublicKey: newLinkTestKeys(t).public, X25519PublicKey: newPhone.x25519, Signature: make([]byte, 64)})
 		if !strings.Contains(rejected.Message, "device keys changed") {
 			t.Fatalf("substituted device accepted: %+v", rejected)
 		}
 	}
+}
+
+// passkeyClaim signs a passkey sign-in's challenge with the device key.
+func passkeyClaim(t *testing.T, begin netproto.DeviceResult, finish netproto.DeviceRequest, keys linkTestKeys) netproto.DeviceRequest {
+	t.Helper()
+	var options struct {
+		PublicKey struct {
+			Challenge string `json:"challenge"`
+		} `json:"publicKey"`
+	}
+	if err := json.Unmarshal(begin.WebAuthn, &options); err != nil || options.PublicKey.Challenge == "" {
+		t.Fatalf("passkey options = %s, %v", begin.WebAuthn, err)
+	}
+	var err error
+	finish.Signature, err = auth.SignChallenge(keys.private, netproto.DeviceKeyClaimTranscript("passkey:"+options.PublicKey.Challenge, finish.Ed25519PublicKey, finish.X25519PublicKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return finish
 }
 
 func TestPasskeyRegistrationNeedsALinkedWebDevice(t *testing.T) {

@@ -6,7 +6,7 @@
 import { solvePow } from "./pow.js";
 import { Connection, ProtocolError } from "./connection.js";
 import {
-    fromBase64URL, keyFingerprint, linkClaimTranscript, linkProof, linkSAS, normalizeLinkCode, publicKeyPEM, sign,
+    deviceKeyClaimTranscript, fromBase64URL, keyFingerprint, linkClaimTranscript, linkProof, linkSAS, normalizeLinkCode, publicKeyPEM, sign,
     toBase64, toBase64URL, uniqueIDFromPublicKey, utf8,
 } from "./crypto.js";
 import { Msg } from "./frame.js";
@@ -66,6 +66,9 @@ export async function claimLink(conn, identity, link) {
         request.proof = toBase64(linkProof(link.secret, linkClaimTranscript(link.linkID, pem, x25519)));
         linkKey = link.secret;
     }
+    // Proves this device holds the key it asks to have linked.
+    const ref = link.code ? `code:${request.code}` : `link:${link.linkID}`;
+    request.signature = toBase64(sign(deviceKeyClaimTranscript(ref, pem, x25519), identity.edSecret));
     const result = await conn.request(Msg.DeviceRequest, request, Msg.DeviceResult, { accept: r => r.action === "link_claim" });
     if (result.state !== LinkState.claimed) return { linkID: result.link_id || "", state: result.state || LinkState.expired };
     // The scanned QR names the desktop that showed it: a claim answered for
@@ -271,9 +274,11 @@ export async function registerPasskey(conn, name, credentials = globalThis.navig
 export async function linkWithPasskey(conn, identity, credentials = globalThis.navigator.credentials) {
     const { pem, x25519 } = devicePublicKeys(identity);
     const begin = await conn.request(Msg.DeviceRequest, { action: "passkey_login_begin", ed25519_public_key: pem, x25519_public_key: x25519 }, Msg.DeviceResult, { accept: r => r.action === "passkey_login_begin" });
+    // Signed before the options are decoded: the challenge as the server sent it.
+    const signature = toBase64(sign(deviceKeyClaimTranscript(`passkey:${begin.webauthn.publicKey.challenge}`, pem, x25519), identity.edSecret));
     const assertion = await credentials.get({ publicKey: requestOptions(begin.webauthn) });
     return conn.request(Msg.DeviceRequest, {
-        action: "passkey_login_finish", webauthn: credentialJSON(assertion), ed25519_public_key: pem, x25519_public_key: x25519, platform: platformName(),
+        action: "passkey_login_finish", webauthn: credentialJSON(assertion), ed25519_public_key: pem, x25519_public_key: x25519, platform: platformName(), signature,
     }, Msg.DeviceResult, { accept: r => r.action === "passkey_login_finish" });
 }
 

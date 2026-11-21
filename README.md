@@ -1146,7 +1146,10 @@ features:
 **Linking a phone.** In the desktop client choose **Connections → PWA / Mobile login**. Scan the QR code with the phone camera, or open the server
 address on the phone and type the hidden code. Both screens show the same
 two-digit code; compare it, then approve on the desktop. The phone can then save
-a passkey, which lets a new phone sign in without the desktop. Administrators
+a passkey, which lets a new phone sign in without the desktop. A device signs
+its link or passkey request with the key it asks to have linked; the server
+refuses a request without that signature, so the web app must be the version
+this server serves (reload it after a server update). Administrators
 list, sign out and reset devices with `devicelist`, `devicerevoke` and
 `devicereset` (ServerQuery) or `ListDevices`, `RevokeDevice` and
 `ResetDevices` (gRPC). Devices unused for 180 days are signed out after a

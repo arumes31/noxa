@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import nacl from "tweetnacl";
 
 import {
-    fromBase64, keyFingerprint, linkClaimTranscript, linkProof, linkSAS, normalizeLinkCode, openDM, openScope,
+    deviceKeyClaimTranscript, fromBase64, keyFingerprint, linkClaimTranscript, linkProof, linkSAS, normalizeLinkCode, openDM, openScope,
     openSealed, publicKeyPEM, sealDM, sealScope, sign, toBase64, toBase64URL, fromBase64URL, uniqueIDFromPublicKey, utf8,
 } from "../src/core/crypto.js";
 import { encodeFrame, FrameReader, Msg } from "../src/core/frame.js";
@@ -30,6 +30,8 @@ describe("Go interop", () => {
         assert.equal(toBase64(linkProof(fromBase64(fixture.link_secret), transcript)), fixture.link_proof);
         assert.equal(linkSAS(fromBase64(fixture.link_secret), transcript), fixture.link_sas);
         assert.equal(linkSAS(utf8(normalizeLinkCode("k7qm-4xpa")), transcript), fixture.code_sas);
+        const claim = deviceKeyClaimTranscript(`link:${fixture.link_id}`, fixture.public_key_pem, fixture.x25519_public);
+        assert.equal(toBase64(sign(claim, signing.secretKey)), fixture.claim_key_signature);
     });
 
     it("opens sealed scope keys and channel bodies from Go", () => {

@@ -117,6 +117,15 @@ export function linkClaimTranscript(linkID, edPublicPEM, xPublicB64) {
     return encoder.encode(`noxa-device-link-claim-v1\n${linkID}\n${edPublicPEM}\n${xPublicB64}`);
 }
 
+/**
+ * What a device signs with the key it asks to have linked
+ * (netproto.DeviceKeyClaimTranscript). ref is "link:" + link ID,
+ * "code:" + normalized code or "passkey:" + the WebAuthn challenge.
+ */
+export function deviceKeyClaimTranscript(ref, edPublicPEM, xPublicB64) {
+    return encoder.encode(`noxa-device-key-claim-v1\n${ref}\n${edPublicPEM}\n${xPublicB64}`);
+}
+
 export function linkProof(linkKey, transcript) {
     return hmac(sha256, linkKey, transcript);
 }
