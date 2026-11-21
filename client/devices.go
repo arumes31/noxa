@@ -115,7 +115,8 @@ func (m *connManager) handleDeviceEvent(f *netproto.Frame) {
 			log.Printf("device link %s: dropping a claim without a valid key claim", event.LinkID)
 			return
 		}
-		keys.claimedEd25519, keys.claimedX25519 = event.Ed25519PublicKey, event.X25519PublicKey
+		keys.claimedEd25519 = event.Ed25519PublicKey
+		keys.claimedX25519 = event.X25519PublicKey
 		m.mu.Lock()
 		if _, ok := m.deviceLinks[event.LinkID]; ok {
 			m.deviceLinks[event.LinkID] = keys
