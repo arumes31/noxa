@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"strings"
 
 	"noxa/internal/authorization"
 	"noxa/internal/filetransfer"
@@ -115,7 +116,9 @@ func (s *TCPServer) roleFileTransferInit(ctx context.Context, client *Client, ms
 		if msg.Direction == "upload" {
 			// Resource ceilings apply independently of role grants, including
 			// to the owner and Administrator.
-			if resumer, ok := s.deps.FileTransfer.(ResumableUploadBackend); ok && msg.SHA256 != "" {
+			// An ephemeral guest's unique ID is new on every login: it could
+			// not resume a partial, and its partial budget would start again.
+			if resumer, ok := s.deps.FileTransfer.(ResumableUploadBackend); ok && msg.SHA256 != "" && !strings.HasPrefix(client.uniqueID(), "guest:") {
 				id, token, resumeOffset, resumable, err = resumer.InitResumableUpload(ctx, msg.ChannelID, msg.Folder, msg.Name, msg.Size, client.uniqueID(), s.cfg.FileUserQuotaMB, msg.SHA256)
 			} else {
 				id, token, err = s.deps.FileTransfer.InitUpload(ctx, msg.ChannelID, msg.Folder, msg.Name, msg.Size, client.uniqueID(), s.cfg.FileUserQuotaMB)
