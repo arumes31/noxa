@@ -103,7 +103,8 @@ does not identify the viewer.
 The server voices the name itself (internal/speechnames) with the same model,
 voice blend (it rebuilds the ST13 style and checks its hash), speed and steps,
 and the same trimming, fades and quiet level. Differences: names are not
-respelled or Whisper-reviewed, ffmpeg resamples 44.1 kHz to 24 kHz instead of
+Whisper-reviewed and only respelled through the server's
+pronunciations.json (see the main README), ffmpeg resamples 44.1 kHz to 24 kHz instead of
 the FFT resampler, and a name may be 0.15–4 s long. Until a name is cached the
 client plays the generic clip; **Speak user names in announcements** off always does.
 
