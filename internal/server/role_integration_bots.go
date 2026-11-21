@@ -108,6 +108,26 @@ func (s *TCPServer) integrationScopeStore() (integrationScopeStore, bool) {
 	return scopes, ok
 }
 
+// integrationOnlyReason refuses a member session for an account with a scope
+// ceiling.
+const integrationOnlyReason = "this account is limited to the integration interfaces"
+
+// integrationOnly reports whether uniqueID is an integration account with a
+// stored scope ceiling (an empty one included). The ceiling binds the
+// account, not one transport: member sessions are authorized by roles alone,
+// so such an account gets none. Accounts without a ceiling are unaffected.
+func (s *TCPServer) integrationOnly(ctx context.Context, uniqueID string) (bool, error) {
+	scopes, ok := s.integrationScopeStore()
+	if !ok {
+		return false, nil
+	}
+	state, err := scopes.GetIntegrationScopes(ctx, uniqueID)
+	if errors.Is(err, auth.ErrIntegrationNotFound) {
+		return false, nil
+	}
+	return err == nil && !state.Full, err
+}
+
 // GetIntegrationScopes reports an integration account's scope ceiling. It
 // needs ManageServer.
 func (s *TCPServer) GetIntegrationScopes(ctx context.Context, principal auth.IntegrationPrincipal, request netproto.IntegrationScopesQuery) (netproto.IntegrationScopes, error) {
@@ -138,7 +158,8 @@ func (s *TCPServer) GetIntegrationScopes(ctx context.Context, principal auth.Int
 // it holds itself and cannot clear a ceiling, so scopes never widen through
 // an integration. The change takes the exclusive policy lease: operations
 // already admitted finish first, and the account's sessions must sign in
-// again because their stored ceiling no longer matches.
+// again because their stored ceiling no longer matches. Member sessions of
+// an account that now has a ceiling end (see integrationOnly).
 func (s *TCPServer) SetIntegrationScopes(ctx context.Context, principal auth.IntegrationPrincipal, request netproto.IntegrationScopesSet) (netproto.IntegrationScopes, error) {
 	if !request.Valid() {
 		return netproto.IntegrationScopes{}, authorization.ErrRoleInvalid
@@ -192,6 +213,13 @@ func (s *TCPServer) SetIntegrationScopes(ctx context.Context, principal auth.Int
 		}
 		s.audit(auditCtx, principal.UniqueID(), "integration_scopes", state.UniqueID, detail)
 		result = scopesResult(state)
+		if !state.Full {
+			for _, c := range s.sessionsOf(state.UniqueID) {
+				c.revokeSession()
+				_ = c.Conn.SetDeadline(time.Now().Add(time.Second)) // bounds the close
+				_ = c.Conn.Close()
+			}
+		}
 		return nil
 	})
 	return result, err
