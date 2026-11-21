@@ -134,7 +134,9 @@ func chatExportLine(m netproto.ChatHistoryEntry, mode string) string {
 			tag = "[unverified] "
 		}
 	}
-	return "[" + time.Unix(m.SentAt, 0).Format("2006-01-02 15:04:05") + "] " + tag + name + ": " + body
+	// Names and bodies are sender-controlled: one message stays on one line,
+	// as in chat.log, so a line break in a body cannot start another record.
+	return "[" + time.Unix(m.SentAt, 0).Format("2006-01-02 15:04:05") + "] " + tag + escapeLogRecord(name) + ": " + escapeLogRecord(body)
 }
 
 // DMExportHistory renders a stored DM conversation into the same transcript
