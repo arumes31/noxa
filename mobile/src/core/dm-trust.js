@@ -266,14 +266,17 @@ function validSignedRevocation(r) {
 export function verifyRevocations(principal, trusted, list) {
     if (!Array.isArray(trusted) || !Array.isArray(list)) return [];
     const byID = new Map(trusted.map(d => [d.deviceID, d]));
-    const root = trusted.find(d => d.first)?.deviceID || "";
+    const first = trusted.find(d => d.first);
+    const root = first?.deviceID || "";
     const seen = new Set(), out = [];
     for (const r of list.slice(0, MAX_LISTED_REVOCATIONS)) {
         if (!validSignedRevocation(r) || seen.has(r.device_id)) continue;
         const signer = byID.get(r.signer_device_id);
         if (!signer?.signingKey) continue;
-        if (r.device_id === root && r.signer_device_id !== root) continue;
         const signingKey = ed25519FromPEM(r.ed25519_public_key);
+        // The first device is the account identity: an entry that names its ID
+        // or carries its key counts only as its own revocation of itself.
+        if ((r.device_id === root || equalBytes(signingKey, first?.signingKey)) && !(r.device_id === root && r.signer_device_id === root)) continue;
         let signature;
         try { signature = fromBase64(r.signature); } catch { continue; }
         if (!signingKey || signature.length !== 64 || toBase64(signature) !== r.signature) continue;
@@ -319,9 +322,15 @@ export function withoutRevokedApprovers(devices, pins) {
     });
 }
 
-/** Drops devices a pin names by ID or signing key. */
+/**
+ * Drops devices a pin names by ID or signing key. The first device is never
+ * dropped by key: only a pin that names its ID and that it signed itself
+ * removes it, whatever pins were stored earlier.
+ */
 export function withoutRevokedPins(devices, pins) {
     if (!Array.isArray(pins) || !pins.length) return devices;
     const ids = new Set(pins.map(p => p.device_id)), keys = new Set(pins.map(p => p.key));
-    return devices.filter(d => !ids.has(d.deviceID) && !(d.signingKey && keys.has(toBase64(d.signingKey))));
+    return devices.filter(d => d.first
+        ? !pins.some(p => p.device_id === d.deviceID && p.signer === d.deviceID)
+        : !ids.has(d.deviceID) && !(d.signingKey && keys.has(toBase64(d.signingKey))));
 }

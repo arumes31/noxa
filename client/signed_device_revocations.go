@@ -131,14 +131,19 @@ func (m *connManager) pinSignedRevocations(uid string, verified []devicetrust.Ve
 }
 
 // withoutPinnedRevocations drops devices whose ID or signing key a pin names.
+// The first device is the account identity and is never dropped by key: only
+// a pin that names its ID and that it signed itself removes it, whatever pins
+// were stored earlier.
 func withoutPinnedRevocations(devices []dmTrustedDevice, pins []signedRevocationPin) []dmTrustedDevice {
 	if len(pins) == 0 {
 		return devices
 	}
 	ids := map[string]bool{}
+	selfRevoked := map[string]bool{}
 	var keys []ed25519.PublicKey
 	for _, p := range pins {
 		ids[p.DeviceID] = true
+		selfRevoked[p.DeviceID] = selfRevoked[p.DeviceID] || p.SignerID == p.DeviceID
 		if k, err := auth.LoadPublicKey(p.Ed25519Public); err == nil {
 			keys = append(keys, k)
 		}
@@ -150,6 +155,9 @@ func withoutPinnedRevocations(devices []dmTrustedDevice, pins []signedRevocation
 			if bytes.Equal(k, d.Signing) {
 				revoked = true
 			}
+		}
+		if d.First {
+			revoked = selfRevoked[d.DeviceID]
 		}
 		if !revoked {
 			out = append(out, d)
@@ -228,7 +236,13 @@ func trustedForRevocations(devices []dmTrustedDevice) []devicetrust.Device {
 // frontend about revocations it has not seen yet. It also returns every pin
 // it applied, for the second chain walk without revoked approvers.
 func (m *connManager) applyDeviceRevocations(uid string, devices []dmTrustedDevice, listed []netproto.DeviceRevocation) ([]dmTrustedDevice, []signedRevocationPin, error) {
-	verified := devicetrust.VerifyRevocations(uid, trustedForRevocations(devices), listed)
+	// A device already pinned as revoked signs no further revocations, even
+	// when the directory lists it as active again.
+	stored, _, err := m.pinSignedRevocations(uid, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	verified := devicetrust.VerifyRevocations(uid, trustedForRevocations(withoutPinnedRevocations(devices, stored)), listed)
 	pins, added, err := m.pinSignedRevocations(uid, verified)
 	if err != nil {
 		return nil, nil, err

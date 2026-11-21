@@ -56,6 +56,8 @@ func TestVerifyRevocationsAcceptsOnlyChainedSignatures(t *testing.T) {
 	otherAccount := signRevocation(t, "mallory", laptop, phone, 1_800_000_000)
 	rootByLaptop := signRevocation(t, "alice", laptop, root, 1_800_000_000)
 	rootBySelf := signRevocation(t, "alice", root, root, 1_800_000_000)
+	// The root's key under another device ID, signed by another device.
+	rootKeyByLaptop := signRevocation(t, "alice", laptop, testDevice{id: "other-id", pub: root.pub}, 1_800_000_000)
 
 	retargeted := good
 	retargeted.DeviceID = "tablet" // replaying the signature for another device
@@ -66,7 +68,7 @@ func TestVerifyRevocationsAcceptsOnlyChainedSignatures(t *testing.T) {
 	unsigned := netproto.DeviceRevocation{DeviceID: "old", Ed25519Public: phone.pub, X25519Public: testX25519, RevokedAt: 1, Reason: "admin_reset"}
 
 	got := devicetrust.VerifyRevocations("alice", trusted, []netproto.DeviceRevocation{
-		byStranger, otherAccount, rootByLaptop, retargeted, tamperedKey, tamperedTime, unsigned, good, good, rootBySelf,
+		byStranger, otherAccount, rootByLaptop, rootKeyByLaptop, retargeted, tamperedKey, tamperedTime, unsigned, good, good, rootBySelf,
 	})
 	if len(got) != 2 || got[0].DeviceID != "phone" || got[0].SignerID != "laptop" || got[1].DeviceID != "root" || got[1].SignerID != "root" {
 		t.Fatalf("verified = %+v, want phone (by laptop) and root (by itself) once each", got)

@@ -53,6 +53,30 @@ func TestWithoutPinnedRevocationsDropsByIDAndKey(t *testing.T) {
 	}
 }
 
+func TestWithoutPinnedRevocationsKeepsTheFirstDevice(t *testing.T) {
+	rootPub, _, err := auth.GenerateIdentityKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootKey, err := auth.LoadPublicKey(rootPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	devices := []dmTrustedDevice{{DeviceID: "root", Signing: rootKey, First: true}, {DeviceID: "laptop"}}
+	// Neither its key under another ID nor its ID signed by another device.
+	pins := []signedRevocationPin{
+		{DeviceID: "other-id", Ed25519Public: rootPub, SignerID: "laptop"},
+		{DeviceID: "root", Ed25519Public: rootPub, SignerID: "laptop"},
+	}
+	if got := withoutPinnedRevocations(devices, pins); len(got) != 2 || got[0].DeviceID != "root" {
+		t.Fatalf("kept %+v, want the first device and the laptop", got)
+	}
+	own := []signedRevocationPin{{DeviceID: "root", Ed25519Public: rootPub, SignerID: "root"}}
+	if got := withoutPinnedRevocations(devices, own); len(got) != 1 || got[0].DeviceID != "laptop" {
+		t.Fatalf("kept %+v, want only the laptop after the first device revoked itself", got)
+	}
+}
+
 func TestRevocationNoticesSkipTheFirstListsServerRevocations(t *testing.T) {
 	sink := &revocationEventSink{}
 	m := &connManager{sink: sink}
