@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { MediaKeyStartupInbox, CONTROL_TTL_S, MediaKeyEngine, parseMediaKeyControl, recipientsOf, buildMediaKeyBody, publicationPid, senderPid, MEDIA_KEY_KIND } from "../src/media-keys.js";
+import { DEBOUNCE_MS, JOIN_DEBOUNCE_MS, MediaKeyStartupInbox, CONTROL_TTL_S, MediaKeyEngine, parseMediaKeyControl, recipientsOf, buildMediaKeyBody, publicationPid, senderPid, MEDIA_KEY_KIND } from "../src/media-keys.js";
 
 const flush = async (n = 30) => { for (let i = 0; i < n; i++) await new Promise(r => setTimeout(r, 0)); };
 // Delays collapse to zero; the send timeout is disabled (Infinity).
@@ -81,6 +81,20 @@ test("a joiner gets only the new epoch and a departed device gets nothing after 
     const third = sent.at(-1).body.epoch;
     assert.ok(third > second);
     assert.equal(sent.filter(c => c.device === "d1" && c.body.epoch >= third).length, 0, "the departed device gets no new key");
+    e.stop();
+});
+
+test("a join that needs a fresh rekey keeps the long debounce, so close joins share one rekey", async () => {
+    const delays = [];
+    const timers = { ...fastTimers, setTimeout: (fn, ms) => { delays.push(ms); return setTimeout(fn, 0); } };
+    const e = new MediaKeyEngine({ media: fakeMedia(), timers, sendTimeoutMs: Infinity, now: () => 1_700_000_000_000, send: async () => ({ ok: true }) });
+    e.setRoster([member("c1", "u1", "d1")]);
+    e.start(me);
+    await flush();
+    delays.length = 0;
+    // d1 never announced ratchet support: this join cannot ratchet.
+    e.setRoster([member("c1", "u1", "d1"), member("c2", "u2", "d2")]);
+    assert.ok(delays.includes(DEBOUNCE_MS) && !delays.includes(JOIN_DEBOUNCE_MS), `delays ${delays}`);
     e.stop();
 });
 

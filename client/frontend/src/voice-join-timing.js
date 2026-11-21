@@ -12,7 +12,9 @@ export function markVoiceJoin(name, now = performance.now()) {
 
 /** Marks derived from the key engine's status (channel-media status events). */
 export function markVoiceJoinKeys(status, now = performance.now()) {
-    if (!run || !status || status.state === "off") return;
+    // Key marks end 30 s after the join started: a later one belongs to
+    // somebody else joining, not to this join.
+    if (!run || !status || status.state === "off" || now - run.at > 30_000) return;
     if (status.epoch) markVoiceJoin("own_key_active", now);
     if (status.delivered > 0) markVoiceJoin("own_key_first_delivered", now);
     if (status.recipients > 0 && status.delivered >= status.recipients) markVoiceJoin("own_key_all_delivered", now);

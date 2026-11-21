@@ -22,4 +22,6 @@ test("only a finished slow join is summarized, once", () => {
     beginVoiceJoin(0);
     markVoiceJoin("transport_connected", 900);
     assert.equal(slowVoiceJoinSummary(), "", "a fast join is not reported");
+    markVoiceJoinKeys({ state: "encrypted", epoch: 1, recipients: 1, delivered: 1, participants: [{ received: true }] }, 60_000);
+    assert.equal(slowVoiceJoinSummary(), "", "a later participant does not make it slow");
 });

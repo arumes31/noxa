@@ -2590,7 +2590,8 @@ async function startVoiceAttempt(expectedEpoch, startup) {
     let capturedStream;
     beginVoiceJoin();
     // The relay settings do not depend on the microphone: fetch them while it opens.
-    const iceServersPending = Promise.resolve().then(() => window.go.main.App.GetICEServersForTab(tabID)).catch(() => null);
+    const iceServersPending = Promise.resolve().then(() => window.go.main.App.GetICEServersForTab(tabID)).catch(() => null)
+        .finally(() => { if (current()) markVoiceJoin("relay_settings"); });
     try {
         capturedStream = await navigator.mediaDevices.getUserMedia({
             audio: audioConstraints(),
@@ -2617,7 +2618,6 @@ async function startVoiceAttempt(expectedEpoch, startup) {
     // ICE servers delivered by the server at connect (STUN/TURN); an empty
     // list means "client defaults" (plain RTCPeerConnection).
     const iceServers = await iceServersPending; // null: fall back to client defaults
-    markVoiceJoin("relay_settings");
     let mediaLimits = null;
     let limitsSequence = mediaLimitsSequence;
     try {
