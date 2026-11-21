@@ -96,7 +96,7 @@ import { initPolishUI } from "./polish-ui.js";
 import { imageDataURL, setSafeImage } from "./safe-media.js";
 import { initNotifications } from "./notifications.js";
 import { setLanguage, currentLanguage, applyStaticLabels, t } from "./i18n.js";
-import { extractPresentedFingerprint } from "./security.js";
+import { extractPresentedFingerprint, installDropGuard } from "./security.js";
 import { describeCallConnection, initialCallConnection, reduceCallConnection, trackIsFlowing } from "./call-connection-state.js";
 import { openContactKeyChangeDialog } from "./contact-key-change-ui.js";
 import { isActivationKey } from "./a11y.js";
@@ -112,6 +112,8 @@ import { captureMediaScope, mediaScopeIsCurrent, setWhisperRouting, whisperChann
 import { bindImagePlaceholders } from "./markdown.js";
 import { createResumeDetector } from "./resume-detector.js";
 import { bindCodeBlocks } from "./code-blocks.js";
+
+installDropGuard(window);
 
 const P = () => window.__noxaPerms;
 window.__noxaChat = chatUI;
