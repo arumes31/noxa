@@ -45,6 +45,10 @@ func (b *sessionRequestBudget) allow(mt netproto.MessageType, now time.Time) boo
 		// A real change rebuilds a snapshot for every recipient; repeats are
 		// only acknowledged. Loose enough for rapid mute toggling.
 		class, burst, rate = 9, 20, 4
+	case netproto.MsgVoiceQueueRequest:
+		// A raise or lower rebuilds a snapshot for every recipient, like an
+		// audio state change. Leaves room for a moderator's next and clear.
+		class, burst, rate = 8, 20, 4
 	case netproto.MsgSetStatus, netproto.MsgDisplayNameSet:
 		// Each change rebuilds a snapshot for every recipient.
 		class, burst, rate = 5, 5, 0.5

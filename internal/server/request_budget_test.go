@@ -38,6 +38,14 @@ func TestSessionRequestBudgets(t *testing.T) {
 	if a.allow(netproto.MsgWebRTCOffer, now) {
 		t.Fatal("unbounded offers")
 	}
+	for range 20 {
+		if !a.allow(netproto.MsgVoiceQueueRequest, now) {
+			t.Fatal("voice queue burst rejected")
+		}
+	}
+	if a.allow(netproto.MsgVoiceQueueRequest, now) || !a.allow(netproto.MsgAudioStateSet, now) {
+		t.Fatal("unbounded voice queue requests, or they consumed audio state tokens")
+	}
 	if !a.allow(netproto.MsgPing, now) {
 		t.Fatal("heartbeat throttled")
 	}
