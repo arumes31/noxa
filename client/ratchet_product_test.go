@@ -498,6 +498,11 @@ func TestRatchetProductBridge(t *testing.T) {
 	g1, g2, g3, gx := fixture.Groups["g1"], fixture.Groups["g2"], fixture.Groups["g3"], fixture.Groups["gx"]
 	step := func(name string) { t.Logf("[%6.1fs] %s", time.Since(started).Seconds(), name) }
 
+	// The fixture's PWA devices publish when their pages boot, and a linked
+	// device that has not published blocks every send of its account. The
+	// PWA side answers steps only once those pages are up, so wait for it
+	// instead of racing the browser start.
+	b.pwa("nalice-phone", `return true;`)
 	// 1. Direct send through SendChatForTab; typed archive; receive projection.
 	step("1 direct send")
 	if e := A.app.SendChatForTab(A.tab, "direct", "nbob", "hello nbob"); e != "" {
