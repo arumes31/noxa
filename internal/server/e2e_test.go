@@ -4,6 +4,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -25,6 +26,7 @@ import (
 	"noxa/internal/config"
 	"noxa/internal/netproto"
 	"noxa/internal/state"
+	"noxa/internal/store"
 )
 
 func TestMoveCommitsWhenChannelKeyDeliveryIsCancelled(t *testing.T) {
@@ -368,13 +370,13 @@ func TestGuestKeyLookupScopedToVisibleScope(t *testing.T) {
 			t.Fatalf("device directory served to a device-less guest: %+v", got.Devices)
 		}
 	})
-	t.Run("guest with a linked device resolves an unshared principal", func(t *testing.T) {
-		// A key-login guest that linked a device is an accountable DM
-		// participant, not the at-scale harvester; it is not scope-gated.
+	t.Run("guest with a device stays scope-gated", func(t *testing.T) {
+		// A guest registers and approves its own devices, so a device is
+		// no exemption from the scope gate.
 		deviceGuest := &Client{ID: "device-guest", UniqueID: "dguest-uid", deviceID: "dguest-dev"}
-		got := keyLookup(t, env.srv, deviceGuest, netproto.KeyRequest{UniqueID: "offline-uid"})
-		if got.PublicKey != memberKey {
-			t.Fatalf("device-guest lookup of unshared principal = %q, want %q (unrestricted)", got.PublicKey, memberKey)
+		got := keyLookup(t, env.srv, deviceGuest, netproto.KeyRequest{UniqueID: "offline-uid", Devices: true})
+		if got.PublicKey != unknown.PublicKey || len(got.Devices) != 0 {
+			t.Fatalf("device-guest lookup of unshared principal = %+v, want empty like unknown", got)
 		}
 	})
 }
@@ -970,4 +972,30 @@ func readChannelKeyFor(t *testing.T, conn net.Conn, scope int64) netproto.Channe
 // testChannel returns a minimal permanent channel for state registration.
 func testChannel(id int64) *state.Channel {
 	return &state.Channel{ChannelID: id, Name: "test", ChannelType: 2}
+}
+
+// A key-identity guest registers its own first device with a device-list
+// request. That device is no approval by anyone else, so the guest stays
+// scope-gated in the key directory.
+func TestKeyGuestOwnDeviceStaysScopeGated(t *testing.T) {
+	env, devices := startDeviceTestEnv(t)
+	env.auth.mu.Lock()
+	env.auth.e2eByUID = map[string]string{"offline-uid": b64e(make([]byte, 32))} // registered, offline, shares no scope
+	env.auth.mu.Unlock()
+	if _, err := devices.AddDevice(t.Context(), store.NewDevice{Principal: "offline-uid", UserID: 5, Kind: store.DeviceKindDesktop, Name: "Desktop",
+		Ed25519Public: b64e(bytes.Repeat([]byte{7}, 32)), X25519Public: b64e(make([]byte, 32))}, 0); err != nil {
+		t.Fatal(err)
+	}
+	guest, deviceID := keyGuestWithDevice(t, env.addr, newLinkTestKeys(t))
+	if deviceID == "" {
+		t.Fatal("the key guest registered no device")
+	}
+	send(t, guest, netproto.MsgKeyRequest, netproto.KeyRequest{UniqueID: "offline-uid", Devices: true})
+	var got netproto.KeyResponse
+	if err := netproto.Decode(readOfType(t, guest, netproto.MsgKeyResponse), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.PublicKey != "" || len(got.Devices) != 0 {
+		t.Fatalf("guest with its own device resolved an unshared principal: %+v", got)
+	}
 }
