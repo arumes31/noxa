@@ -67,6 +67,10 @@ const (
 	// session for this token, account and device, or another handover is
 	// already pending. The client falls back to a restart with resume.
 	ReasonHandoverUnavailable = "update handover unavailable"
+	// ReasonNoServerBinding refuses a key login on a control port without
+	// TLS: there is no certificate to bind the login proof to. A password
+	// login continues without a key proof.
+	ReasonNoServerBinding = "this server runs without TLS, so signing in with an identity key is unavailable; use an account password or ask the administrator to enable TLS"
 )
 
 // Fast heartbeat (heartbeat-fast-v1). A client that announced

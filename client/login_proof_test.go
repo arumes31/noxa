@@ -17,11 +17,8 @@ import (
 // fetched on the same connection; a server that answers the probe without a
 // challenge (no proof support needed) still logs the client in.
 func TestPasswordLoginProvesIdentityKey(t *testing.T) {
-	for _, challenge := range []bool{true, false} {
-		name := "server without challenge"
-		if challenge {
-			name = "proof"
-		}
+	for _, name := range []string{"proof", "server without challenge", "server without a binding"} {
+		challenge := name == "proof"
 		t.Run(name, func(t *testing.T) {
 			cert, fingerprint, err := tlscert.Ensure(t.TempDir(), "", "", nil)
 			if err != nil {
@@ -73,6 +70,14 @@ func TestPasswordLoginProvesIdentityKey(t *testing.T) {
 					}
 					if auth.VerifyLoginChallenge(login.PublicKey, "tls-sha256:"+strings.Repeat("00", 32), nonce, login.PublicKeyProof) == nil {
 						result <- "the key proof verifies for another server"
+						return
+					}
+				}
+				if name == "server without a binding" {
+					// TLS ends at a proxy: the probe is refused, the password login follows.
+					_ = netproto.WriteFrame(conn, mustEncode(netproto.MsgAuthResponse, netproto.AuthResponse{Reason: netproto.ReasonNoServerBinding}))
+					if login := read(); login.Password != "pw" || len(login.PublicKeyProof) != 0 {
+						result <- "no password login without a proof followed the refused probe"
 						return
 					}
 				}

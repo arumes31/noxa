@@ -204,7 +204,7 @@ func TestKeyLoginNeedsAServerIdentity(t *testing.T) {
 		}
 		keys := newLinkTestKeys(t)
 		send(t, peer, netproto.MsgAuthenticate, netproto.Authenticate{Username: keys.uniqueID, Anonymous: true})
-		if resp := authReply(t, peer); resp.OK || resp.Reason != reasonNoServerBinding {
+		if resp := authReply(t, peer); resp.OK || resp.Reason != netproto.ReasonNoServerBinding {
 			t.Fatalf("key login without TLS = %+v", resp)
 		}
 		send(t, peer, netproto.MsgAuthSignature, netproto.AuthSignature{PublicKey: keys.public, Signature: make([]byte, 64)})

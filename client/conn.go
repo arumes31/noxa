@@ -737,6 +737,17 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 			_ = conn.Close()
 			return err.Error()
 		}
+		if proving && !resp.OK && resp.Reason == netproto.ReasonNoServerBinding {
+			// TLS ends at a proxy: the server has nothing to bind a proof to.
+			// The password still decides; the key stays unproven.
+			proving = false
+			pending = authMsg
+			if err := m.writeConn(conn, netproto.MsgAuthenticate, pending); err != nil {
+				_ = conn.Close()
+				return err.Error()
+			}
+			continue
+		}
 		if resp.OK && resp.Standby && handoverBegin != nil && !committed {
 			// Standby: the old process keeps the session until this commit.
 			if !handoverBegin() {

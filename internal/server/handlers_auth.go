@@ -23,10 +23,6 @@ import (
 // valid before the client must request a new one.
 const authChallengeTTL = 30 * time.Second
 
-// reasonNoServerBinding refuses a key login on a control port without TLS:
-// there is no certificate to bind the login proof to.
-const reasonNoServerBinding = "this server runs without TLS, so signing in with an identity key is unavailable; use an account password or ask the administrator to enable TLS"
-
 // handleAuthenticate starts authentication. Paths:
 //   - Password: verified against the users table (registered users).
 //   - No password: challenge-response handshake (registered users, and
@@ -164,7 +160,7 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 		}
 		attempt.Cancel()
 		if s.loginBinding(client) == "" {
-			return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: reasonNoServerBinding})
+			return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: netproto.ReasonNoServerBinding})
 		}
 		challenge, err := auth.GenerateChallenge()
 		if err != nil {
