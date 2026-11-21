@@ -728,3 +728,45 @@ func TestResumeStoreAbandonAndReinstate(t *testing.T) {
 		t.Fatal("a reinstated claim must accept the same token again")
 	}
 }
+
+// A key-identity guest's own device is free to make, so it is no reason to
+// keep the guest's place either: a login, device-list and drop loop must not
+// leave reconnecting members behind.
+func TestKeyGuestWithOwnDeviceLeavesNoKeptPlace(t *testing.T) {
+	env, _ := startDeviceTestEnv(t)
+	for range 3 {
+		keys := newLinkTestKeys(t)
+		conn := dialRetry(t, env.addr)
+		send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: keys.uniqueID, Anonymous: true, Nickname: "visitor",
+			ClientFeatures: []string{netproto.ClientFeatureGoodbye, netproto.ClientFeatureResume}})
+		var challenge netproto.AuthChallenge
+		if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthChallenge), &challenge); err != nil {
+			t.Fatal(err)
+		}
+		signature, err := auth.SignLoginChallenge(keys.private, challenge.Challenge)
+		if err != nil {
+			t.Fatal(err)
+		}
+		send(t, conn, netproto.MsgAuthSignature, netproto.AuthSignature{PublicKey: keys.public, Signature: signature, X25519PublicKey: keys.x25519})
+		var resp netproto.AuthResponse
+		if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthResponse), &resp); err != nil || !resp.OK || !resp.Guest {
+			t.Fatalf("key guest login = %+v, %v", resp, err)
+		}
+		registered := false
+		for _, d := range deviceCall(t, conn, netproto.DeviceRequest{Action: netproto.DeviceActionList}).Devices {
+			registered = registered || d.Current
+		}
+		if !registered {
+			t.Fatal("the key guest registered no device")
+		}
+		_ = conn.Close() // no goodbye: a lost connection
+		waitFor(t, "guest departed", func() bool { _, ok := env.state.GetClient(resp.ClientID); return !ok })
+		waitFor(t, "token revoked", func() bool { return env.srv.resume.len() == 0 })
+		env.srv.presence.mu.Lock()
+		kept := len(env.srv.presence.updating)
+		env.srv.presence.mu.Unlock()
+		if kept != 0 {
+			t.Fatalf("a guest with its own device kept %d place(s) after a lost connection", kept)
+		}
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"noxa/internal/authorization"
 	"noxa/internal/config"
 	"noxa/internal/netproto"
+	"noxa/internal/store"
 )
 
 func TestRoleLoginDoesNotDiscloseGlobalKeyMOTDOrAnnouncement(t *testing.T) {
@@ -189,5 +190,47 @@ func TestClientInfoIdleIgnoresControlTraffic(t *testing.T) {
 	env.state.AddClient(member)
 	if info := queryClientInfo(t, conn, clientID); info.IdleSeconds != 0 {
 		t.Fatalf("clock change produced negative idle: %+v", info)
+	}
+}
+
+// The address of an IP ban is a remote address: the ban list shows it only to
+// a reader that also holds ViewRemoteAddresses. Other ban managers get a
+// masked value and still see the row, so they can lift it by ID.
+func TestBanListMasksAddressesWithoutViewRemoteAddresses(t *testing.T) {
+	for name, tc := range map[string]struct {
+		permissions []authorization.Capability
+		want        string
+	}{
+		"ban members only":          {[]authorization.Capability{authorization.BanMembers}, "hidden"},
+		"ban members and addresses": {[]authorization.Capability{authorization.BanMembers, authorization.ViewRemoteAddresses}, "203.0.113.9"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			backend := serverRoleFixture()
+			backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel, authorization.Connect}
+			backend.policy.Roles = append(backend.policy.Roles, authorization.Role{ID: 20, Name: "moderator", Position: 1, Permissions: tc.permissions})
+			backend.policy.Members = []authorization.RoleMember{{UserID: 1, RoleIDs: []int64{20}}}
+			authority, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			env := startTestEnvDeps(t, nil, nil, func(d *Deps) { d.Authority = authority })
+			defer env.stop()
+			env.banAdmin.mu.Lock()
+			env.banAdmin.bans = []store.BanRecord{{ID: 7, Type: 0, Value: "203.0.113.9"}, {ID: 6, Type: 1, Value: "guest-uid"}}
+			env.banAdmin.mu.Unlock()
+			moderator, _ := dialAuthed(t, env.addr, "admin-uid")
+			defer func() { _ = moderator.Close() }()
+			send(t, moderator, netproto.MsgBanList, netproto.BanList{})
+			var got netproto.BanListResponse
+			if err := netproto.Decode(readOfType(t, moderator, netproto.MsgBanListResponse), &got); err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Bans) != 2 || got.Bans[0].ID != 7 || got.Bans[0].Type != 0 || got.Bans[0].Value != tc.want {
+				t.Fatalf("IP ban row = %+v, want value %q", got.Bans, tc.want)
+			}
+			if got.Bans[1].Value != "guest-uid" {
+				t.Fatalf("unique-ID ban value = %q, want it unmasked", got.Bans[1].Value)
+			}
+		})
 	}
 }

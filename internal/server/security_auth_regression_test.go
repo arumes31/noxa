@@ -1,7 +1,9 @@
 package server
 
 import (
+	"errors"
 	"net"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -9,6 +11,7 @@ import (
 	"noxa/internal/e2ee"
 	"noxa/internal/netproto"
 	"noxa/internal/state"
+	"noxa/internal/store"
 )
 
 func authReply(t *testing.T, conn net.Conn) netproto.AuthResponse {
@@ -20,10 +23,10 @@ func authReply(t *testing.T, conn net.Conn) netproto.AuthResponse {
 	return resp
 }
 
-// An older client's password login presents its key without a proof: the
-// key still serves the session (signed directory publish, device
-// registration) but is recorded unproven.
-func TestOldClientPasswordLoginKeepsUnprovenKeySession(t *testing.T) {
+// A password login that presents its key without a proof keeps the key for
+// what the session signs (signed directory publish) and binds it unproven,
+// but registers no device; a proven login does.
+func TestUnprovenKeyPasswordLoginRegistersNoDevice(t *testing.T) {
 	devices := &fakeDevices{}
 	env := startTestEnvDeps(t, nil, nil, func(deps *Deps) { deps.Devices = devices })
 	defer env.stop()
@@ -51,27 +54,28 @@ func TestOldClientPasswordLoginKeepsUnprovenKeySession(t *testing.T) {
 	send(t, conn, netproto.MsgKeyPublish, netproto.KeyPublish{PublicKey: record})
 	readOfType(t, conn, netproto.MsgChannelKey)
 	if got, _ := env.srv.senderDMKey(mustServerClient(t, env, resp.ClientID)); got != record {
-		t.Fatal("signed directory publish refused for an older client")
+		t.Fatal("signed directory publish refused for an unproven key")
 	}
-	listed := deviceCall(t, conn, netproto.DeviceRequest{Action: netproto.DeviceActionList})
-	if len(listed.Devices) != 1 || !listed.Devices[0].Current {
-		t.Fatalf("device registration for an older client = %+v", listed.Devices)
+	if listed := deviceCall(t, conn, netproto.DeviceRequest{Action: netproto.DeviceActionList}); len(listed.Devices) != 0 {
+		t.Fatalf("an unproven key registered a device: %+v", listed.Devices)
 	}
-	if d, err := devices.DeviceByKey(t.Context(), keys.public); err != nil || !d.KeyUnproven {
-		t.Fatalf("registered device = %+v, %v; want an unproven key", d, err)
+	if _, err := devices.DeviceByKey(t.Context(), keys.public); !errors.Is(err, store.ErrDeviceNotFound) {
+		t.Fatalf("device row for an unproven key: %v", err)
 	}
 
-	// A later proven login (updated client) upgrades binding and device.
+	// A later proven login proves the binding and registers the device.
 	proven := dialRetry(t, env.addr)
 	defer func() { _ = proven.Close() }()
 	sendProvenPasswordAuth(t, proven, netproto.Authenticate{Username: "user-uid", Password: "pw", PublicKey: keys.public, AuthorizationModels: []string{netproto.AuthorizationModelRolesV1}}, keys.private)
 	if resp := authReply(t, proven); !resp.OK {
 		t.Fatalf("proven login: %s", resp.Reason)
 	}
-	waitFor(t, "device key proven", func() bool {
-		d, err := devices.DeviceByKey(t.Context(), keys.public)
-		return err == nil && !d.KeyUnproven
-	})
+	if listed := deviceCall(t, proven, netproto.DeviceRequest{Action: netproto.DeviceActionList}); len(listed.Devices) != 1 || !listed.Devices[0].Current {
+		t.Fatalf("device registration after a proven login = %+v", listed.Devices)
+	}
+	if d, err := devices.DeviceByKey(t.Context(), keys.public); err != nil || d.KeyUnproven {
+		t.Fatalf("registered device = %+v, %v; want a proven key", d, err)
+	}
 	env.auth.mu.Lock()
 	last := env.auth.bindings[len(env.auth.bindings)-1]
 	env.auth.mu.Unlock()
@@ -83,8 +87,9 @@ func TestOldClientPasswordLoginKeepsUnprovenKeySession(t *testing.T) {
 	}
 }
 
-// Someone else's key presented without a proof binds and registers only as
-// unproven, so it never routes the key owner's guest login into the account.
+// Someone else's key presented without a proof binds only as unproven and
+// registers no device, so it never routes the key owner's guest login into
+// the account.
 func TestUnprovenKeyNeverRoutesKeyLogin(t *testing.T) {
 	devices := &fakeDevices{}
 	env := startTestEnvDeps(t, nil, nil, func(deps *Deps) { deps.Devices = devices })
@@ -99,9 +104,9 @@ func TestUnprovenKeyNeverRoutesKeyLogin(t *testing.T) {
 		t.Fatalf("password login: %s", resp.Reason)
 	}
 	readOfType(t, conn, netproto.MsgSnapshot)
-	deviceCall(t, conn, netproto.DeviceRequest{Action: netproto.DeviceActionList}) // registers the device
-	if d, err := devices.DeviceByKey(t.Context(), victim.public); err != nil || !d.KeyUnproven {
-		t.Fatalf("attacker device = %+v, %v; want an unproven key", d, err)
+	deviceCall(t, conn, netproto.DeviceRequest{Action: netproto.DeviceActionList})
+	if _, err := devices.DeviceByKey(t.Context(), victim.public); !errors.Is(err, store.ErrDeviceNotFound) {
+		t.Fatalf("a key named without proof registered a device: %v", err)
 	}
 
 	// A proof made with another key is not a proof.
@@ -313,4 +318,67 @@ func TestSessionResumeKeepsInvisibleOnlyForAdmins(t *testing.T) {
 	if c := resume("user-uid", "invisible"); c.Status != "" || c.StatusMessage != "brb" {
 		t.Fatalf("resumed non-admin status = %q %q, want online brb", c.Status, c.StatusMessage)
 	}
+}
+
+// A session carries a linked device only if its login signed for that
+// device's key. A password login that merely names the key signs in without
+// a device, so it stays behind every device-scoped check.
+func TestPasswordLoginNamingADeviceKeyNeedsProofToAttach(t *testing.T) {
+	env, devices := startDeviceTestEnv(t)
+	owner := newLinkTestKeys(t)
+	desktop := desktopLogin(t, env.addr, owner)
+	defer func() { _ = desktop.Close() }()
+	listed := deviceCall(t, desktop, netproto.DeviceRequest{Action: netproto.DeviceActionList})
+	if len(listed.Devices) != 1 || !listed.Devices[0].FirstDevice || !listed.Devices[0].Current {
+		t.Fatalf("setup: devices = %+v", listed.Devices)
+	}
+	first := listed.Devices[0]
+
+	named := dialRetry(t, env.addr)
+	defer func() { _ = named.Close() }()
+	send(t, named, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw", PublicKey: owner.public})
+	resp := authReply(t, named)
+	if !resp.OK {
+		t.Fatalf("password login naming a key: %s", resp.Reason)
+	}
+	if session := mustServerClient(t, env, resp.ClientID); resp.DeviceID != "" || session.currentDeviceID() != "" {
+		t.Fatalf("unproven key attached device %q (session %q)", resp.DeviceID, session.currentDeviceID())
+	}
+	// The device list still works and marks no device as this session's.
+	for _, d := range deviceCall(t, named, netproto.DeviceRequest{Action: netproto.DeviceActionList}).Devices {
+		if d.Current {
+			t.Fatalf("unproven session listed %s as its own device", d.DeviceID)
+		}
+	}
+	refused := deviceCallError(t, named, netproto.DeviceRequest{Action: netproto.DeviceActionRevoke, DeviceID: first.DeviceID})
+	if !strings.Contains(refused.Message, "first device cannot") {
+		t.Fatalf("revoking the first device from an unproven session = %+v", refused)
+	}
+	if d, err := devices.DeviceByKey(t.Context(), owner.public); err != nil || !d.Active() {
+		t.Fatalf("first device after the refused revoke = %+v, %v", d, err)
+	}
+
+	// A device row stored unproven is no exception; a proven login attaches
+	// and upgrades it.
+	legacy := newLinkTestKeys(t)
+	row, err := devices.AddDevice(t.Context(), store.NewDevice{Principal: "user-uid", UserID: 2, Kind: store.DeviceKindDesktop, Name: "Desktop", Ed25519Public: legacy.public, KeyUnproven: true}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unproven := dialRetry(t, env.addr)
+	defer func() { _ = unproven.Close() }()
+	send(t, unproven, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw", PublicKey: legacy.public})
+	if resp := authReply(t, unproven); !resp.OK || resp.DeviceID != "" {
+		t.Fatalf("unproven login for an unproven row = %+v, want signed in without a device", resp)
+	}
+	proven := dialRetry(t, env.addr)
+	defer func() { _ = proven.Close() }()
+	sendProvenPasswordAuth(t, proven, netproto.Authenticate{Username: "user-uid", Password: "pw", PublicKey: legacy.public}, legacy.private)
+	if resp := authReply(t, proven); !resp.OK || resp.DeviceID != row.DeviceID {
+		t.Fatalf("proven login = %+v, want device %s", resp, row.DeviceID)
+	}
+	waitFor(t, "device key proven", func() bool {
+		d, err := devices.DeviceByKey(t.Context(), legacy.public)
+		return err == nil && !d.KeyUnproven
+	})
 }

@@ -5,6 +5,7 @@ import (
 
 	"noxa/internal/authorization"
 	"noxa/internal/netproto"
+	"noxa/internal/store"
 )
 
 // --- ban administration (wave 6b) --------------------------------------------
@@ -19,6 +20,16 @@ func (s *TCPServer) handleBanList(ctx context.Context, client *Client, f *netpro
 	})
 }
 
+// banValueFor is the ban value a reader may see: the address of an IP ban
+// (ban_type 0) is a remote address and keeps the ViewRemoteAddresses gate.
+// A masked ban can still be listed and lifted by ID.
+func banValueFor(b store.BanRecord, showAddresses bool) string {
+	if b.Type == 0 && !showAddresses {
+		return "hidden"
+	}
+	return b.Value
+}
+
 func (s *TCPServer) sendBanList(ctx context.Context, client *Client) error {
 	if s.deps == nil || s.deps.BanAdmin == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "ban store unavailable")
@@ -27,10 +38,11 @@ func (s *TCPServer) sendBanList(ctx context.Context, client *Client) error {
 	if err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "ban list failed")
 	}
+	showAddresses := ctx.Value(roleLeaseKey{}).(roleLease).evaluator.Evaluate(client.userID(), 0, authorization.ViewRemoteAddresses).Allowed
 	resp := netproto.BanListResponse{Bans: []netproto.BanEntry{}}
 	for _, b := range bans {
 		e := netproto.BanEntry{
-			ID: b.ID, Type: b.Type, Value: b.Value, Reason: b.Reason,
+			ID: b.ID, Type: b.Type, Value: banValueFor(b, showAddresses), Reason: b.Reason,
 			BannedBy: b.BannedBy, CreatedAt: b.CreatedAt.Unix(),
 		}
 		if b.ExpiresAt != nil {

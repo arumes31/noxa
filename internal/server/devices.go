@@ -338,7 +338,9 @@ func (s *TCPServer) sessionDeviceRejection(ctx context.Context, client *Client, 
 // are not registered stay unattached until the session manages devices.
 func (s *TCPServer) attachSessionDevice(ctx context.Context, client *Client, principal string) string {
 	key := client.sessionKey()
-	if key == "" || s.deps == nil || s.deps.Devices == nil {
+	// A device identity needs proof of its key: a session that only named a
+	// key signs in without a device.
+	if key == "" || !client.keyProven() || s.deps == nil || s.deps.Devices == nil {
 		return ""
 	}
 	d, err := s.deps.Devices.DeviceByKey(ctx, key)
@@ -369,7 +371,7 @@ func (s *TCPServer) attachSessionDevice(ctx context.Context, client *Client, pri
 	if err := s.deps.Devices.TouchDevice(ctx, d.DeviceID, time.Now()); err != nil {
 		s.logger.Warn("recording device activity failed", zap.Error(err))
 	}
-	if d.KeyUnproven && client.keyProven() {
+	if d.KeyUnproven {
 		if err := s.deps.Devices.MarkDeviceKeyProven(ctx, d.DeviceID); err != nil {
 			s.logger.Warn("recording proven device key failed", zap.Error(err))
 		}
@@ -387,7 +389,7 @@ func (s *TCPServer) ensureDesktopDevice(ctx context.Context, client *Client) (st
 		return s.deps.Devices.DeviceByID(ctx, client.uniqueID(), id)
 	}
 	key := client.sessionKey()
-	if key == "" {
+	if key == "" || !client.keyProven() {
 		return store.Device{}, store.ErrDeviceNotFound
 	}
 	kind, name := store.DeviceKindDesktop, "Desktop"
@@ -405,7 +407,6 @@ func (s *TCPServer) ensureDesktopDevice(ctx context.Context, client *Client) (st
 		Name:          name,
 		Ed25519Public: key,
 		X25519Public:  client.x25519(),
-		KeyUnproven:   !client.keyProven(),
 	}, s.cfg.Web.DeviceLimit())
 	if err != nil {
 		return store.Device{}, err

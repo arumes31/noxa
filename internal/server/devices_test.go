@@ -768,7 +768,7 @@ func TestSelfRootedWebGuestRegistersDevice(t *testing.T) {
 	devices := &fakeDevices{}
 	s := &TCPServer{cfg: &config.Config{}, logger: zap.NewNop(), deps: &Deps{Devices: devices}}
 	web := func(uid string, userID int64) *Client {
-		c := &Client{UniqueID: uid, UserID: userID, authed: true, authSigningKey: pub}
+		c := &Client{UniqueID: uid, UserID: userID, authed: true, authSigningKey: pub, authKeyProven: true}
 		c.webTransport.Store(true)
 		return c
 	}

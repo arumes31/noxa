@@ -111,20 +111,29 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 
 	// Global server password: when set, the client must supply it.
 	// A password that already verified skips the KDF, so clients that know
-	// it cannot occupy the shared KDF slots by reconnecting.
-	if hash := s.deps.ServerPasswordHash; hash != "" && !s.verifiedSecrets.known(hash, msg.ServerPassword) {
-		attempt, allowed, busy := s.loginLimiter.ReservePassword(serverPasswordScope)
-		if !allowed {
-			return s.refuseLoginAttempt(client, busy, msg.ClientFeatures)
+	// it cannot occupy the shared KDF slots by reconnecting. It skips only
+	// the KDF: a locked-out source stays locked whatever it presents.
+	if hash := s.deps.ServerPasswordHash; hash != "" {
+		if s.verifiedSecrets.known(hash, msg.ServerPassword) {
+			attempt, allowed := s.loginLimiter.ReserveSignature(serverPasswordScope)
+			if !allowed {
+				return s.refuseLoginAttempt(client, false, msg.ClientFeatures)
+			}
+			attempt.Cancel()
+		} else {
+			attempt, allowed, busy := s.loginLimiter.ReservePassword(serverPasswordScope)
+			if !allowed {
+				return s.refuseLoginAttempt(client, busy, msg.ClientFeatures)
+			}
+			defer attempt.Cancel()
+			if err := s.verifyServerPassword(msg.ServerPassword, hash); err != nil {
+				attempt.Fail()
+				s.metricsSink().IncAuthFailure("tcp", "server_password")
+				return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "invalid server password"})
+			}
+			attempt.Succeed(serverPasswordScope)
+			s.verifiedSecrets.remember(hash, msg.ServerPassword)
 		}
-		defer attempt.Cancel()
-		if err := s.verifyServerPassword(msg.ServerPassword, hash); err != nil {
-			attempt.Fail()
-			s.metricsSink().IncAuthFailure("tcp", "server_password")
-			return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "invalid server password"})
-		}
-		attempt.Succeed(serverPasswordScope)
-		s.verifiedSecrets.remember(hash, msg.ServerPassword)
 	}
 
 	// Immediate ephemeral guest login.
@@ -186,9 +195,9 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	client.mu.Unlock()
 	// Bind the client's identity key so future challenge logins work. Only a
 	// key signed for (a challenge issued on this connection) is proven and may
-	// route key logins; an older client's unproven key still serves this
-	// password session (signing key, device), which is harmless because the
-	// account holder cannot sign with someone else's key.
+	// route key logins or carry a device; an unproven key still verifies what
+	// this password session signs, which is harmless because the account
+	// holder cannot sign with someone else's key.
 	if msg.PublicKey != "" {
 		proven := len(proofChallenge) > 0 && auth.VerifyLoginChallenge(msg.PublicKey, proofChallenge, msg.PublicKeyProof) == nil
 		if canonical, err := auth.CanonicalPublicKey(msg.PublicKey); err == nil {

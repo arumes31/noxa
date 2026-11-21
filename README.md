@@ -1132,7 +1132,10 @@ features:
   and ban members from their profile card or the Servers tab. Banning a guest
   also bans its IP address (shown as a separate IP ban, which also blocks members
   on that address); lifting the guest ban lifts both. Web guests seen only as a
-  loopback or trusted-proxy address get no IP ban.
+  loopback or trusted-proxy address get no IP ban. The ban list (also the
+  ServerQuery and gRPC ban readers) shows the address of an IP ban only to
+  members who also hold **View remote addresses**; other ban managers see
+  `hidden` there and can still lift the ban.
 - **Tablets and desktops:** from 900 px wide the app switches to a
   three-column layout with a sidebar, chat tabs, a details panel, a voice card
   and a quick switcher (Ctrl/Cmd+K) that also opens Search, Inbox, Saved

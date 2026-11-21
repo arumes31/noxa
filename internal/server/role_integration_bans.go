@@ -26,6 +26,7 @@ func (s *TCPServer) WithIntegrationBans(ctx context.Context, principal auth.Inte
 		if !e.Evaluate(principal.UserID(), 0, authorization.BanMembers).Allowed {
 			return authorization.ErrRoleForbidden
 		}
+		showAddresses := e.Evaluate(principal.UserID(), 0, authorization.ViewRemoteAddresses).Allowed
 		bans, ok := s.deps.BanAdmin.(banPageStore)
 		if !ok {
 			return authorization.ErrAuthorizationUnavailable
@@ -40,7 +41,7 @@ func (s *TCPServer) WithIntegrationBans(ctx context.Context, principal auth.Inte
 			page.NextBeforeID = rows[len(rows)-1].ID
 		}
 		for _, b := range rows {
-			entry := netproto.BanEntry{ID: b.ID, Type: b.Type, Value: b.Value, Reason: b.Reason,
+			entry := netproto.BanEntry{ID: b.ID, Type: b.Type, Value: banValueFor(b, showAddresses), Reason: b.Reason,
 				BannedBy: b.BannedBy, CreatedAt: b.CreatedAt.Unix()}
 			if b.ExpiresAt != nil {
 				entry.ExpiresAt = b.ExpiresAt.Unix()

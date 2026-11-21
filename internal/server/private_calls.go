@@ -200,24 +200,47 @@ func projectCall(call netproto.CallSession, client *Client) netproto.CallSession
 	return view
 }
 
-// callTargets lists the sessions a callee can ring on. bindable is the one
-// session to bind at once when it is the account's only way to answer.
-// callTargets returns the callee's sessions the caller may ring. hidden
-// reports that the callee is online but every session failed the caller's
-// visibility or connect authorization: such an account must not be reached
-// through push either, or push availability would override the rejection.
-func (s *TCPServer) callTargets(e *authorization.RoleEvaluator, caller *Client, uid string) (sessions []*Client, hidden bool) {
+// callTargets returns the callee's sessions the caller may ring, and those
+// the caller may not see (presence privacy or channel visibility). The hidden
+// ones count as absent: the callee is then rung like an offline account and
+// they get no events of the call, so a start answers the same whether or not
+// they are connected.
+func (s *TCPServer) callTargets(e *authorization.RoleEvaluator, caller *Client, uid string) (sessions, hidden []*Client) {
 	for _, target := range s.sessionsOf(uid) {
-		if !target.isAuthed() || target.userID() <= 0 || target.rulesBlocked() || s.privateCallByClient[target.ID] != "" {
+		if !target.isAuthed() || target.userID() <= 0 {
 			continue
 		}
-		if !s.rolePokeTargetVisible(e, caller, target.ID) || !e.Evaluate(target.userID(), 0, authorization.Connect).Allowed {
-			hidden = true
+		if !s.rolePokeTargetVisible(e, caller, target.ID) {
+			hidden = append(hidden, target)
+			continue
+		}
+		if target.rulesBlocked() || s.privateCallByClient[target.ID] != "" {
 			continue
 		}
 		sessions = append(sessions, target)
 	}
-	return sessions, hidden && len(sessions) == 0
+	return sessions, hidden
+}
+
+// calleeAccountID resolves a callee's registered account, from a session
+// when it is online and from the account store otherwise, so a Connect check
+// on it does not depend on whether it is online.
+func (s *TCPServer) calleeAccountID(ctx context.Context, uid string) (int64, bool) {
+	for _, session := range s.sessionsOf(uid) {
+		if id := session.userID(); id > 0 {
+			return id, true
+		}
+	}
+	if s.deps.Auth == nil {
+		return 0, false
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	user, err := s.deps.Auth.LookupUser(ctx, uid)
+	if err != nil || user == nil {
+		return 0, false
+	}
+	return user.ID, true
 }
 
 // pushReachable reports whether a callee has phones that push can ring.
@@ -240,6 +263,14 @@ func (s *TCPServer) startPrivateCall(ctx context.Context, client *Client, reques
 	if !published {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, errCallKeyUnavailable.Error())
 	}
+	// A direct call names its callee up front: resolve the account before the
+	// call locks. A group's members are known only inside the store call.
+	accounts := map[string]int64{}
+	if request.Target != "" {
+		if id, ok := s.calleeAccountID(ctx, request.Target); ok {
+			accounts[request.Target] = id
+		}
+	}
 	s.roleMetadataMu.Lock()
 	defer s.roleMetadataMu.Unlock()
 	s.privateCallsMu.Lock()
@@ -253,6 +284,7 @@ func (s *TCPServer) startPrivateCall(ctx context.Context, client *Client, reques
 	if s.privateCallByClient[client.ID] != "" || len(s.privateCalls) >= 1024 {
 		return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "already in a call or call capacity reached")
 	}
+	hidden := map[string]bool{}
 	build := func(uids []string) (netproto.CallSession, error) {
 		now := time.Now().Unix()
 		call := netproto.CallSession{ID: uuid.NewString(), ConversationID: request.ConversationID, Caller: client.UniqueID, CreatedAt: now, RingUntil: now + 30, Revision: 1, KeyBinding: true, Participants: []netproto.CallParticipant{{UniqueID: client.UniqueID, ClientID: client.ID, State: "accepted", PublicKey: callerKey, DeviceID: client.currentDeviceID()}}}
@@ -261,9 +293,16 @@ func (s *TCPServer) startPrivateCall(ctx context.Context, client *Client, reques
 			if uid == client.UniqueID {
 				continue
 			}
-			sessions, hidden := s.callTargets(e, client, uid)
-			if hidden {
+			account, known := accounts[uid]
+			if !known && request.ConversationID != "" {
+				account, known = s.calleeAccountID(ctx, uid)
+			}
+			if !known || !e.Evaluate(account, 0, authorization.Connect).Allowed {
 				continue
+			}
+			sessions, unseen := s.callTargets(e, client, uid)
+			for _, session := range unseen {
+				hidden[session.ID] = true
 			}
 			phones := s.pushReachable(uid)
 			switch {
@@ -308,6 +347,12 @@ func (s *TCPServer) startPrivateCall(ctx context.Context, client *Client, reques
 		}
 		return s.sendMetadataErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "call unavailable: no available participants or storage failure")
 	}
+	if len(hidden) > 0 {
+		if s.privateCallHidden == nil {
+			s.privateCallHidden = map[string]map[string]bool{}
+		}
+		s.privateCallHidden[call.ID] = hidden
+	}
 	s.publishPrivateCallLocked(call)
 	time.AfterFunc(30*time.Second, func() { s.expirePrivateCall(call.ID) })
 	return s.writeMetadataReply(client, netproto.MsgCallResult, netproto.CallResult{Action: "start", Call: &call})
@@ -332,11 +377,13 @@ func (s *TCPServer) publishPrivateCallLocked(call netproto.CallSession) {
 		payload, err := eventEnvelope(eventPrivateCall, map[string]string{"id": call.ID})
 		if err == nil {
 			// Every session of every participant: devices that did not
-			// answer must stop ringing.
+			// answer must stop ringing. A session the caller could not see
+			// at the start gets none unless it joined the call itself.
 			sent := map[string]bool{}
+			hidden := s.privateCallHidden[call.ID]
 			for _, participant := range call.Participants {
 				for _, session := range s.sessionsOf(participant.UniqueID) {
-					if !sent[session.ID] {
+					if !sent[session.ID] && (!hidden[session.ID] || participant.ClientID == session.ID) {
 						sent[session.ID] = true
 						_ = s.deps.Broadcast.BroadcastToClient(session.ID, payload)
 					}
@@ -433,6 +480,7 @@ func (s *TCPServer) retirePrivateCall(id string) {
 		return
 	}
 	delete(s.privateCalls, id)
+	delete(s.privateCallHidden, id)
 }
 
 func (s *TCPServer) disconnectPrivateCall(clientID string) {

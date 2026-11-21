@@ -12,6 +12,7 @@ import (
 
 	"noxa/internal/authorization"
 	"noxa/internal/netproto"
+	"noxa/internal/store"
 )
 
 type privateCallTestStore struct {
@@ -452,4 +453,102 @@ func TestPrivateCallHistoryCursorRoundTrip(t *testing.T) {
 			t.Fatalf("last page repeats: %+v", result)
 		}
 	}
+}
+
+// A callee whose sessions the caller may not see is treated like the same
+// account offline: the start gives the same answer with and without a push
+// subscription, and the hidden session gets no event of the call.
+func TestPrivateCallStartAnswersAlikeForHiddenAndOfflineCallee(t *testing.T) {
+	hide := func(t *testing.T, env *testEnv) net.Conn {
+		t.Helper()
+		callee, calleeID := dialCallAuthed(t, env, "user-uid")
+		env.state.SetStatus(calleeID, "invisible", "")
+		if member, _ := env.state.GetClient(calleeID); !env.state.PresenceHidden(member) {
+			t.Fatal("callee is not presence-hidden")
+		}
+		return callee
+	}
+	t.Run("with a push subscription", func(t *testing.T) {
+		pushes := &fakePushes{fakeDevices: &fakeDevices{}}
+		env, _ := privateCallsTestEnv(t, func(s *TCPServer) {
+			s.deps.Devices = pushes
+			s.deps.Push = &fakeSender{sent: make(chan sentPush, 64), gone: map[string]bool{}}
+		})
+		defer env.stop()
+		if err := pushes.SavePushSubscription(t.Context(), store.PushSubscription{DeviceID: "phone", Principal: "user-uid", Endpoint: "https://push.invalid/phone"}); err != nil {
+			t.Fatal(err)
+		}
+		caller, _ := dialCallAuthed(t, env, "admin-uid")
+		defer func() { _ = caller.Close() }()
+		offline := privateCallRequest(t, caller, netproto.CallRequest{Action: "start", Target: "user-uid"})
+		want, found := offline.Participant("user-uid")
+		if !found || want.State != "ringing" || want.ClientID != "" {
+			t.Fatalf("offline callee = %+v", offline)
+		}
+		privateCallRequest(t, caller, netproto.CallRequest{Action: "cancel", ID: offline.ID})
+
+		callee := hide(t, env)
+		defer func() { _ = callee.Close() }()
+		hidden := privateCallRequest(t, caller, netproto.CallRequest{Action: "start", Target: "user-uid"})
+		if got, found := hidden.Participant("user-uid"); !found || got != want {
+			t.Fatalf("hidden online callee = %+v, want it like offline %+v", got, want)
+		}
+		privateCallRequest(t, caller, netproto.CallRequest{Action: "cancel", ID: hidden.ID})
+		_ = callee.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+		for {
+			frame, err := netproto.ReadFrame(callee)
+			if err != nil {
+				break // nothing more arrived
+			}
+			if netproto.MessageType(frame.Type) == netproto.MsgEvent {
+				if typ, _ := decodeEvent(t, frame); typ == eventPrivateCall {
+					t.Fatal("the hidden session received a call event")
+				}
+			}
+		}
+	})
+	t.Run("callee without Connect", func(t *testing.T) {
+		// Refused whether or not the callee is online, also with a phone.
+		// The caller is the owner; the callee has @everyone only.
+		backend := serverRoleFixture()
+		backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel}
+		authority, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		pushes := &fakePushes{fakeDevices: &fakeDevices{}}
+		env, _ := privateCallsTestEnv(t, func(s *TCPServer) {
+			s.deps.Authority = authority
+			s.deps.Devices = pushes
+			s.deps.Push = &fakeSender{sent: make(chan sentPush, 64), gone: map[string]bool{}}
+		})
+		defer env.stop()
+		if err := pushes.SavePushSubscription(t.Context(), store.PushSubscription{DeviceID: "phone", Principal: "admin-uid", Endpoint: "https://push.invalid/phone"}); err != nil {
+			t.Fatal(err)
+		}
+		caller, _ := dialCallAuthed(t, env, "user-uid")
+		defer func() { _ = caller.Close() }()
+		send(t, caller, netproto.MsgCallRequest, netproto.CallRequest{Action: "start", Target: "admin-uid"})
+		want := readError(t, caller)
+		callee, _ := dialCallAuthed(t, env, "admin-uid")
+		defer func() { _ = callee.Close() }()
+		send(t, caller, netproto.MsgCallRequest, netproto.CallRequest{Action: "start", Target: "admin-uid"})
+		if got := readError(t, caller); got != want {
+			t.Fatalf("online callee without Connect = %+v, want it like offline %+v", got, want)
+		}
+	})
+	t.Run("without a push subscription", func(t *testing.T) {
+		env, _ := privateCallsTestEnv(t)
+		defer env.stop()
+		caller, _ := dialCallAuthed(t, env, "admin-uid")
+		defer func() { _ = caller.Close() }()
+		send(t, caller, netproto.MsgCallRequest, netproto.CallRequest{Action: "start", Target: "user-uid"})
+		want := readError(t, caller)
+		callee := hide(t, env)
+		defer func() { _ = callee.Close() }()
+		send(t, caller, netproto.MsgCallRequest, netproto.CallRequest{Action: "start", Target: "user-uid"})
+		if got := readError(t, caller); got != want {
+			t.Fatalf("hidden online callee = %+v, want it like offline %+v", got, want)
+		}
+	})
 }
