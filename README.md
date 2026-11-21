@@ -835,6 +835,10 @@ effect after server restart. The checked-in default is `0.0.0`.
 non-semantic descriptive version; existing length/control-character checks remain.
 With a minimum enabled, missing, malformed and older versions are rejected before
 membership is published, for password, signature and anonymous logins alike.
+Whatever the minimum is set to, a client that cannot make the server-bound
+login proof is refused with the same wording when it asks for a login
+challenge, naming the server's own version as the required one (see
+[upgrading](#e2ee-upgrade)).
 Exactly `9.9.9` follows the running server's semantic version as a minimum,
 including prerelease precedence; newer clients remain accepted. `9.9.9.9` is
 invalid. Build metadata does not affect ordering. Invalid configuration or an
