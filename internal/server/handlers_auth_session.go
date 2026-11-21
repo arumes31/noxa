@@ -159,6 +159,16 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 				return err
 			}
 		}
+		if id.userID > 0 {
+			// Every login path of the account ends here: password, identity
+			// key, linked device, resume and handover commit.
+			if limited, err := s.integrationOnly(ctx, id.uniqueID); err != nil {
+				return err
+			} else if limited {
+				rejection, rejectionLabel = integrationOnlyReason, "integration_only"
+				return authorization.ErrRoleForbidden
+			}
+		}
 		if id.guest && client.isWebTransport() {
 			if allowed, _ := s.WebGuestLoginPolicy(); !allowed {
 				rejection, rejectionLabel = "guest login is disabled on this server", "guest_disabled"

@@ -845,8 +845,10 @@ invalid. Build metadata does not affect ordering. Invalid configuration or an
 unparseable server version in sentinel mode prevents startup. Rejections include
 the installed and required version and an update instruction, also on older
 clients. This is a compatibility gate on self-reported version metadata, not
-binary attestation. ServerQuery/gRPC integration accounts remain governed by their
-separate authorization contract and cannot create native channel membership.
+binary attestation. ServerQuery/gRPC integration sessions remain governed by their
+separate authorization contract and cannot create native channel membership; an
+integration account with a scope ceiling cannot sign in as a member at all
+(see integration scopes).
 
 **Soft updates.** The server also announces a recommended client version
 (`client_recommended_version` / `NOXA_CLIENT_RECOMMENDED_VERSION`) together with
@@ -1328,6 +1330,17 @@ to one scope (an empty ceiling allows nothing); signing in (`login`, gRPC
 `integrationscopesset` command or the gRPC `SetIntegrationScopes` RPC. A scoped
 caller can only hand out scopes it holds and cannot clear a ceiling. A change
 signs the account's open integration sessions out: they must log in again.
+
+The ceiling binds the account, not one interface. An account with a ceiling
+(an empty one included) cannot sign in as a member on the control port or the
+web client, by password, identity key, linked device or session resume: the
+login is refused with "this account is limited to the integration interfaces",
+and setting a ceiling ends the account's open member sessions. A member session
+is authorized by roles alone, so it would not be limited by the scopes. A bot
+that must also be a member (for example to join voice) needs an account without
+a ceiling, or a second account for that purpose. Do not set a ceiling on an
+account a person signs in with: only a higher-ranked account with
+`manage_server` can clear it again, and nobody outranks the owner.
 
 **Voice bots.** `internal/botvoice` reads Opus packets from an Ogg/Opus file
 and paces them as RTP for a WebRTC audio track (the publisher `cmd/loadtest`
