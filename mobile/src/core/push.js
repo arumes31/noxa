@@ -94,6 +94,28 @@ export async function disablePush(conn) {
     return result.preferences;
 }
 
+/**
+ * Ends this browser's push subscription when the account it served leaves
+ * this browser (sign-out, revocation, account replacement), so the next
+ * account never receives its notifications. conn, the departing account's
+ * session when one is still open, removes it on the server too; otherwise the
+ * server drops the endpoint once the push service reports it gone.
+ */
+export async function dropPushSubscription(conn) {
+    if (!pushSupported()) return;
+    try {
+        if (conn?.open) await conn.request(Msg.DeviceRequest, { action: "push_unsubscribe" }, Msg.DeviceResult, { accept: r => r.action === "push_unsubscribe", timeout: 3000 });
+    } catch {
+        // Best effort: the browser-side unsubscribe below still applies.
+    }
+    try {
+        const reg = await navigator.serviceWorker.getRegistration("/app/");
+        await (await reg?.pushManager.getSubscription())?.unsubscribe();
+    } catch {
+        // Best effort.
+    }
+}
+
 export async function setPushPreferences(conn, preferences) {
     const result = await deviceRequest(conn, { action: "push_preferences", preferences });
     return result.preferences;

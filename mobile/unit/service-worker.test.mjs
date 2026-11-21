@@ -37,6 +37,10 @@ globalThis.addEventListener = (type, listener) => listeners.set(type, listener);
 await import("../src/sw.js");
 const { pending, remove } = await import("../src/core/outbox.js");
 const { getShare, clearShare, MAX_SHARED_BYTES } = await import("../src/core/share-store.js");
+const { beginIdentity, saveIdentity } = await import("../src/core/identity-store.js");
+const { generateIdentity } = await import("../src/core/crypto.js");
+// Pushes are shown only for the linked account this browser holds.
+await saveIdentity(generateIdentity(), { uniqueID: "me", deviceID: "phone", linked: true });
 
 async function dispatch(type, event) {
     const waits = [];
@@ -239,4 +243,18 @@ test("desktop Chrome on macOS keeps foreground push suppression", async () => {
         windows.length = 0;
         fakeNavigator.userAgent = previousUA;
     }
+});
+
+test("a push for another account, or with no linked account stored, shows nothing", async () => {
+    shown.length = 0;
+    await push({ kind: "dm", tag: "dm:uid-1", from: "Ivy", to: "me" });
+    assert.equal(shown.length, 1);
+    await push({ kind: "dm", tag: "dm:uid-1", from: "Ivy", to: "someone-else" });
+    assert.equal(shown.length, 1);
+    // A guest replaced the linked account; its subscription may still deliver.
+    await saveIdentity(generateIdentity(), { guest: true, linked: false, uniqueID: "guest:g1", deviceID: "phone-guest" },
+        { onboarding: true, replaceAccount: true, fence: await beginIdentity() });
+    await push({ kind: "dm", tag: "dm:uid-1", from: "Ivy" });
+    await push({ kind: "call", tag: "call:c-11", from: "Ivy", to: "me" });
+    assert.equal(shown.length, 1);
 });

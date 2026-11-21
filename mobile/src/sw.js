@@ -168,7 +168,22 @@ async function currentNotification(data) {
     return generation > 0 && data?.generation === generation;
 }
 
+/**
+ * Whether a push belongs to the account this browser holds now. A push for a
+ * replaced or signed-out account is dropped: the subscription can outlive the
+ * account when the unsubscribe at replacement did not reach the browser.
+ */
+async function forStoredAccount(push) {
+    try {
+        const meta = (await loadIdentity())?.meta;
+        return !!meta?.linked && (!push.to || push.to === (meta.uniqueID || meta.priorPrincipal || ""));
+    } catch {
+        return false;
+    }
+}
+
 async function onPush(push) {
+    if (!await forStoredAccount(push)) return;
     if (push.kind === "clear") {
         await closeTag(push.tag);
         await updateBadge();
