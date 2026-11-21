@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/rtcp"
@@ -49,6 +50,7 @@ type PeerConnectionWrapper struct {
 	candidateWarned bool
 
 	onTrack             func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver)
+	layerTracks         atomic.Int32 // simulcast layer tracks handed to onTrack
 	videoStartupMu      sync.Mutex
 	videoStartupWake    chan struct{}
 	videoStartupDone    chan struct{}
@@ -141,6 +143,16 @@ const maxRemoteMediaSections = 384
 // scans; a browser sends a handful (connectionbenchmark uses the same cap).
 const maxRemoteICECandidates = 64
 
+// maxRemoteRIDs bounds the a=rid lines of a client description, and the
+// simulcast layer tracks one peer may start (see handleTrack). Every started
+// layer keeps readers and state until the peer closes. A publisher sends at
+// most two video slots (camera, screen) of three layers (f/h/q) each; the
+// clients in this repository send one encoding without a RID.
+const maxRemoteRIDs = 16
+
+// ErrSDPTooManyRIDs rejects a remote description over the simulcast layer budget.
+var ErrSDPTooManyRIDs = errors.New("webrtc: session description declares too many simulcast layers")
+
 // ErrTooManyICECandidates rejects remote candidates over that budget.
 var ErrTooManyICECandidates = errors.New("webrtc: too many remote ICE candidates")
 
@@ -151,13 +163,18 @@ var ErrSDPTooManySSRCs = errors.New("webrtc: session description declares too ma
 var ErrSDPTooManyMediaSections = errors.New("webrtc: session description declares too many media sections")
 
 func checkRemoteSDPBudget(sdp string) error {
-	ssrcs, sections, candidates := 0, 0, 0
+	ssrcs, sections, candidates, rids := 0, 0, 0, 0
 	// Pion's lexer also ends a line at a bare CR, so split at CR and LF alike.
 	for _, line := range strings.FieldsFunc(sdp, func(r rune) bool { return r == '\r' || r == '\n' }) {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "a=ssrc") {
 			if ssrcs++; ssrcs > maxRemoteSSRCAttributes {
 				return ErrSDPTooManySSRCs
+			}
+		}
+		if strings.HasPrefix(line, "a=rid") {
+			if rids++; rids > maxRemoteRIDs {
+				return ErrSDPTooManyRIDs
 			}
 		}
 		if strings.HasPrefix(line, "m=") {
@@ -560,6 +577,18 @@ func (w *PeerConnectionWrapper) handleLocalICECandidate(c *webrtc.ICECandidate) 
 // handleTrack is the OnTrack callback. It logs the event and forwards to the
 // user-registered handler if one is set.
 func (w *PeerConnectionWrapper) handleTrack(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+	// A layer can be reported more than once, so the reports are bounded
+	// here as well as in the description budget.
+	if track.RID() != "" {
+		if n := w.layerTracks.Add(1); n > maxRemoteRIDs {
+			if n == maxRemoteRIDs+1 {
+				w.logger.Warn("webrtc simulcast layer budget exhausted",
+					zap.String("client_id", w.clientID),
+					zap.Int("limit", maxRemoteRIDs))
+			}
+			return
+		}
+	}
 	w.logger.Info("webrtc remote track received",
 		zap.String("client_id", w.clientID),
 		zap.String("track_id", track.ID()),
