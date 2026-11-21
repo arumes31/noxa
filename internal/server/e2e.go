@@ -125,17 +125,18 @@ func (s *TCPServer) lookupSessionKey(ctx context.Context, client *Client, f *net
 		}
 	}
 
-	// A guest (user id 0) may resolve only a principal it shares a visible scope with: its own
+	// A device-less anonymous guest (user id 0, no registered device) may
+	// resolve only a principal it shares a visible scope with: its own
 	// just-published key, or an online, VISIBLE co-member of a channel it can
 	// see. Otherwise it gets the same empty response as an unknown user, so the
 	// directory cannot be harvested at scale (a fresh ephemeral guest per
 	// connection, zero cost) nor used to probe which unique IDs exist (red-team
-	// 2026-11). Members are unrestricted: they cold-DM saved contacts. A guest's
-	// own device is no exemption: a guest registers and approves its devices
-	// itself, so a device costs it nothing.
+	// 2026-11). Everyone else is unrestricted: members cold-DM saved contacts,
+	// and a guest that linked a device is an accountable DM participant (device
+	// linking needs approval), not the at-scale harvester this bounds.
 	// Self-lookup is always allowed — the PWA guest reads back its own key right
 	// after publishing it.
-	if client.userID() == 0 && msg.UniqueID != client.uniqueID() && !s.guestSharesScope(ctx, client, msg.UniqueID) {
+	if client.userID() == 0 && client.currentDeviceID() == "" && msg.UniqueID != client.uniqueID() && !s.guestSharesScope(ctx, client, msg.UniqueID) {
 		return s.writeMessage(client, netproto.MsgKeyResponse, netproto.KeyResponse{UniqueID: msg.UniqueID})
 	}
 

@@ -129,10 +129,10 @@ func (s *TCPServer) sendSessionChat(ctx context.Context, client *Client, f *netp
 	if msg.KeyID != 0 {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, errServerSealedDM)
 	}
-	// Same rule as the key directory (lookupSessionKey): a guest reaches by
-	// unique ID only a principal it shares a visible scope with, and gets one
-	// answer for every other target, whatever that target's state.
-	if msg.ToUniqueID != "" && client.userID() == 0 && msg.ToUniqueID != client.uniqueID() && !s.guestSharesScope(ctx, client, msg.ToUniqueID) {
+	// Same rule as the key directory (lookupSessionKey): a device-less guest
+	// reaches by unique ID only a principal it shares a visible scope with,
+	// and gets one answer for every other target, whatever that target's state.
+	if msg.ToUniqueID != "" && client.userID() == 0 && client.currentDeviceID() == "" && msg.ToUniqueID != client.uniqueID() && !s.guestSharesScope(ctx, client, msg.ToUniqueID) {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, errGuestOffline)
 	}
 	if len(msg.Copies) > 0 {
