@@ -7,14 +7,20 @@ export function extractPresentedFingerprint(detail) {
 
 // A file or link dropped outside the app's own drop zones must never be
 // opened by the WebView in place of the app. The listeners run in the bubble
-// phase, after any drop zone under the pointer has handled the event. A file
-// chooser keeps its own drop: it takes the file and never opens it.
+// phase, after any drop zone under the pointer has handled the event. Two
+// drops keep their default, because neither opens anything: a file chooser
+// taking a file, and a text field taking dragged text.
 export function installDropGuard(target) {
-    const chooser = (event) => event.target?.type === "file";
+    const own = (event) => {
+        const t = event.target;
+        if (t?.type === "file") return true;
+        const field = t?.isContentEditable || t?.tagName === "TEXTAREA" || t?.tagName === "INPUT";
+        return Boolean(field) && !Array.from(event.dataTransfer?.types || []).includes("Files");
+    };
     target.addEventListener("dragover", (event) => {
-        if (event.defaultPrevented || chooser(event)) return; // a drop zone accepts this drag
+        if (event.defaultPrevented || own(event)) return; // a drop zone accepts this drag
         event.preventDefault();
         if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
     });
-    target.addEventListener("drop", (event) => { if (!chooser(event)) event.preventDefault(); });
+    target.addEventListener("drop", (event) => { if (!own(event)) event.preventDefault(); });
 }

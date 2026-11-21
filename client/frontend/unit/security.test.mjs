@@ -54,4 +54,15 @@ describe("window drop guard", () => {
             assert.equal(onChooser.dataTransfer.dropEffect, "copy");
         }
     });
+
+    it("lets a text field take dragged text but not a file", () => {
+        for (const type of ["dragover", "drop"]) {
+            const text = { ...event(false, { dropEffect: "copy", types: ["text/plain"] }), target: { tagName: "TEXTAREA" } };
+            listeners[type](text);
+            assert.equal(text.defaultPrevented, false);
+            const file = { ...event(false, { dropEffect: "copy", types: ["Files"] }), target: { tagName: "TEXTAREA" } };
+            listeners[type](file);
+            assert.equal(file.defaultPrevented, true);
+        }
+    });
 });
