@@ -222,6 +222,9 @@ func (s *TCPServer) handleRoleChange(ctx context.Context, client *Client, f *net
 		}
 		return nil
 	}
+	if err := s.roleChangePreflight(ctx, client.userID(), change, validate); err != nil {
+		return s.roleError(ctx, client, err)
+	}
 	if change.MemberUniqueID != "" {
 		p, err = s.assignGuestRoles(ctx, client, change, validate)
 	} else {
@@ -231,6 +234,28 @@ func (s *TCPServer) handleRoleChange(ctx context.Context, client *Client, f *net
 		return s.roleError(ctx, client, err)
 	}
 	return s.writeMessage(client, netproto.MsgRoleChangeResult, roleChangeResult(p, change, err))
+}
+
+// roleChangePreflight refuses, under a shared lease, an actor without the
+// capability every change of this kind needs. Only an authorized actor then
+// queues the exclusive gate, which makes every other session wait; storage
+// authorizes the whole change again inside it.
+func (s *TCPServer) roleChangePreflight(ctx context.Context, actorID int64, change authorization.RoleChange, validate func(context.Context) error) error {
+	return s.withRolePolicy(ctx, func(ctx context.Context) error {
+		if validate != nil {
+			if err := validate(ctx); err != nil {
+				return err
+			}
+		}
+		capability, channelID := authorization.ManageRoles, int64(0)
+		if change.Kind == authorization.ChannelAccessSet {
+			capability, channelID = authorization.ManageChannelAccess, change.Channel.ChannelID
+		}
+		if actorID < 1 || !ctx.Value(roleLeaseKey{}).(roleLease).evaluator.Evaluate(actorID, channelID, capability).Allowed {
+			return authorization.ErrRoleForbidden
+		}
+		return nil
+	})
 }
 
 func roleChangeResult(p authorization.RolePolicy, change authorization.RoleChange, err error) netproto.RoleChangeResult {
