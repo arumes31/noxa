@@ -176,14 +176,20 @@ async function currentNotification(data) {
 async function forStoredAccount(push) {
     try {
         const meta = (await loadIdentity())?.meta;
-        return !!meta?.linked && (!push.to || push.to === (meta.uniqueID || meta.priorPrincipal || ""));
+        return !!meta?.linked && !!push.to && push.to === (meta.uniqueID || meta.priorPrincipal || "");
     } catch {
         return false;
     }
 }
 
+/** The identity generation a push was accepted under, or -1 when it is not for the stored account. */
+async function pushGeneration(push) {
+    return await forStoredAccount(push) ? identityGeneration() : -1;
+}
+
 async function onPush(push) {
-    if (!await forStoredAccount(push)) return;
+    const generation = await pushGeneration(push);
+    if (generation < 0) return;
     if (push.kind === "clear") {
         await closeTag(push.tag);
         await updateBadge();
@@ -200,6 +206,8 @@ async function onPush(push) {
     if (!apple && (foreground || (muted && windows.length))) return;
     const quiet = muted || foreground;
     const text = describe(push);
+    // The account can be replaced during the awaits above: show nothing then.
+    if (await pushGeneration(push) !== generation) return;
     await self.registration.showNotification(text.title, {
         body: text.body,
         tag: push.tag,
@@ -213,7 +221,7 @@ async function onPush(push) {
         ...(quiet ? {} : { vibrate: text.call ? [400, 200, 400, 200, 400] : [120] }),
         // iOS shows no actions; Android gets Answer and Decline on calls, Reply and Mark as read on messages.
         actions: text.call ? [{ action: "answer", title: words().answer }, { action: "decline", title: words().decline }] : messageActions(push),
-        data: { url: routeFor(push.tag), tag: push.tag, generation: await identityGeneration() },
+        data: { url: routeFor(push.tag), tag: push.tag, generation },
     });
     await updateBadge();
 }

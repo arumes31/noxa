@@ -95,7 +95,7 @@ test("a share post whose files exceed the size cap keeps only the text and flags
 
 test("message pushes carry Reply and Mark-as-read on Android, calls carry Answer and Decline, iOS gets none", async () => {
     shown.length = 0;
-    await push({ kind: "dm", tag: "dm:uid-1", from: "Ivy" });
+    await push({ kind: "dm", tag: "dm:uid-1", from: "Ivy", to: "me" });
     assert.equal(shown[0].title, "Ivy");
     assert.deepEqual(shown[0].actions.map(a => a.action), ["reply", "read"]);
     assert.equal(shown[0].actions[0].type, "text");
@@ -103,22 +103,22 @@ test("message pushes carry Reply and Mark-as-read on Android, calls carry Answer
     // Bound to the identity generation that received it.
     assert.equal(shown[0].data.generation, 1);
 
-    await push({ kind: "call", tag: "call:c-9", from: "Ivy", video: true });
+    await push({ kind: "call", tag: "call:c-9", from: "Ivy", video: true, to: "me" });
     assert.equal(shown[1].body, "Incoming video call");
     assert.equal(shown[1].requireInteraction, true);
     assert.deepEqual(shown[1].actions.map(a => a.action), ["answer", "decline"]);
 
     fakeNavigator.userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Safari";
-    await push({ kind: "mention", tag: "channel:4", from: "Kai", place: "general" });
+    await push({ kind: "mention", tag: "channel:4", from: "Kai", place: "general", to: "me" });
     assert.equal(shown[2].body, "mentioned you in #general");
     assert.deepEqual(shown[2].actions, []);
     fakeNavigator.userAgent = "Mozilla/5.0 (Linux; Android 14) Chrome/120 Mobile";
 
     // A visible window shows the event itself; calls still notify.
     windows.push({ visibilityState: "visible", url: "https://chat.example/app/#/home", postMessage() {}, focus: async () => {} });
-    await push({ kind: "dm", tag: "dm:uid-2", from: "Lou" });
+    await push({ kind: "dm", tag: "dm:uid-2", from: "Lou", to: "me" });
     assert.equal(shown.length, 3);
-    await push({ kind: "call", tag: "call:c-10", from: "Lou" });
+    await push({ kind: "call", tag: "call:c-10", from: "Lou", to: "me" });
     assert.equal(shown.length, 4);
     windows.length = 0;
 });
@@ -127,10 +127,10 @@ test("a muted conversation stays quiet while the app is open and is silent other
     shown.length = 0;
     await dispatch("message", { data: { type: "muted", tags: ["dm:quiet"] } });
     windows.push({ visibilityState: "hidden", url: "https://chat.example/app/#/home", postMessage() {}, focus: async () => {} });
-    await push({ kind: "dm", tag: "dm:quiet", from: "Noa" });
+    await push({ kind: "dm", tag: "dm:quiet", from: "Noa", to: "me" });
     assert.equal(shown.length, 0);
     windows.length = 0;
-    await push({ kind: "dm", tag: "dm:quiet", from: "Noa" });
+    await push({ kind: "dm", tag: "dm:quiet", from: "Noa", to: "me" });
     assert.equal(shown.length, 1);
     assert.equal(shown[0].silent, true);
     assert.equal(Object.hasOwn(shown[0], "vibrate"), false);
@@ -216,7 +216,7 @@ test("Apple push deliveries stay visible when foreground or mute state changed i
                 windows.length = 0; shown.length = 0;
                 windows.push({ visibilityState, url: "https://chat.example/app/#/home" });
                 await dispatch("message", { data: { type: "muted", tags: muted ? ["dm:apple-muted"] : [] } });
-                await push({ kind: "dm", tag: "dm:apple-muted", from: "Ivy" });
+                await push({ kind: "dm", tag: "dm:apple-muted", from: "Ivy", to: "me" });
                 assert.equal(shown.length, 1, `${userAgent} ${visibilityState} must show a notification`);
                 assert.equal(shown[0].silent, true);
                 assert.equal(shown[0].renotify, false);
@@ -237,7 +237,7 @@ test("desktop Chrome on macOS keeps foreground push suppression", async () => {
         fakeNavigator.userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/141.0.0.0 Safari/537.36";
         windows.length = 0; shown.length = 0;
         windows.push({ visibilityState: "visible", url: "https://chat.example/app/#/home" });
-        await push({ kind: "dm", tag: "dm:chrome", from: "Ivy" });
+        await push({ kind: "dm", tag: "dm:chrome", from: "Ivy", to: "me" });
         assert.equal(shown.length, 0);
     } finally {
         windows.length = 0;
@@ -250,6 +250,8 @@ test("a push for another account, or with no linked account stored, shows nothin
     await push({ kind: "dm", tag: "dm:uid-1", from: "Ivy", to: "me" });
     assert.equal(shown.length, 1);
     await push({ kind: "dm", tag: "dm:uid-1", from: "Ivy", to: "someone-else" });
+    assert.equal(shown.length, 1);
+    await push({ kind: "dm", tag: "dm:uid-1", from: "Ivy" }); // no recipient named
     assert.equal(shown.length, 1);
     // A guest replaced the linked account; its subscription may still deliver.
     await saveIdentity(generateIdentity(), { guest: true, linked: false, uniqueID: "guest:g1", deviceID: "phone-guest" },
