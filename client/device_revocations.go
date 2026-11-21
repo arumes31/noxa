@@ -15,7 +15,6 @@ import (
 	"os"
 	"slices"
 	"sync"
-	"time"
 
 	"noxa/internal/auth"
 )
@@ -132,10 +131,11 @@ func (m *connManager) ownRevokedDevices() (ownDeviceRevocations, error) {
 }
 
 // verifiedOwnDeviceKey returns the signing key of one of this account's
-// devices from the device list this desktop verified earlier, or nil. It
-// never asks the server: a list fetched while a device is being revoked must
-// not decide which key the revocation names. The account identity key is
-// never returned, since it anchors every other device.
+// devices from this desktop's verified device list, or nil. Every key in
+// that list carries an approval chain rooted in this identity, so a list
+// fetched now is as good as a cached one; callers ask before the revoke
+// request is sent. The account identity key is never returned, since it
+// anchors every other device.
 func (m *connManager) verifiedOwnDeviceKey(deviceID string) ed25519.PublicKey {
 	m.mu.Lock()
 	principal := m.uniqueID
@@ -148,7 +148,7 @@ func (m *connManager) verifiedOwnDeviceKey(deviceID string) ed25519.PublicKey {
 	if err != nil {
 		return nil
 	}
-	devices, _, _ := m.dmDevices.get(principal, time.Now())
+	devices, _ := m.dmDeviceList(principal, false)
 	for _, d := range devices {
 		if d.DeviceID == deviceID && !d.First && !bytes.Equal(d.Signing, root) {
 			return d.Signing
