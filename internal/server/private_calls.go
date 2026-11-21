@@ -222,21 +222,25 @@ func (s *TCPServer) callTargets(e *authorization.RoleEvaluator, caller *Client, 
 	return sessions, hidden
 }
 
-// calleeMayConnect checks the callee's Connect on the account, not on its
-// sessions, so the answer does not depend on whether it is online.
-func (s *TCPServer) calleeMayConnect(e *authorization.RoleEvaluator, uid string) bool {
+// calleeAccountID resolves a callee's registered account, from a session
+// when it is online and from the account store otherwise, so a Connect check
+// on it does not depend on whether it is online.
+func (s *TCPServer) calleeAccountID(ctx context.Context, uid string) (int64, bool) {
 	for _, session := range s.sessionsOf(uid) {
 		if id := session.userID(); id > 0 {
-			return e.Evaluate(id, 0, authorization.Connect).Allowed
+			return id, true
 		}
 	}
 	if s.deps.Auth == nil {
-		return false
+		return 0, false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	user, err := s.deps.Auth.LookupUser(ctx, uid)
-	return err == nil && user != nil && e.Evaluate(user.ID, 0, authorization.Connect).Allowed
+	if err != nil || user == nil {
+		return 0, false
+	}
+	return user.ID, true
 }
 
 // pushReachable reports whether a callee has phones that push can ring.
@@ -258,6 +262,14 @@ func (s *TCPServer) startPrivateCall(ctx context.Context, client *Client, reques
 	callerKey, published := s.senderDMKey(client)
 	if !published {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, errCallKeyUnavailable.Error())
+	}
+	// A direct call names its callee up front: resolve the account before the
+	// call locks. A group's members are known only inside the store call.
+	accounts := map[string]int64{}
+	if request.Target != "" {
+		if id, ok := s.calleeAccountID(ctx, request.Target); ok {
+			accounts[request.Target] = id
+		}
 	}
 	s.roleMetadataMu.Lock()
 	defer s.roleMetadataMu.Unlock()
@@ -281,7 +293,11 @@ func (s *TCPServer) startPrivateCall(ctx context.Context, client *Client, reques
 			if uid == client.UniqueID {
 				continue
 			}
-			if !s.calleeMayConnect(e, uid) {
+			account, known := accounts[uid]
+			if !known && request.ConversationID != "" {
+				account, known = s.calleeAccountID(ctx, uid)
+			}
+			if !known || !e.Evaluate(account, 0, authorization.Connect).Allowed {
 				continue
 			}
 			sessions, unseen := s.callTargets(e, client, uid)
