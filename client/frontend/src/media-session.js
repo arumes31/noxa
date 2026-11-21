@@ -119,6 +119,7 @@ export class MediaSession {
         this.engine = new MediaKeyEngine({
             media: this.media,
             send: control => this.adapter.send(control),
+            connection: this.adapter.connection,
             onStatus: s => this.onStatus({ ...s, api: this.media?.api }),
         });
         this.engine.onInvisible = () => this.#fail(new MediaSessionError("invisible"));

@@ -3,7 +3,7 @@
 // archive form keeps no key material.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildMediaKeyBody, parseMediaKeyControl } from "../src/core/media-e2ee/media-keys.js";
+import { buildMediaKeyBody, MediaKeyEngine, parseMediaKeyControl } from "../src/core/media-e2ee/media-keys.js";
 import { controlArchiveBody, judgeControl, validateControlSend } from "../src/core/olm-admission.js";
 
 const keys = Object.fromEntries(["mic", "cam", "screen", "screenaudio"].map((slot, i) => [slot, new Uint8Array(32).fill(i + 7)]));
@@ -22,4 +22,21 @@ test("an engine media-key body passes the control send and receive rules", () =>
     const archived = JSON.stringify(controlArchiveBody(sent));
     assert.ok(!archived.includes("keys") && !archived.includes(Buffer.from(keys.mic).toString("base64")), "no key material at rest");
     assert.equal(judgeControl(raw, now + 121).status, "expired", "an expired retry is never handed out");
+});
+
+test("the replay line of a media device is kept per server connection", () => {
+    const media = { setKey: async () => {}, activate: async () => {}, retire: async () => {}, retireOne: async () => {}, forget: async () => {} };
+    const timers = { setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {} };
+    const receive = (connection, epoch) => {
+        const engine = new MediaKeyEngine({ media, connection, timers, send: async () => ({ ok: true }) });
+        engine.setRoster([{ client_id: "c1", unique_id: "u-line", media_device: "d-line", channel_id: 42 }]);
+        engine.start({ channelID: 42, clientID: "c-me", principal: "u-me", device: "d-me" });
+        const body = buildMediaKeyBody({ channelID: 42, epoch, nowSeconds: now, client: "c1", session: "s1", kid: 0, members: "m", count: 2, keys });
+        const result = engine.receive({ sender: "u-line", senderDevice: "d-line", ...body });
+        engine.stop();
+        return result;
+    };
+    assert.equal(receive("one", Number.MAX_SAFE_INTEGER).ok, true);
+    assert.equal(receive("two", 500).ok, true, "another connection keeps its own line");
+    assert.equal(receive("two", 500).reason, "stale", "a replay on the same connection is refused");
 });
