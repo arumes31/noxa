@@ -181,7 +181,15 @@ export function channelDevices(roster, channelID) {
 // engines (rescope, reconnect): a new engine never goes below it, even if the
 // wall clock stepped back (review 2a-A P3-3 / B P3-4).
 const issuedEpochs = new Map();   // principal\ndevice -> last epoch I issued
-const acceptedEpochs = new Map(); // principal\ndevice -> last epoch I accepted
+// Accepted epochs are kept per server connection: account and device IDs mean
+// something only on the server that named them, so an epoch accepted on one
+// connection never decides what another connection's controls may install.
+const acceptedEpochs = new Map(); // connection -> (principal\ndevice -> last epoch I accepted)
+function acceptedOn(connection) {
+    let lines = acceptedEpochs.get(connection);
+    if (!lines) acceptedEpochs.set(connection, lines = new Map());
+    return lines;
+}
 
 // Feature tags carried in a control's session ("<random>.<tag>.<tag>").
 export function sessionFeatures(session) {
@@ -288,12 +296,14 @@ export class MediaKeyEngine {
     #revoked = new Set();
     // Devices that received (or may have received) a key this session.
     #keyed = new Set();
-    #rosterAt = 0; #settle = 0; #mismatch = [];
+    #rosterAt = 0; #settle = 0; #mismatch = []; #accepted;
 
-    constructor({ media, send, onStatus = () => {}, now = () => Date.now(), timers = globalThis, random = n => crypto.getRandomValues(new Uint8Array(n)), uuid = () => crypto.randomUUID(), sendTimeoutMs = SEND_TIMEOUT_MS, activateMaxWaitMs = ACTIVATE_MAX_WAIT_MS }) {
+    // connection: the server connection of this engine's controls (the
+    // desktop's tab ID). Engines of one connection share their replay lines.
+    constructor({ media, send, connection = "", onStatus = () => {}, now = () => Date.now(), timers = globalThis, random = n => crypto.getRandomValues(new Uint8Array(n)), uuid = () => crypto.randomUUID(), sendTimeoutMs = SEND_TIMEOUT_MS, activateMaxWaitMs = ACTIVATE_MAX_WAIT_MS }) {
         this.media = media; this.send = send; this.onStatus = onStatus; this.now = now;
         this.timers = timers; this.random = random; this.uuid = uuid; this.sendTimeoutMs = sendTimeoutMs; this.activateMaxWaitMs = activateMaxWaitMs;
-        this.self = null; this.session = "";
+        this.self = null; this.session = ""; this.#accepted = acceptedOn(connection);
         this.counters = { ignored: {}, applied: 0, sent: 0, failed: 0, epochs: 0 };
     }
 
@@ -786,9 +796,9 @@ export class MediaKeyEngine {
         // One monotonic epoch line per sending device: replays, expired
         // retries and reordered older controls never install a key.
         const line = `${control.sender}\n${control.senderDevice}`;
-        const last = acceptedEpochs.get(line) || 0;
+        const last = this.#accepted.get(line) || 0;
         if (control.epoch <= last) return this.#ignore("stale");
-        acceptedEpochs.set(line, control.epoch);
+        this.#accepted.set(line, control.epoch);
         let state = this.#publishers.get(value.client);
         // A pre-derived successor this control does not continue (a fresh
         // epoch, or a new sender session) is retired before the new key lands.
@@ -854,7 +864,7 @@ export class MediaKeyEngine {
         try { next = await ratchetKeys(keys); } catch { return; }
         if (gen !== this.#gen || this.#publishers.get(client) !== state || state.announcedEpoch !== epoch || state.next) return;
         const successor = epoch + 1;
-        if (successor <= (acceptedEpochs.get(`${state.principal}\n${state.device}`) || 0)) return;
+        if (successor <= (this.#accepted.get(`${state.principal}\n${state.device}`) || 0)) return;
         state.next = successor;
         try {
             for (const slot of SLOTS) {

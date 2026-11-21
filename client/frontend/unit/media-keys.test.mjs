@@ -684,3 +684,33 @@ test("startup inbox bounds devices, expires controls and clears on cancellation"
     assert.equal(inbox.receive(expired, 5).reason, "expired");
     assert.equal(inbox.receive({ ...startupControl(), sender: "" }, 5).reason, "sender");
 });
+
+function connected(connection) {
+    const media = fakeMedia();
+    const e = new MediaKeyEngine({ media, connection, timers: fastTimers, sendTimeoutMs: Infinity, send: async () => ({ ok: true }) });
+    e.setRoster([member("c1", "u-line", "d-line"), member("c-me", "u-me", "d-me")]);
+    e.start(me);
+    return { e, media };
+}
+test("an epoch accepted on one server connection never makes another connection's control stale", async () => {
+    const other = connected("tab-other");
+    assert.equal(other.e.receive(control(Number.MAX_SAFE_INTEGER, { sender: "u-line", device: "d-line" })).ok, true);
+    other.e.stop();
+    const { e, media } = connected("tab-here");
+    assert.deepEqual(e.receive(control(500, { sender: "u-line", device: "d-line" })), { ok: true, epoch: 500 });
+    await flush();
+    assert.ok(media.keys.has("c1|mic#500"));
+    e.stop();
+});
+test("a later engine on the same server connection still refuses a replayed or older epoch", async () => {
+    const first = connected("tab-same");
+    assert.equal(first.e.receive(control(700, { sender: "u-line", device: "d-line" })).ok, true);
+    first.e.stop();
+    const { e, media } = connected("tab-same");
+    assert.equal(e.receive(control(700, { sender: "u-line", device: "d-line" })).reason, "stale");
+    assert.equal(e.receive(control(699, { sender: "u-line", device: "d-line" })).reason, "stale");
+    await flush();
+    assert.ok(![...media.keys.keys()].some(key => key.startsWith("c1|")));
+    assert.equal(e.receive(control(701, { sender: "u-line", device: "d-line" })).ok, true);
+    e.stop();
+});
