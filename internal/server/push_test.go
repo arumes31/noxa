@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"noxa/internal/auth"
 	"noxa/internal/config"
 	"noxa/internal/netproto"
 	"noxa/internal/store"
@@ -453,4 +454,50 @@ func TestReadMarkerValidation(t *testing.T) {
 	if (netproto.DeviceRequest{Action: netproto.DeviceActionRead}).Valid() {
 		t.Fatal("read without marker accepted")
 	}
+}
+
+// A banned account's phones get no notifications: neither new ones nor one
+// that was already waiting behind desktop activity when the ban was set.
+func TestPushSkipsBannedAccount(t *testing.T) {
+	previous := pushDesktopDelay
+	pushDesktopDelay = 300 * time.Millisecond
+	defer func() { pushDesktopDelay = previous }()
+
+	p := startPushTestEnv(t)
+	phone, session := p.phoneSession(t, "Pixel")
+	deviceCall(t, phone, netproto.DeviceRequest{Action: netproto.DeviceActionPushSubscribe, Subscription: browserSubscription(t, "https://push.example/1")})
+	session.mu.Lock()
+	session.webHidden = true
+	session.mu.Unlock()
+	p.env.srv.pushNotify("user-uid", pushNotice{Kind: pushKindDM, Tag: "dm:ivy", From: "Ivy"})
+	if got := p.sender.next(t); got.payload.Kind != pushKindDM {
+		t.Fatalf("push before the ban = %+v", got.payload)
+	}
+
+	desktop := desktopLogin(t, p.env.addr, newLinkTestKeys(t))
+	defer func() { _ = desktop.Close() }()
+	send(t, desktop, netproto.MsgDeviceRequest, netproto.DeviceRequest{Action: netproto.DeviceActionActivity, Active: true})
+	waitFor(t, "desktop activity", func() bool { return p.env.srv.desktopActive("user-uid", time.Now()) })
+	p.env.srv.pushNotify("user-uid", pushNotice{Kind: pushKindConversation, Tag: "conversation:g1", From: "Ivy"})
+	waitFor(t, "delayed push", func() bool {
+		p.env.srv.push.mu.Lock()
+		defer p.env.srv.push.mu.Unlock()
+		return len(p.env.srv.push.pending) == 1
+	})
+
+	p.env.auth.setBan("user-uid", &auth.Ban{ID: 1, Type: 1, Value: "user-uid"})
+	for _, n := range []pushNotice{
+		{Kind: pushKindDM, Tag: "dm:rowan", From: "Rowan"},
+		{Kind: pushKindConversation, Tag: "conversation:g2", From: "Rowan"},
+		{Kind: pushKindMention, Tag: "channel:4", From: "Rowan", Place: "design"},
+		{Kind: pushKindCall, Tag: "call:1", From: "Rowan"},
+	} {
+		p.env.srv.pushNotify("user-uid", n)
+	}
+	p.sender.none(t, 3*pushDesktopDelay)
+	waitFor(t, "no notice left waiting", func() bool {
+		p.env.srv.push.mu.Lock()
+		defer p.env.srv.push.mu.Unlock()
+		return len(p.env.srv.push.pending) == 0
+	})
 }
