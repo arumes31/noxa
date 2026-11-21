@@ -266,14 +266,21 @@ func (a *App) RevokeDeviceForTab(tabID, deviceID string) error {
 	if err != nil {
 		return err
 	}
-	req, err := cm.signedRevokeRequest(deviceID)
+	return cm.revokeOwnDevice(deviceID)
+}
+
+func (m *connManager) revokeOwnDevice(deviceID string) error {
+	// Taken before the request: the answer and the device event that follows
+	// drop the verified list.
+	signing := m.verifiedOwnDeviceKey(deviceID)
+	req, err := m.signedRevokeRequest(deviceID)
 	if err != nil {
 		return err
 	}
-	if _, err = cm.deviceRequest(req); err != nil {
+	if _, err = m.deviceRequest(req); err != nil {
 		return err
 	}
-	return cm.persistOwnDeviceRevocation(deviceID)
+	return m.persistOwnDeviceRevocation(deviceID, signing)
 }
 
 // signedRevokeRequest builds a revoke request signed by this desktop over the
@@ -328,10 +335,13 @@ func (m *connManager) signedRevokeRequest(deviceID string) (netproto.DeviceReque
 // approval cannot get new messages encrypted to it. The local record filters
 // this account's device list for every send path (legacy copies and the
 // ratchet's device-key lookup); the ratchet store additionally gets a
-// permanent revoked trust record now, or when its next session starts. Only
-// locally initiated revocations are persisted: server-sent revocation events
-// are not authenticated, and the record is permanent.
-func (m *connManager) persistOwnDeviceRevocation(deviceID string) error {
+// permanent revoked trust record now, or when its next session starts. With
+// signing (the key this desktop verified for the device before the
+// revocation) the record also covers the same key listed under another
+// device ID; without it the record names the ID only. Only locally initiated
+// revocations are persisted: server-sent revocation events are not
+// authenticated, and the record is permanent.
+func (m *connManager) persistOwnDeviceRevocation(deviceID string, signing ed25519.PublicKey) error {
 	m.mu.Lock()
 	principal, selfDevice := m.uniqueID, m.deviceID
 	m.mu.Unlock()
@@ -339,7 +349,7 @@ func (m *connManager) persistOwnDeviceRevocation(deviceID string) error {
 	if deviceID == "" || deviceID == selfDevice || principal == "" {
 		return nil
 	}
-	if err := m.recordOwnDeviceRevocation(deviceID); err != nil {
+	if err := m.recordOwnDeviceRevocation(deviceID, signing); err != nil {
 		return fmt.Errorf("the server signed the device out, but this desktop could not record the revocation: %w", err)
 	}
 	consumer, err := m.ratchetConsumerOn(nil)
