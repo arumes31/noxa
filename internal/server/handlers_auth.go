@@ -195,9 +195,9 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	client.mu.Unlock()
 	// Bind the client's identity key so future challenge logins work. Only a
 	// key signed for (a challenge issued on this connection) is proven and may
-	// route key logins; an older client's unproven key still serves this
-	// password session (signing key, device), which is harmless because the
-	// account holder cannot sign with someone else's key.
+	// route key logins or carry a device; an unproven key still verifies what
+	// this password session signs, which is harmless because the account
+	// holder cannot sign with someone else's key.
 	if msg.PublicKey != "" {
 		proven := len(proofChallenge) > 0 && auth.VerifyLoginChallenge(msg.PublicKey, proofChallenge, msg.PublicKeyProof) == nil
 		if canonical, err := auth.CanonicalPublicKey(msg.PublicKey); err == nil {
