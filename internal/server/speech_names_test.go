@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"math"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -15,6 +17,7 @@ import (
 	"noxa/internal/authorization"
 	"noxa/internal/netproto"
 	"noxa/internal/speechnames"
+	"noxa/internal/state"
 )
 
 type countingSynth struct{ calls atomic.Int32 }
@@ -144,4 +147,51 @@ func TestSpokenNamesDisabledWithoutEngine(t *testing.T) {
 	if got := readError(t, asker); got.Code != errCodeUnavailable {
 		t.Fatalf("%+v", got)
 	}
+}
+
+// The budget for new clips belongs to the account, so a new connection of the
+// same account does not start with a full one.
+func TestSpokenNameSynthesisBudgetSurvivesReconnect(t *testing.T) {
+	synth := &countingSynth{}
+	dir := t.TempDir()
+	env := startSpeechEnv(t, speechnames.New(dir, synth, zap.NewNop()))
+	defer env.stop()
+	const names = speechSynthesisBurst + 4
+	for i := range names {
+		env.state.AddClient(&state.Client{ClientID: fmt.Sprintf("member-%d", i), UniqueID: fmt.Sprintf("member-uid-%d", i), Nickname: fmt.Sprintf("Name %c%c", 'a'+rune(i), 'k'+rune(i)), ConnectedAt: time.Now()})
+	}
+	// accepted counts the names in [from, names) one session of uid gets voiced.
+	accepted := func(uid string, from int) int {
+		t.Helper()
+		conn, id := dialAuthed(t, env.addr, uid)
+		n := 0
+		for i := from; i < names; i++ {
+			send(t, conn, netproto.MsgSpokenNameGet, netproto.SpokenNameGet{ClientID: fmt.Sprintf("member-%d", i), Language: "en"})
+			for answered := false; !answered; {
+				switch netproto.MessageType(readFrame(t, conn).Type) {
+				case netproto.MsgSpokenNameData:
+					n, answered = n+1, true
+				case netproto.MsgError:
+					answered = true
+				}
+			}
+		}
+		_ = conn.Close()
+		waitFor(t, "session gone", func() bool { _, ok := env.state.GetClient(id); return !ok })
+		return n
+	}
+	if got := accepted("user-uid", 0); got != speechSynthesisBurst {
+		t.Fatalf("first connection: %d new clips, want %d", got, speechSynthesisBurst)
+	}
+	if got := accepted("user-uid", speechSynthesisBurst); got != 0 {
+		t.Fatalf("reconnect refilled the budget: %d new clips", got)
+	}
+	if got := accepted("admin-uid", speechSynthesisBurst); got != names-speechSynthesisBurst {
+		t.Fatalf("another account: %d new clips, want %d", got, names-speechSynthesisBurst)
+	}
+	// The background syntheses finish before the clip directory is removed.
+	waitFor(t, "clips stored", func() bool {
+		clips, _ := filepath.Glob(filepath.Join(dir, "en", "*.wav"))
+		return len(clips) == names
+	})
 }
