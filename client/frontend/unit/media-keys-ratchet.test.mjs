@@ -2,7 +2,7 @@
 // heard (and hears) as soon as its single key control lands.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { MediaKeyEngine, buildMediaKeyBody, parseMediaKeyControl, ratchetKeys, sessionFeatures, RATCHET_FEATURE, SWITCH_GRACE_MS } from "../src/media-keys.js";
+import { DEBOUNCE_MS, JOIN_DEBOUNCE_MS, MediaKeyEngine, buildMediaKeyBody, parseMediaKeyControl, ratchetKeys, sessionFeatures, RATCHET_FEATURE, SWITCH_GRACE_MS } from "../src/media-keys.js";
 
 const flush = async (n = 30) => { for (let i = 0; i < n; i++) await new Promise(r => setTimeout(r, 0)); };
 const fastTimers = { setTimeout: (fn) => setTimeout(fn, 0), clearTimeout, setInterval: () => 0, clearInterval: () => {} };
@@ -417,5 +417,21 @@ test("a device revoked after it held ratchet keys never sees a key derived from 
             const mic = unb64(c.body.data.keys.mic);
             assert.ok(!derived.some(d => d.every((v, i) => v === mic[i])), `epoch ${c.body.epoch} derives from keys d2 held`);
         }
+    } finally { e.stop(); }
+});
+
+test("a join that can ratchet sends its keys after the short debounce", async () => {
+    const delays = [];
+    const timers = { ...fastTimers, setTimeout: (fn, ms) => { delays.push(ms); return setTimeout(fn, 0); } };
+    const e = new MediaKeyEngine({ media: fakeMedia(), timers, sendTimeoutMs: Infinity, activateMaxWaitMs: Infinity, send: async () => ({ ok: true }) });
+    e.setRoster([member("c9", "u-peer", "d-peer")]);
+    e.start({ ...me, principal: "u-fast", device: "d-fast" });
+    try {
+        await flush();
+        await announce(e, "c9", "u-peer", "d-peer", 8_400_000_000_000);
+        await flush(60);
+        delays.length = 0;
+        e.setRoster([member("c9", "u-peer", "d-peer"), member("c2", "u2", "d2")]);
+        assert.ok(delays.includes(JOIN_DEBOUNCE_MS) && !delays.includes(DEBOUNCE_MS), `delays ${delays}`);
     } finally { e.stop(); }
 });

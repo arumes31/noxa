@@ -24,4 +24,14 @@ test("only a finished slow join is summarized, once", () => {
     assert.equal(slowVoiceJoinSummary(), "", "a fast join is not reported");
     markVoiceJoinKeys({ state: "encrypted", epoch: 1, recipients: 1, delivered: 1, participants: [{ received: true }] }, 60_000);
     assert.equal(slowVoiceJoinSummary(), "", "a later participant does not make it slow");
+    beginVoiceJoin(0);
+    markVoiceJoinKeys({ state: "encrypted", epoch: 1, recipients: 0, delivered: 0, participants: [] }, 300);
+    markVoiceJoin("transport_connected", 900);
+    markVoiceJoinKeys({ state: "encrypted", epoch: 1, recipients: 1, delivered: 1, participants: [{ received: true }] }, 10_000);
+    assert.equal(slowVoiceJoinSummary(), "", "joined alone: a friend arriving 10 s later is not this join");
+    beginVoiceJoin(0);
+    markVoiceJoinKeys({ state: "keying", epoch: 1, recipients: 1, delivered: 0, participants: [{ received: false }] }, 300);
+    markVoiceJoin("transport_connected", 900);
+    markVoiceJoinKeys({ state: "encrypted", epoch: 1, recipients: 1, delivered: 1, participants: [{ received: true }] }, 5000);
+    assert.match(slowVoiceJoinSummary(), /all_keys_received 5000/, "a slow key exchange with a peer already there is reported");
 });

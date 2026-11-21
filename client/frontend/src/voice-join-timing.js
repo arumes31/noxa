@@ -15,6 +15,11 @@ export function markVoiceJoinKeys(status, now = performance.now()) {
     // Key marks end 30 s after the join started: a later one belongs to
     // somebody else joining, not to this join.
     if (!run || !status || status.state === "off" || now - run.at > 30_000) return;
+    // A join that connected with nobody else there is finished: keys for a
+    // participant who arrives later are not part of it.
+    const peers = Math.max(status.recipients || 0, (status.participants || []).length);
+    if (!("transport_connected" in run.marks) || run.peers === undefined) run.peers = peers;
+    else if (!run.peers) return;
     if (status.epoch) markVoiceJoin("own_key_active", now);
     if (status.delivered > 0) markVoiceJoin("own_key_first_delivered", now);
     if (status.recipients > 0 && status.delivered >= status.recipients) markVoiceJoin("own_key_all_delivered", now);
