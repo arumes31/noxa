@@ -8,10 +8,11 @@
 // client/dm_history_copy.go: messages newest first, packed into chunks of at
 // most MaxHistoryChunk sealed bytes, each chunk a JSON array (oldest first)
 // sealed as nacl/box nonce||box from this device to the target device.
-import { fromBase64, keyFingerprint, publicKeyPEM, sealDM, sign, toBase64, utf8 } from "./crypto.js";
+import { deviceKeyClaimTranscript, fromBase64, keyClaimRef, keyFingerprint, publicKeyPEM, sealDM, sign, toBase64, utf8 } from "./crypto.js";
 import { HISTORY_ENVELOPE_RESERVE, encodeHistoryChunk } from "./history-envelope.js";
 import { Msg } from "./frame.js";
-import { revocationTranscript } from "./dm-trust.js";
+import { ed25519FromPEM, revocationTranscript } from "./dm-trust.js";
+import { verifySignature } from "./olm-keys.js";
 
 // internal/netproto/dm_devices.go
 export const MAX_HISTORY_CHUNK = 256 << 10;
@@ -93,9 +94,27 @@ export function validDeviceKeys(ed25519PEM, x25519B64) {
 }
 
 /**
+ * Whether a listed device carries its own signature over its signing and
+ * encryption key (key_claim, netproto.DeviceKeyClaimTranscript with
+ * DeviceKeyClaimRef). The fingerprint a user compares covers the signing key
+ * only; this ties the listed encryption key to it.
+ */
+export function hasKeyClaim(principal, device) {
+    try {
+        const key = ed25519FromPEM(device.ed25519_public_key);
+        const claim = fromBase64(device.key_claim || "");
+        return !!key && claim.length === 64 &&
+            verifySignature(claim, deviceKeyClaimTranscript(keyClaimRef(principal), device.ed25519_public_key, device.x25519_public_key), key);
+    } catch {
+        return false;
+    }
+}
+
+/**
  * Confirms another device of the account for direct messages. The target's
- * keys come from the server's list and must match its fingerprint, which
- * the user compares with the one the other device shows.
+ * keys come from the server's list: the signing key must match the
+ * fingerprint, which the user compares with the one the other device shows,
+ * and the encryption key must carry that device's own key claim.
  */
 export async function endorseDevice(session, target) {
     if (!session.deviceID) throw new Error("this device is not registered yet");
@@ -103,6 +122,7 @@ export async function endorseDevice(session, target) {
     if (!target.ed25519_public_key || !target.x25519_public_key) throw new Error("the server does not share this device's keys");
     if (keyFingerprint(target.ed25519_public_key) !== target.fingerprint) throw new Error("the device's key does not match its fingerprint");
     if (!validDeviceKeys(target.ed25519_public_key, target.x25519_public_key)) throw new Error("the device's keys are invalid");
+    if (!hasKeyClaim(session.uniqueID, target)) throw new Error("this device has not proven its encryption key; sign in on it with an up-to-date noXa, then confirm it again");
     const signature = sign(approvalTranscript(session.uniqueID, session.deviceID, target.ed25519_public_key, target.x25519_public_key), session.identity.edSecret);
     let binary = "";
     for (const byte of signature) binary += String.fromCharCode(byte);

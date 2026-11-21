@@ -217,9 +217,9 @@ type DeviceRequest struct {
 	// Signature is the approving device's Ed25519 signature over
 	// DeviceApprovalTranscript, or for a revoke the revoking device's
 	// signature over DeviceRevocationTranscript (optional; older clients
-	// revoke without one). For link_claim and passkey_login_finish it is the
-	// claiming device's own signature over DeviceKeyClaimTranscript, proving
-	// it holds the key it asks to have linked.
+	// revoke without one). For link_claim, passkey_login_finish and key_claim
+	// it is the claiming device's own signature over DeviceKeyClaimTranscript,
+	// proving it holds the key it asks to have linked.
 	Signature []byte `json:"signature,omitempty"`
 	// RevokedAt is the signing time (unix seconds) in a signed revoke.
 	RevokedAt int64 `json:"revoked_at,omitempty"`
@@ -299,6 +299,8 @@ func (r DeviceRequest) Valid() bool {
 		return r.DeviceID != "" && (len(r.Signature) == 0 && r.RevokedAt == 0 || len(r.Signature) == 64 && r.RevokedAt > 0)
 	case DeviceActionEndorse:
 		return r.DeviceID != "" && len(r.Signature) > 0
+	case DeviceActionKeyClaim:
+		return r.DeviceID == "" && r.LinkID == "" && len(r.Signature) == 64
 	case DeviceActionHistoryPut:
 		return r.DeviceID != "" && r.History != nil
 	case DeviceActionHistoryGet, DeviceActionHistoryAck:
@@ -325,6 +327,11 @@ type DeviceInfo struct {
 	Name         string          `json:"name"`
 	Fingerprint  string          `json:"fingerprint"`
 	X25519Public string          `json:"x25519_public_key,omitempty"`
+	// KeyClaim is the device's own signature over DeviceKeyClaimTranscript
+	// with DeviceKeyClaimRef: it ties the encryption key to the signing key
+	// whose fingerprint the user compares. The server only relays it; a
+	// confirming device verifies it before it signs an endorsement.
+	KeyClaim []byte `json:"key_claim,omitempty"`
 	// Ed25519Public lets a trusted device sign an endorsement; Confirmed
 	// marks the first device and devices with an approval signature.
 	Ed25519Public  string `json:"ed25519_public_key,omitempty"`
@@ -393,6 +400,9 @@ type DeviceEvent struct {
 	Platform         string `json:"platform,omitempty"`
 	Ed25519PublicKey string `json:"ed25519_public_key,omitempty"`
 	X25519PublicKey  string `json:"x25519_public_key,omitempty"`
+	// KeyClaim relays the claiming device's signature over
+	// DeviceKeyClaimTranscript, which the creator verifies before approving.
+	KeyClaim []byte `json:"key_claim,omitempty"`
 	// Via is "qr" or "code": which link key the claim used, so the creator
 	// can compute the same LinkSAS as the claiming device.
 	Via string `json:"via,omitempty"`
@@ -423,10 +433,15 @@ func LinkClaimTranscript(linkID, ed25519Public, x25519Public string) []byte {
 // DeviceKeyClaimTranscript is what a device signs with the Ed25519 key it asks
 // to have linked, so a key is only ever linked by its holder. ref names the
 // claim: "link:" + link ID (QR), "code:" + normalized code (typed) or
-// "passkey:" + the WebAuthn challenge of the sign-in (base64url).
+// "passkey:" + the WebAuthn challenge of the sign-in (base64url), or
+// DeviceKeyClaimRef for the claim a linked device publishes for its own keys.
 func DeviceKeyClaimTranscript(ref, ed25519Public, x25519Public string) []byte {
 	return []byte("noxa-device-key-claim-v1\n" + ref + "\n" + ed25519Public + "\n" + x25519Public)
 }
+
+// DeviceKeyClaimRef names the key claim a device of principal publishes for
+// itself (key_claim), which the account's other devices verify.
+func DeviceKeyClaimRef(principal string) string { return "device:" + principal }
 
 // DeviceApprovalTranscript is the message the approving device signs. The
 // signature travels with the new device so other clients can verify who

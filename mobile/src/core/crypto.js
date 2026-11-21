@@ -120,10 +120,19 @@ export function linkClaimTranscript(linkID, edPublicPEM, xPublicB64) {
 /**
  * What a device signs with the key it asks to have linked
  * (netproto.DeviceKeyClaimTranscript). ref is "link:" + link ID,
- * "code:" + normalized code or "passkey:" + the WebAuthn challenge.
+ * "code:" + normalized code, "passkey:" + the WebAuthn challenge, or
+ * keyClaimRef for the claim a linked device publishes for its own keys.
  */
 export function deviceKeyClaimTranscript(ref, edPublicPEM, xPublicB64) {
     return encoder.encode(`noxa-device-key-claim-v1\n${ref}\n${edPublicPEM}\n${xPublicB64}`);
+}
+
+/**
+ * The ref of the key claim a linked device publishes for its own keys, which
+ * the account's other devices verify (netproto.DeviceKeyClaimRef).
+ */
+export function keyClaimRef(principal) {
+    return `device:${principal}`;
 }
 
 export function linkProof(linkKey, transcript) {

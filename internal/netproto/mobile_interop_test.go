@@ -39,6 +39,7 @@ type mobileInterop struct {
 	LinkProof       string `json:"link_proof"`
 	LinkSAS         string `json:"link_sas"`
 	ClaimKeySig     string `json:"claim_key_signature"`
+	DeviceKeyClaim  string `json:"device_key_claim_signature"`
 	CodeSAS         string `json:"code_sas"`
 	Code            string `json:"code"`
 	ScopeKey        string `json:"scope_key"`
@@ -89,6 +90,7 @@ func TestMobileInteropFixture(t *testing.T) {
 			fixture.LoginBinding == "" || fixture.LoginSignature != base64.StdEncoding.EncodeToString(login) ||
 			LinkSAS(secret, transcript) != fixture.LinkSAS ||
 			fixture.ClaimKeySig != base64.StdEncoding.EncodeToString(ed25519.Sign(ed25519.NewKeyFromSeed(seed), DeviceKeyClaimTranscript("link:"+fixture.LinkID, pemText, fixture.X25519Public))) ||
+			fixture.DeviceKeyClaim != base64.StdEncoding.EncodeToString(ed25519.Sign(ed25519.NewKeyFromSeed(seed), DeviceKeyClaimTranscript(DeviceKeyClaimRef(fixture.ApprovalPrinc), pemText, fixture.X25519Public))) ||
 			base64.StdEncoding.EncodeToString(LinkProof(secret, transcript)) != fixture.LinkProof {
 			t.Fatal("mobile interop fixture is stale; rerun with -update-mobile-fixture")
 		}
@@ -135,8 +137,9 @@ func TestMobileInteropFixture(t *testing.T) {
 		LoginSignature: b64(ed25519.Sign(priv, interopLoginMessage(LoginBindingOrigin("https://chat.example"), challenge))),
 		LinkID:         "link-123", LinkSecret: b64(secret[:]), X25519Public: xPubB64, X25519Secret: b64(xPriv[:]),
 		LinkProof: b64(LinkProof(secret[:], transcript)), LinkSAS: LinkSAS(secret[:], transcript),
-		ClaimKeySig: b64(ed25519.Sign(priv, DeviceKeyClaimTranscript("link:link-123", pemText, xPubB64))),
-		Code:        "K7QM4XPA", CodeSAS: LinkSAS([]byte("K7QM4XPA"), transcript),
+		ClaimKeySig:    b64(ed25519.Sign(priv, DeviceKeyClaimTranscript("link:link-123", pemText, xPubB64))),
+		DeviceKeyClaim: b64(ed25519.Sign(priv, DeviceKeyClaimTranscript(DeviceKeyClaimRef("user-uid"), pemText, xPubB64))),
+		Code:           "K7QM4XPA", CodeSAS: LinkSAS([]byte("K7QM4XPA"), transcript),
 		ScopeKey: b64(scopeKey[:]), SealedScopeKey: b64(sealedKey), ScopeText: "hello channel ✓", ScopeBlob: b64(scopeBlob),
 		PeerX25519: b64(peerPub[:]), PeerX25519Priv: b64(peerPriv[:]), DMText: "hi from the desktop", DMBlobFromPeer: b64(dmBlob),
 		ApprovalPrinc: "user-uid", ApprovalDevice: "dev-desktop",

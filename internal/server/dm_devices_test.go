@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net"
 	"sync"
@@ -10,6 +12,7 @@ import (
 
 	"noxa/internal/auth"
 	"noxa/internal/config"
+	"noxa/internal/devicetrust"
 	"noxa/internal/netproto"
 	"noxa/internal/store"
 )
@@ -229,6 +232,50 @@ func TestDirectMessagesReachEveryTrustedDevice(t *testing.T) {
 	}
 	if listed := keyDirectory(t, admin, "user-uid"); len(listed) != 3 {
 		t.Fatalf("directory after endorsement = %+v", listed)
+	}
+}
+
+// A device publishes a signature over its own stored keys; the server checks
+// it against those keys and relays it to the account's other devices.
+func TestKeyClaimIsCheckedStoredAndRelayed(t *testing.T) {
+	e := startDMTestEnv(t)
+	desktopKeys := newLinkTestKeys(t)
+	desktop, desktopID := e.desktopAs(t, "user-uid", desktopKeys)
+	phoneKeys, phoneID := e.approvedPhone(t, "user-uid", 2, desktopID, desktopKeys)
+	phone, resp := keyLogin(t, e.env.addr, phoneKeys)
+	defer func() { _ = phone.Close() }()
+	if !resp.OK {
+		t.Fatalf("phone login = %+v", resp)
+	}
+	ref := netproto.DeviceKeyClaimRef("user-uid")
+	sign := func(ref, x25519 string) []byte {
+		t.Helper()
+		sig, err := auth.SignChallenge(phoneKeys.private, netproto.DeviceKeyClaimTranscript(ref, phoneKeys.public, x25519))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sig
+	}
+	for name, claim := range map[string][]byte{
+		"another encryption key": sign(ref, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{8}, 32))),
+		"another account":        sign(netproto.DeviceKeyClaimRef("someone-else"), phoneKeys.x25519),
+		"a link claim":           sign("link:abc", phoneKeys.x25519),
+	} {
+		if got := deviceCallError(t, phone, netproto.DeviceRequest{Action: netproto.DeviceActionKeyClaim, Signature: claim}); got.Code != errCodePermissionDenied {
+			t.Fatalf("%s: key claim = %+v", name, got)
+		}
+	}
+	claim := sign(ref, phoneKeys.x25519)
+	stored := deviceCall(t, phone, netproto.DeviceRequest{Action: netproto.DeviceActionKeyClaim, Signature: claim})
+	if stored.Device == nil || stored.Device.DeviceID != phoneID || !bytes.Equal(stored.Device.KeyClaim, claim) {
+		t.Fatalf("key claim = %+v", stored)
+	}
+	listed := deviceCall(t, desktop, netproto.DeviceRequest{Action: netproto.DeviceActionList})
+	for _, d := range listed.Devices {
+		want := d.DeviceID == phoneID
+		if got := devicetrust.VerifyKeyClaim(ref, d.Ed25519Public, d.X25519Public, d.KeyClaim); got != want {
+			t.Fatalf("device %s: verified key claim = %v, want %v", d.DeviceID, got, want)
+		}
 	}
 }
 

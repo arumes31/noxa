@@ -68,6 +68,10 @@ func ValidDMAction(action, ref string) bool {
 // DeviceID names the device; Signature is over DeviceApprovalTranscript.
 const DeviceActionEndorse = "endorse"
 
+// DeviceActionKeyClaim publishes the calling device's own signature over
+// DeviceKeyClaimTranscript (ref DeviceKeyClaimRef) for its stored keys.
+const DeviceActionKeyClaim = "key_claim"
+
 // History copy: after approving a device, a trusted device re-encrypts its
 // direct-message history to the new device's X25519 key and uploads it in
 // chunks (history_put, DeviceID = the new device). The new device downloads

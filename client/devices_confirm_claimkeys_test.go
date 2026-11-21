@@ -15,11 +15,15 @@ import (
 // an embedded line break (Go's base64 decoder skips CR/LF, so the X25519
 // parse alone accepts it) is never signed.
 func TestConfirmDeviceRefusesNonCanonicalClaimKeys(t *testing.T) {
-	signingKey, _, err := auth.GenerateIdentityKeyPair()
+	signingKey, signingPrivate, err := auth.GenerateIdentityKeyPair()
 	if err != nil {
 		t.Fatal(err)
 	}
 	x := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32)))
+	keyClaim, err := auth.SignChallenge(signingPrivate, netproto.DeviceKeyClaimTranscript(netproto.DeviceKeyClaimRef("account"), signingKey, x))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, tc := range map[string]struct {
 		ed, x  string
 		signed bool
@@ -30,7 +34,7 @@ func TestConfirmDeviceRefusesNonCanonicalClaimKeys(t *testing.T) {
 		"ed25519 extra line": {signingKey + "x: y\n", x, false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			target := netproto.DeviceInfo{DeviceID: "phone", Kind: "web", Ed25519Public: tc.ed, X25519Public: tc.x, Fingerprint: netproto.KeyFingerprint(tc.ed)}
+			target := netproto.DeviceInfo{DeviceID: "phone", Kind: "web", Ed25519Public: tc.ed, X25519Public: tc.x, KeyClaim: keyClaim, Fingerprint: netproto.KeyFingerprint(tc.ed)}
 			var endorsements atomic.Int32
 			a, cm := newPipedApp(t, func(f *netproto.Frame) (netproto.MessageType, any, bool) {
 				var req netproto.DeviceRequest
@@ -60,6 +64,72 @@ func TestConfirmDeviceRefusesNonCanonicalClaimKeys(t *testing.T) {
 			}
 			if name == "x25519 line break" && !strings.Contains(err.Error(), "expected format") {
 				t.Fatalf("refused by the claimed-key validator, got %v", err)
+			}
+		})
+	}
+}
+
+// The fingerprint the user compares covers the signing key only, so the
+// desktop endorses a device only with that device's own signature over the
+// listed encryption key: a relay that lists the real signing key with an
+// encryption key of its choice gets no approval.
+func TestConfirmDeviceRequiresTheDevicesOwnKeyClaim(t *testing.T) {
+	signingKey, signingPrivate, err := auth.GenerateIdentityKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, otherPrivate, err := auth.GenerateIdentityKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	x := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32)))
+	relayX := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("r", 32)))
+	sign := func(private, ref, x25519 string) []byte {
+		t.Helper()
+		sig, err := auth.SignChallenge(private, netproto.DeviceKeyClaimTranscript(ref, signingKey, x25519))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sig
+	}
+	own := netproto.DeviceKeyClaimRef("account")
+	for name, tc := range map[string]struct {
+		x      string
+		claim  []byte
+		signed bool
+	}{
+		"the device's claim":           {x, sign(signingPrivate, own, x), true},
+		"no claim":                     {x, nil, false},
+		"encryption key swapped":       {relayX, sign(signingPrivate, own, x), false},
+		"claim by another key":         {relayX, sign(otherPrivate, own, relayX), false},
+		"claim made for another use":   {x, sign(signingPrivate, "link:abc", x), false},
+		"claim made for another owner": {x, sign(signingPrivate, netproto.DeviceKeyClaimRef("someone-else"), x), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			target := netproto.DeviceInfo{DeviceID: "phone", Kind: "web", Ed25519Public: signingKey, X25519Public: tc.x, KeyClaim: tc.claim, Fingerprint: netproto.KeyFingerprint(signingKey)}
+			var endorsements atomic.Int32
+			a, cm := newPipedApp(t, func(f *netproto.Frame) (netproto.MessageType, any, bool) {
+				var req netproto.DeviceRequest
+				if err := netproto.Decode(f, &req); err != nil {
+					t.Error(err)
+				}
+				if req.Action == netproto.DeviceActionEndorse {
+					endorsements.Add(1)
+					return netproto.MsgDeviceResult, netproto.DeviceResult{Action: req.Action, Device: &target}, true
+				}
+				return netproto.MsgDeviceResult, netproto.DeviceResult{Action: req.Action, Devices: []netproto.DeviceInfo{target}}, true
+			})
+			a.tabs = map[string]*tabState{"a": {cm: cm}}
+			a.activeID = "a"
+			cm.mu.Lock()
+			cm.uniqueID, cm.deviceID, cm.supportsDevices = "account", "self", true
+			cm.mu.Unlock()
+			_, err := a.ConfirmDeviceForTab("a", "phone", signingKey, tc.x)
+			if tc.signed && (err != nil || endorsements.Load() != 1) {
+				t.Fatalf("a device with its own key claim must be endorsed: %v", err)
+			}
+			if !tc.signed && (err == nil || endorsements.Load() != 0) {
+				t.Fatalf("no approval without the device's own key claim: err=%v endorsements=%d", err, endorsements.Load())
 			}
 		})
 	}

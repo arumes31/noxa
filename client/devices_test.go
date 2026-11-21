@@ -21,7 +21,7 @@ func (c *deviceEventCapture) Emit(name string, payload any) {
 
 func TestDeviceLinkDesktopDerivesSASAndSignsApproval(t *testing.T) {
 	secret := bytes.Repeat([]byte{7}, 32)
-	phonePublic, _, err := auth.GenerateIdentityKeyPair()
+	phonePublic, phonePrivate, err := auth.GenerateIdentityKeyPair()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,18 +80,40 @@ func TestDeviceLinkDesktopDerivesSASAndSignsApproval(t *testing.T) {
 		}
 	}
 
-	claim := func(linkID, via string) {
+	claimKeys := func(linkID, via, ref, x25519 string) {
+		keyClaim, err := auth.SignChallenge(phonePrivate, netproto.DeviceKeyClaimTranscript(ref, phonePublic, phoneX))
+		if err != nil {
+			t.Fatal(err)
+		}
 		frame, err := netproto.Encode(netproto.MsgDeviceEvent, netproto.DeviceEvent{
-			Event: netproto.DeviceEventLinkClaimed, LinkID: linkID, Ed25519PublicKey: phonePublic, X25519PublicKey: phoneX, Via: via,
+			Event: netproto.DeviceEventLinkClaimed, LinkID: linkID, Ed25519PublicKey: phonePublic, X25519PublicKey: x25519, KeyClaim: keyClaim, Via: via,
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		cm.handleDeviceEvent(frame)
 	}
+	claim := func(linkID, via string) {
+		ref := "link:" + linkID
+		if via == "code" {
+			ref = "code:K7QM4XPA"
+		}
+		claimKeys(linkID, via, ref, phoneX)
+	}
 	claim("someone-elses-link", "qr")
 	if len(capture.views) != 0 {
 		t.Fatal("claim of a foreign link reached the webview")
+	}
+	// A claim whose encryption key the claiming device did not sign, or whose
+	// key claim was made for another link, is never shown or approved.
+	otherX := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{8}, 32))
+	claimKeys("link-1", "qr", "link:link-1", otherX)
+	claimKeys("link-1", "qr", "link:another", phoneX)
+	if len(capture.views) != 0 {
+		t.Fatal("a claim without a valid key claim reached the webview")
+	}
+	if _, err := app.DecideDeviceLinkForTab("a", "link-1", true, phonePublic, otherX); err == nil || approval != nil {
+		t.Fatal("unproven claimed keys were approved")
 	}
 	transcript := netproto.LinkClaimTranscript("link-1", phonePublic, phoneX)
 	claim("link-1", "qr")

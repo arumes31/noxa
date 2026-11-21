@@ -549,6 +549,7 @@ export async function connect({ guest = null, fence } = {}) {
             serverPassword: guest ? guest.serverPassword : app.guestPassword || "",
             goodbye: true,
             resumeToken: resume.identity === identity ? resume.token : "",
+            keyClaim: !guest && !app.meta.guest,
         });
     } catch (error) {
         conn.close();
