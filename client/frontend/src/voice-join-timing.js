@@ -12,9 +12,10 @@ export function markVoiceJoin(name, now = performance.now()) {
 
 /** Marks derived from the key engine's status (channel-media status events). */
 export function markVoiceJoinKeys(status, now = performance.now()) {
-    // Key marks end 30 s after the join started: a later one belongs to
-    // somebody else joining, not to this join.
-    if (!run || !status || status.state === "off" || now - run.at > 30_000) return;
+    if (!run || !status || status.state === "off") return;
+    // Key marks end 30 s after the transport connected: a later one belongs
+    // to somebody else joining, not to this join.
+    if (now - run.at - run.marks.transport_connected > 30_000) return;
     // A join that connected with nobody else there is finished: keys for a
     // participant who arrives later are not part of it.
     const peers = Math.max(status.recipients || 0, (status.participants || []).length);

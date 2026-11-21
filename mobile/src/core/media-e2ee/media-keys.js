@@ -363,7 +363,9 @@ export class MediaKeyEngine {
     #joinDebounce(reason) {
         const selfKey = `${this.self.principal}\n${this.self.device}`;
         const ids = this.#recipients.map(r => `${r.principal}\n${r.device}`);
-        return !this.activeEpoch || this.#ratchetHead(reason, ids, selfKey) ? JOIN_DEBOUNCE_MS : DEBOUNCE_MS;
+        // A pending renewal, start or removal keeps its reason (see #schedule) and rekeys fresh.
+        const pending = this.#busyOrPending && (REASON_RANK[this.#reason] || 0) > REASON_RANK[reason] ? this.#reason : reason;
+        return !this.activeEpoch || this.#ratchetHead(pending, ids, selfKey) ? JOIN_DEBOUNCE_MS : DEBOUNCE_MS;
     }
 
     #schedule(reason, delay) {

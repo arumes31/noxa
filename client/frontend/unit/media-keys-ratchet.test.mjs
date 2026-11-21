@@ -422,7 +422,8 @@ test("a device revoked after it held ratchet keys never sees a key derived from 
 
 test("a join that can ratchet sends its keys after the short debounce", async () => {
     const delays = [];
-    const timers = { ...fastTimers, setTimeout: (fn, ms) => { delays.push(ms); return setTimeout(fn, 0); } };
+    let renew;
+    const timers = { ...fastTimers, setTimeout: (fn, ms) => { delays.push(ms); return setTimeout(fn, 0); }, setInterval: fn => { renew = fn; return 0; } };
     const e = new MediaKeyEngine({ media: fakeMedia(), timers, sendTimeoutMs: Infinity, activateMaxWaitMs: Infinity, send: async () => ({ ok: true }) });
     e.setRoster([member("c9", "u-peer", "d-peer")]);
     e.start({ ...me, principal: "u-fast", device: "d-fast" });
@@ -433,5 +434,11 @@ test("a join that can ratchet sends its keys after the short debounce", async ()
         delays.length = 0;
         e.setRoster([member("c9", "u-peer", "d-peer"), member("c2", "u2", "d2")]);
         assert.ok(delays.includes(JOIN_DEBOUNCE_MS) && !delays.includes(DEBOUNCE_MS), `delays ${delays}`);
+        await flush(60);
+        // A pending renewal rekeys fresh whatever joins meanwhile: long debounce.
+        renew();
+        delays.length = 0;
+        e.setRoster([member("c9", "u-peer", "d-peer"), member("c2", "u2", "d2"), member("c3", "u3", "d3")]);
+        assert.ok(delays.includes(DEBOUNCE_MS) && !delays.includes(JOIN_DEBOUNCE_MS), `delays behind a renewal ${delays}`);
     } finally { e.stop(); }
 });

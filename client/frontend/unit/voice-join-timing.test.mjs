@@ -25,6 +25,9 @@ test("only a finished slow join is summarized, once", () => {
     markVoiceJoinKeys({ state: "encrypted", epoch: 1, recipients: 1, delivered: 1, participants: [{ received: true }] }, 60_000);
     assert.equal(slowVoiceJoinSummary(), "", "a later participant does not make it slow");
     beginVoiceJoin(0);
+    markVoiceJoinKeys({ state: "encrypted", epoch: 1, recipients: 1, delivered: 0, participants: [{ received: false }] }, 31_500);
+    assert.equal(voiceJoinTiming().own_key_active, 31_500, "a slow start keeps its key marks until the transport connected");
+    beginVoiceJoin(0);
     markVoiceJoinKeys({ state: "encrypted", epoch: 1, recipients: 0, delivered: 0, participants: [] }, 300);
     markVoiceJoin("transport_connected", 900);
     markVoiceJoinKeys({ state: "encrypted", epoch: 1, recipients: 1, delivered: 1, participants: [{ received: true }] }, 10_000);
