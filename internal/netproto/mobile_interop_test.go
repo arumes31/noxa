@@ -30,12 +30,15 @@ type mobileInterop struct {
 	Fingerprint     string `json:"fingerprint"`
 	Challenge       string `json:"challenge"`
 	Signature       string `json:"signature"`
+	LoginBinding    string `json:"login_binding"`
+	LoginSignature  string `json:"login_signature"`
 	LinkID          string `json:"link_id"`
 	LinkSecret      string `json:"link_secret"`
 	X25519Public    string `json:"x25519_public"`
 	X25519Secret    string `json:"x25519_secret"`
 	LinkProof       string `json:"link_proof"`
 	LinkSAS         string `json:"link_sas"`
+	ClaimKeySig     string `json:"claim_key_signature"`
 	CodeSAS         string `json:"code_sas"`
 	Code            string `json:"code"`
 	ScopeKey        string `json:"scope_key"`
@@ -56,6 +59,13 @@ type mobileInterop struct {
 	AttachmentPlain string `json:"attachment_plain_sha256"`
 }
 
+// interopLoginMessage spells out auth.LoginChallengeMessage (this package
+// cannot import auth); internal/auth checks its own output against the same
+// fixture, the web app in mobile/unit/login-challenge.test.mjs.
+func interopLoginMessage(binding string, challenge []byte) []byte {
+	return append([]byte(AuthChallengeSchemeV2+"\n"+binding+"\n"), challenge...)
+}
+
 func TestMobileInteropFixture(t *testing.T) {
 	path := filepath.Join("..", "..", "mobile", "unit", "fixtures", "interop.json")
 	if !*updateMobileFixture {
@@ -73,8 +83,12 @@ func TestMobileInteropFixture(t *testing.T) {
 		pemText := string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pub}))
 		secret, _ := base64.StdEncoding.DecodeString(fixture.LinkSecret)
 		transcript := LinkClaimTranscript(fixture.LinkID, pemText, fixture.X25519Public)
+		challenge, _ := base64.StdEncoding.DecodeString(fixture.Challenge)
+		login := ed25519.Sign(ed25519.NewKeyFromSeed(seed), interopLoginMessage(fixture.LoginBinding, challenge))
 		if pemText != fixture.PublicKeyPEM || KeyFingerprint(pemText) != fixture.Fingerprint ||
+			fixture.LoginBinding == "" || fixture.LoginSignature != base64.StdEncoding.EncodeToString(login) ||
 			LinkSAS(secret, transcript) != fixture.LinkSAS ||
+			fixture.ClaimKeySig != base64.StdEncoding.EncodeToString(ed25519.Sign(ed25519.NewKeyFromSeed(seed), DeviceKeyClaimTranscript("link:"+fixture.LinkID, pemText, fixture.X25519Public))) ||
 			base64.StdEncoding.EncodeToString(LinkProof(secret, transcript)) != fixture.LinkProof {
 			t.Fatal("mobile interop fixture is stale; rerun with -update-mobile-fixture")
 		}
@@ -117,9 +131,12 @@ func TestMobileInteropFixture(t *testing.T) {
 	fixture := mobileInterop{
 		Ed25519Seed: b64(seed[:]), PublicKeyPEM: pemText, UniqueID: uniqueID, Fingerprint: KeyFingerprint(pemText),
 		Challenge: b64(challenge), Signature: b64(ed25519.Sign(priv, challenge)),
-		LinkID: "link-123", LinkSecret: b64(secret[:]), X25519Public: xPubB64, X25519Secret: b64(xPriv[:]),
+		LoginBinding:   LoginBindingOrigin("https://chat.example"),
+		LoginSignature: b64(ed25519.Sign(priv, interopLoginMessage(LoginBindingOrigin("https://chat.example"), challenge))),
+		LinkID:         "link-123", LinkSecret: b64(secret[:]), X25519Public: xPubB64, X25519Secret: b64(xPriv[:]),
 		LinkProof: b64(LinkProof(secret[:], transcript)), LinkSAS: LinkSAS(secret[:], transcript),
-		Code: "K7QM4XPA", CodeSAS: LinkSAS([]byte("K7QM4XPA"), transcript),
+		ClaimKeySig: b64(ed25519.Sign(priv, DeviceKeyClaimTranscript("link:link-123", pemText, xPubB64))),
+		Code:        "K7QM4XPA", CodeSAS: LinkSAS([]byte("K7QM4XPA"), transcript),
 		ScopeKey: b64(scopeKey[:]), SealedScopeKey: b64(sealedKey), ScopeText: "hello channel ✓", ScopeBlob: b64(scopeBlob),
 		PeerX25519: b64(peerPub[:]), PeerX25519Priv: b64(peerPriv[:]), DMText: "hi from the desktop", DMBlobFromPeer: b64(dmBlob),
 		ApprovalPrinc: "user-uid", ApprovalDevice: "dev-desktop",

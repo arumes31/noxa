@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import nacl from "tweetnacl";
-import {generateIdentity, fromBase64, utf8} from "../src/core/crypto.js";
+import {deviceKeyClaimTranscript, generateIdentity, fromBase64, utf8} from "../src/core/crypto.js";
 import {registerPasskey, linkWithPasskey} from "../src/core/device.js";
 
 test("passkey registration never injects an unrequested PRF extension", async()=>{
@@ -24,12 +24,15 @@ test("passkey registration never injects an unrequested PRF extension", async()=
 
 test("passkey login commits both new device keys before authentication", async () => {
  const requests = [];
- const identity = {edPublic:new Uint8Array(32).fill(1), xPublic:new Uint8Array(32).fill(2)};
+ const identity = generateIdentity();
  const conn = { request:async (_type, request) => { requests.push(request); return {webauthn:{publicKey:{challenge:"AQ"}}}; } };
  await linkWithPasskey(conn, identity, {get:async()=>({toJSON:()=>({type:"public-key"})})});
  assert.equal(requests[0].action,"passkey_login_begin");
  assert.equal(requests[0].ed25519_public_key, requests[1].ed25519_public_key);
  assert.equal(requests[0].x25519_public_key, requests[1].x25519_public_key);
+ // The device proves the key it links by signing this sign-in's challenge.
+ const claim = deviceKeyClaimTranscript("passkey:AQ", requests[1].ed25519_public_key, requests[1].x25519_public_key);
+ assert.ok(nacl.sign.detached.verify(claim, fromBase64(requests[1].signature), identity.edPublic));
 });
 
 

@@ -43,7 +43,7 @@ func keyGuestWithDevice(t *testing.T, addr string, keys linkTestKeys) (net.Conn,
 	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthChallenge), &ch); err != nil {
 		t.Fatal(err)
 	}
-	sig, err := auth.SignChallenge(keys.private, ch.Challenge)
+	sig, err := auth.SignLoginChallenge(keys.private, loginBindingOf(conn), ch.Challenge)
 	if err != nil {
 		t.Fatal(err)
 	}

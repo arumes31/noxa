@@ -2,7 +2,8 @@
 // device-link statement (DeviceLinkBindingTranscript), relayed by the server.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fromBase64, generateIdentity, keyFingerprint, publicKeyPEM, sign, toBase64 } from "../src/core/crypto.js";
+import nacl from "tweetnacl";
+import { deviceKeyClaimTranscript, fromBase64, generateIdentity, keyFingerprint, publicKeyPEM, sign, toBase64 } from "../src/core/crypto.js";
 import { linkBindingFromStatus, linkBindingTranscript, verifyLinkBinding } from "../src/core/link-binding.js";
 import { claimLink, parseLinkFragment, waitForDecision } from "../src/core/device.js";
 
@@ -57,6 +58,18 @@ test("a claim answered for another approver than the scanned QR names is refused
     await assert.rejects(claimLink(conn, generateIdentity(), link), e => e.code === "approver_mismatch");
     const ok = await claimLink(conn, generateIdentity(), { ...link, approver: "1111 1111 1111 1111" });
     assert.equal(ok.approverFingerprint, "1111 1111 1111 1111");
+});
+
+test("a claim is signed with the claimed key, for the scanned link or the typed code", async () => {
+    const sent = [];
+    const conn = { request: async (_type, request) => { sent.push(request); return { action: "link_claim", state: "claimed", link_id: "L" }; } };
+    const identity = generateIdentity();
+    await claimLink(conn, identity, { linkID: "L", secret: new Uint8Array(32) });
+    await claimLink(conn, identity, { code: "k7qm-4xpa" });
+    for (const [request, ref] of [[sent[0], "link:L"], [sent[1], "code:K7QM4XPA"]]) {
+        const transcript = deviceKeyClaimTranscript(ref, request.ed25519_public_key, request.x25519_public_key);
+        assert.ok(nacl.sign.detached.verify(transcript, fromBase64(request.signature), identity.edPublic), ref);
+    }
 });
 
 test("the approved link_status result (with the statement) reaches the caller", async () => {

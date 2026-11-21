@@ -327,6 +327,12 @@ func (s *TCPServer) finishPasskeyLogin(ctx context.Context, client *Client, rp *
 	if _, err := auth.LoadPublicKey(r.Ed25519PublicKey); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid device key")
 	}
+	// The device must hold the key the passkey links: it signs this ceremony's
+	// challenge with it. The assertion alone proves the passkey, not the key.
+	claim := netproto.DeviceKeyClaimTranscript("passkey:"+session.Challenge, r.Ed25519PublicKey, r.X25519PublicKey)
+	if auth.VerifyChallenge(r.Ed25519PublicKey, claim, r.Signature) != nil {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "the device did not prove its key")
+	}
 	ip := remoteIP(client.Conn)
 	sourceScope := auth.LoginFailureScope("passkey:"+auth.SourceAddressKey(ip), "")
 	attempt, allowed := s.loginLimiter.ReserveSignature(sourceScope) // a WebAuthn assertion does no KDF work

@@ -520,28 +520,31 @@ func (m *connManager) connectNamed(addr, nickname, displayName, password, server
 	}, loginSigner(id))
 }
 
-// loginSigner answers a login challenge: domain-separated and fixed-size
-// only, so a server can never obtain a signature over a transcript of its
-// choosing (a device approval or link binding statement).
+// loginSigner answers a login challenge: domain-separated, fixed-size and
+// bound to one server, so a server can never obtain a signature over a
+// transcript of its choosing (a device approval or link binding statement)
+// or one that signs this identity in anywhere else.
 func loginSigner(id *identity) challengeSigner {
-	return func(challenge []byte) ([]byte, string, error) {
-		sig, err := auth.SignLoginChallenge(id.PrivateKey, challenge)
+	return func(serverBinding string, challenge []byte) ([]byte, string, error) {
+		sig, err := auth.SignLoginChallenge(id.PrivateKey, serverBinding, challenge)
 		return sig, id.PublicKey, err
 	}
 }
 
-// errServerLoginOutdated: the server does not advertise the domain-separated
+// errServerLoginOutdated: the server does not advertise the server-bound
 // login scheme, so this client refuses to sign its challenge.
 const errServerLoginOutdated = "this server needs an update: it does not support secure sign-in; ask the administrator to update the server"
 
 // answerChallenge signs a login challenge only under the advertised
-// domain-separated scheme. An older server gets no signature at all (never a
-// raw fallback); the reason is errServerLoginOutdated.
-func answerChallenge(ch netproto.AuthChallenge, signer challengeSigner) ([]byte, string, string) {
-	if ch.Scheme != netproto.AuthChallengeSchemeV1 {
+// server-bound scheme and only for serverBinding, the certificate of this
+// client's own connection (never a value the server sent). Another scheme
+// gets no signature at all (the reason is errServerLoginOutdated), and so
+// does a connection without TLS (auth.ErrNoServerBinding).
+func answerChallenge(ch netproto.AuthChallenge, serverBinding string, signer challengeSigner) ([]byte, string, string) {
+	if ch.Scheme != netproto.AuthChallengeSchemeV2 {
 		return nil, "", errServerLoginOutdated
 	}
-	sig, pub, err := signer(ch.Challenge)
+	sig, pub, err := signer(serverBinding, ch.Challenge)
 	if err != nil {
 		return nil, "", err.Error()
 	}
@@ -549,10 +552,11 @@ func answerChallenge(ch netproto.AuthChallenge, signer challengeSigner) ([]byte,
 }
 
 // loginReasonTerminal reports login refusals that retrying cannot fix: an
-// outdated server, or a challenge this client refuses to sign (a malicious
-// or broken server must not keep the desktop retrying).
+// outdated server, a connection without TLS, or a challenge this client
+// refuses to sign (a malicious or broken server must not keep the desktop
+// retrying).
 func loginReasonTerminal(reason string) bool {
-	return reason == errServerLoginOutdated || reason == auth.ErrUnsafeChallenge.Error()
+	return reason == errServerLoginOutdated || reason == auth.ErrUnsafeChallenge.Error() || reason == auth.ErrNoServerBinding.Error()
 }
 
 // loginReasonRetryable reports refusals that a later attempt can overcome:
@@ -577,9 +581,10 @@ func solvePowChallenge(ch netproto.PowChallenge) (uint64, bool) {
 	return netproto.SolvePow(ctx, ch)
 }
 
-// challengeSigner signs a server challenge and returns the signature and
-// the public key to present in AuthSignature.
-type challengeSigner func(challenge []byte) (signature []byte, publicKey string, err error)
+// challengeSigner signs a server challenge for the server named by
+// serverBinding and returns the signature and the public key to present in
+// AuthSignature.
+type challengeSigner func(serverBinding string, challenge []byte) (signature []byte, publicKey string, err error)
 
 // connectWith dials and authenticates using the given Authenticate message.
 // When the server replies with a challenge and signer is non-nil, the
@@ -596,7 +601,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.mu.Unlock()
 	authMsg.AuthorizationModels = []string{netproto.AuthorizationModelRolesV1}
 	authMsg.ClientVersion = version.Short()
-	authMsg.ClientFeatures = []string{netproto.ClientFeaturePow, netproto.ClientFeatureRetryHint, netproto.ClientFeatureGoodbye, netproto.ClientFeatureResume, netproto.ClientFeatureBusy}
+	authMsg.ClientFeatures = []string{netproto.ClientFeaturePow, netproto.ClientFeatureRetryHint, netproto.ClientFeatureGoodbye, netproto.ClientFeatureResume, netproto.ClientFeatureBusy, netproto.ClientFeatureBoundLogin}
 	if heartbeat { // the server only watches a heartbeat that runs
 		authMsg.ClientFeatures = append(authMsg.ClientFeatures, netproto.ClientFeatureFastHeartbeat)
 	}
@@ -615,11 +620,18 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 		return err.Error()
 	}
 
+	// A login proof names the server it is for: the certificate this client
+	// saw on the connection it just opened and checked against its pin. A
+	// plaintext connection has none, so no proof is made on it.
+	_, fingerprint, _ := m.securitySnapshot()
+	serverBinding, _ := ratchetBindingFor(fingerprint, "")
+
 	// A password login proves its identity key: a password-less probe on this
 	// connection fetches a challenge, which the password login then signs.
-	// Servers only bind (and sign with) a proven key; older servers ignore the
-	// proof field, and a probe answered without a challenge is the answer.
-	proving := authMsg.Password != "" && authMsg.PublicKey != "" && signer != nil
+	// Servers only bind (and sign with) a proven key, and a probe answered
+	// without a challenge is the answer. Without TLS there is nothing to
+	// sign, so the password login goes out directly and the key stays unproven.
+	proving := authMsg.Password != "" && authMsg.PublicKey != "" && signer != nil && serverBinding != ""
 	pending := authMsg
 	if proving {
 		pending.Password, pending.PublicKey, pending.ResumeToken, pending.Handover = "", "", "", false
@@ -681,7 +693,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 			}
 			// A challenge this client will not sign leaves the login unproven,
 			// as before; the password still decides.
-			if sig, _, reason := answerChallenge(ch, signer); reason == "" {
+			if sig, _, reason := answerChallenge(ch, serverBinding, signer); reason == "" {
 				authMsg.PublicKeyProof = sig
 			}
 			pending = authMsg
@@ -701,7 +713,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 				_ = conn.Close()
 				return err.Error()
 			}
-			sig, pub, reason := answerChallenge(ch, signer)
+			sig, pub, reason := answerChallenge(ch, serverBinding, signer)
 			if reason != "" {
 				_ = conn.Close()
 				if loginReasonTerminal(reason) {
@@ -724,6 +736,17 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 		if err := netproto.Decode(f, &resp); err != nil {
 			_ = conn.Close()
 			return err.Error()
+		}
+		if proving && !resp.OK && resp.Reason == netproto.ReasonNoServerBinding {
+			// TLS ends at a proxy: the server has nothing to bind a proof to.
+			// The password still decides; the key stays unproven.
+			proving = false
+			pending = authMsg
+			if err := m.writeConn(conn, netproto.MsgAuthenticate, pending); err != nil {
+				_ = conn.Close()
+				return err.Error()
+			}
+			continue
 		}
 		if resp.OK && resp.Standby && handoverBegin != nil && !committed {
 			// Standby: the old process keeps the session until this commit.

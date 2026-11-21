@@ -25,6 +25,7 @@ func TestWebGuestAdmission(t *testing.T) {
 				s.mu.RLock()
 				for _, c := range s.clients {
 					c.webTransport.Store(true)
+					c.webOrigin = passkeyTestOrigin
 				}
 				s.mu.RUnlock()
 				response := keyLoginOn(t, peer, newLinkTestKeys(t))

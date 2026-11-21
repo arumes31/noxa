@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"noxa/internal/auth"
+	"noxa/internal/e2ee/olmdir"
 	"noxa/internal/netproto"
 )
 
@@ -52,6 +53,30 @@ type webTransportConn interface {
 }
 
 func (c *Client) isWebTransport() bool { return c.webTransport.Load() }
+
+// webOriginConn is a web app connection that knows the Origin its WebSocket
+// handshake carried (already checked against the allowed origins).
+type webOriginConn interface {
+	WebOrigin() string
+}
+
+// loginBinding is the server identity a login proof on this connection must
+// name: the control-channel certificate for a native client, the handshake
+// origin for the web app (a browser cannot see the certificate, and a proxy
+// may terminate TLS). Empty means no key login is possible: TLS is off.
+func (s *TCPServer) loginBinding(client *Client) string {
+	if client.isWebTransport() {
+		if client.webOrigin == "" {
+			return ""
+		}
+		return netproto.LoginBindingOrigin(client.webOrigin)
+	}
+	binding, err := olmdir.ServerBinding(s.TLSFingerprint())
+	if err != nil {
+		return ""
+	}
+	return binding
+}
 
 // WebGuestLoginPolicy exposes only public admission flags to the PWA. The
 // dispatcher still enforces guest permission and the server password at login.

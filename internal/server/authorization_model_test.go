@@ -34,7 +34,7 @@ func TestRoleLoginRequiresCompatibleAuthorizationModel(t *testing.T) {
 				case "guest":
 					request["anonymous"], request["nickname"] = true, "Guest"
 				case "challenge":
-					request["username"] = "admin-uid"
+					request["username"], request["client_features"] = "admin-uid", []string{netproto.ClientFeatureBoundLogin}
 				}
 				send(t, conn, netproto.MsgAuthenticate, request)
 				frame := readFrame(t, conn)
@@ -105,7 +105,7 @@ func TestAuthorizationModelBindsChallengeAndRejectsDowngrade(t *testing.T) {
 				if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthChallenge), &challenge); err != nil {
 					t.Fatal(err)
 				}
-				signature, err := auth.SignLoginChallenge(private, challenge.Challenge) // updated clients: domain-separated
+				signature, err := auth.SignLoginChallenge(private, loginBindingOf(conn), challenge.Challenge)
 				if err != nil {
 					t.Fatal(err)
 				}

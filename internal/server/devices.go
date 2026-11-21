@@ -740,6 +740,15 @@ func (s *TCPServer) handleLinkClaim(ctx context.Context, client *Client, r netpr
 	if !validDeviceX25519(r.X25519PublicKey) {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid encryption key")
 	}
+	// The claimer must hold the key it asks to have linked. Checked from the
+	// request alone, before any link lookup, so it reveals nothing about links.
+	ref := "link:" + r.LinkID
+	if r.Code != "" {
+		ref = "code:" + NormalizeLinkCode(r.Code)
+	}
+	if auth.VerifyChallenge(r.Ed25519PublicKey, netproto.DeviceKeyClaimTranscript(ref, r.Ed25519PublicKey, r.X25519PublicKey), r.Signature) != nil {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "the device did not prove its key")
+	}
 	if _, err := s.deps.Devices.DeviceByKey(ctx, r.Ed25519PublicKey); err == nil {
 		return unavailable()
 	} else if !errors.Is(err, store.ErrDeviceNotFound) {

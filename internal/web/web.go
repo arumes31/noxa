@@ -311,7 +311,7 @@ func (s *Server) serveWebSocket(w http.ResponseWriter, r *http.Request, target C
 		Handler: func(conn *websocket.Conn) {
 			conn.PayloadType = websocket.BinaryFrame
 			conn.MaxPayloadBytes = netproto.MaxFrameSize + frameHeaderSize
-			err := target.ServeExternalConn(r.Context(), &wsConn{Conn: conn, remote: remote})
+			err := target.ServeExternalConn(r.Context(), &wsConn{Conn: conn, remote: remote, origin: r.Header.Get("Origin")})
 			if err != nil {
 				s.logger.Debug("web connection rejected", zap.String("path", r.URL.Path), zap.Error(err))
 			}
@@ -428,12 +428,17 @@ func securityHeaders(next http.Handler) http.Handler {
 type wsConn struct {
 	*websocket.Conn
 	remote net.Addr
+	origin string
 }
 
 func (c *wsConn) RemoteAddr() net.Addr { return c.remote }
 
 // WebTransport marks the session as a mobile web app connection.
 func (c *wsConn) WebTransport() bool { return true }
+
+// WebOrigin is the allowed Origin of the handshake: what a login proof from
+// this page is bound to.
+func (c *wsConn) WebOrigin() string { return c.origin }
 
 // admission bounds WebSocket attempts per minute and open sessions per IP.
 type admission struct {

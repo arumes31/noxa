@@ -126,6 +126,7 @@ type Client struct {
 	deviceID         string                                      // linked device of this session, if registered
 	deviceIndex      *deviceSessionIndex                         // set by register; keeps the device -> sessions index current
 	webTransport     atomic.Bool                                 // connected through the mobile web app
+	webOrigin        string                                      // its handshake Origin; set before the session starts
 	closeCause       atomic.Pointer[netproto.ControlCloseReason] // first server-side close cause
 	resyncPending    atomic.Bool                                 // a resync snapshot is queued (role_delivery.go)
 	readClose        atomic.Pointer[netproto.ControlCloseReason] // why the read loop ended
@@ -1040,6 +1041,9 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 		gone:       make(chan struct{}),
 	}
 	client.webTransport.Store(web)
+	if origin, ok := conn.(webOriginConn); ok {
+		client.webOrigin = origin.WebOrigin()
+	}
 	client.noteReadWait()
 	reader := activityReader{conn: conn, client: client}
 	var closeReason netproto.ControlCloseReason

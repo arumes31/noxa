@@ -262,10 +262,10 @@ func namedKeyLoginOn(t *testing.T, conn net.Conn, keys linkTestKeys, nickname st
 	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthChallenge), &challenge); err != nil {
 		t.Fatal(err)
 	}
-	if challenge.Scheme != netproto.AuthChallengeSchemeV1 {
+	if challenge.Scheme != netproto.AuthChallengeSchemeV2 {
 		t.Fatalf("new servers advertise the login scheme: %+v", challenge)
 	}
-	signature, err := auth.SignLoginChallenge(keys.private, challenge.Challenge)
+	signature, err := auth.SignLoginChallenge(keys.private, loginBindingOf(conn), challenge.Challenge)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,9 +310,68 @@ func linkSecret(t *testing.T, result netproto.DeviceResult) (id string, secret [
 
 func claimRequest(linkID string, secret []byte, phone linkTestKeys) netproto.DeviceRequest {
 	transcript := netproto.LinkClaimTranscript(linkID, phone.public, phone.x25519)
-	return netproto.DeviceRequest{
+	return signedClaim(netproto.DeviceRequest{
 		Action: netproto.DeviceActionLinkClaim, LinkID: linkID, Proof: netproto.LinkProof(secret, transcript),
 		Ed25519PublicKey: phone.public, X25519PublicKey: phone.x25519, Platform: "iPhone · Safari",
+	}, phone.private)
+}
+
+// signedClaim adds the claiming device's proof that it holds the claimed key.
+func signedClaim(r netproto.DeviceRequest, private string) netproto.DeviceRequest {
+	ref := "link:" + r.LinkID
+	if r.Code != "" {
+		ref = "code:" + NormalizeLinkCode(r.Code)
+	}
+	r.Signature, _ = auth.SignChallenge(private, netproto.DeviceKeyClaimTranscript(ref, r.Ed25519PublicKey, r.X25519PublicKey))
+	return r
+}
+
+// A key is linked only when the claim is signed with it: a claim naming
+// someone else's public key is refused and that key keeps signing in as itself.
+func TestDeviceLinkClaimNeedsProofOfTheClaimedKey(t *testing.T) {
+	env, devices := startDeviceTestEnv(t)
+	owner, other := newLinkTestKeys(t), newLinkTestKeys(t)
+	desktop := desktopLogin(t, env.addr, owner)
+	defer func() { _ = desktop.Close() }()
+	created := deviceCall(t, desktop, netproto.DeviceRequest{Action: netproto.DeviceActionLinkCreate})
+	linkID, secret := linkSecret(t, created)
+
+	pre := dialRetry(t, env.addr)
+	defer func() { _ = pre.Close() }()
+	unsigned := claimRequest(linkID, secret, other)
+	unsigned.Signature = nil
+	if e := deviceCallError(t, pre, unsigned); e.Message == "" {
+		t.Fatalf("unsigned claim = %+v", e)
+	}
+	// Signed by another key, for another link, or as a code claim: all refused.
+	wrongKey := signedClaim(unsigned, owner.private)
+	wrongLink := unsigned
+	wrongLink.Signature, _ = auth.SignChallenge(other.private, netproto.DeviceKeyClaimTranscript("link:other", other.public, other.x25519))
+	wrongKind := unsigned
+	wrongKind.Signature, _ = auth.SignChallenge(other.private, netproto.DeviceKeyClaimTranscript("code:"+linkID, other.public, other.x25519))
+	for name, request := range map[string]netproto.DeviceRequest{"another key": wrongKey, "another link": wrongLink, "another kind": wrongKind} {
+		if e := deviceCallError(t, pre, request); !strings.Contains(e.Message, "did not prove its key") {
+			t.Fatalf("claim signed for %s = %+v", name, e)
+		}
+	}
+	code := netproto.DeviceRequest{Action: netproto.DeviceActionLinkClaim, Code: created.Code, Ed25519PublicKey: other.public, X25519PublicKey: other.x25519}
+	if e := deviceCallError(t, pre, code); e.Message == "" {
+		t.Fatalf("unsigned code claim = %+v", e)
+	}
+	if e := deviceCallError(t, pre, signedClaim(code, owner.private)); !strings.Contains(e.Message, "did not prove its key") {
+		t.Fatalf("code claim signed by another key = %+v", e)
+	}
+	if _, err := devices.DeviceByKey(t.Context(), other.public); !errors.Is(err, store.ErrDeviceNotFound) {
+		t.Fatalf("refused claims stored a device: %v", err)
+	}
+	conn, resp := keyLogin(t, env.addr, other)
+	_ = conn.Close()
+	if !resp.OK || resp.UniqueID != other.uniqueID {
+		t.Fatalf("the key no longer signs in as itself: %+v", resp)
+	}
+	// The link is untouched and the key's holder can still claim it.
+	if claimed := deviceCall(t, pre, claimRequest(linkID, secret, other)); claimed.State != netproto.LinkStateClaimed {
+		t.Fatalf("signed claim = %+v", claimed)
 	}
 }
 
@@ -407,9 +466,9 @@ func TestDeviceLinkCodeClaimAndDenial(t *testing.T) {
 	phoneConn := dialRetry(t, env.addr)
 	defer func() { _ = phoneConn.Close() }()
 	typed := strings.ToLower(strings.ReplaceAll(created.Code, "-", " "))
-	claimed := deviceCall(t, phoneConn, netproto.DeviceRequest{
+	claimed := deviceCall(t, phoneConn, signedClaim(netproto.DeviceRequest{
 		Action: netproto.DeviceActionLinkClaim, Code: typed, Ed25519PublicKey: phone.public, X25519PublicKey: phone.x25519,
-	})
+	}, phone.private))
 	if claimed.State != netproto.LinkStateClaimed || claimed.LinkID != created.LinkID {
 		t.Fatalf("code claim = %+v", claimed)
 	}
@@ -453,12 +512,12 @@ func TestDeviceLinkRejectsWrongProofsAndCodes(t *testing.T) {
 	// Wrong codes are limited per IP.
 	phone := newLinkTestKeys(t)
 	for i := 0; i < 5; i++ {
-		out := deviceCall(t, conn, netproto.DeviceRequest{Action: netproto.DeviceActionLinkClaim, Code: "ZZZZ-ZZZZ", Ed25519PublicKey: phone.public, X25519PublicKey: phone.x25519})
+		out := deviceCall(t, conn, signedClaim(netproto.DeviceRequest{Action: netproto.DeviceActionLinkClaim, Code: "ZZZZ-ZZZZ", Ed25519PublicKey: phone.public, X25519PublicKey: phone.x25519}, phone.private))
 		if out.State != netproto.LinkStateExpired {
 			t.Fatalf("wrong code %d = %+v", i, out)
 		}
 	}
-	e := deviceCallError(t, conn, netproto.DeviceRequest{Action: netproto.DeviceActionLinkClaim, Code: "ZZZZ-ZZZZ", Ed25519PublicKey: phone.public, X25519PublicKey: phone.x25519})
+	e := deviceCallError(t, conn, signedClaim(netproto.DeviceRequest{Action: netproto.DeviceActionLinkClaim, Code: "ZZZZ-ZZZZ", Ed25519PublicKey: phone.public, X25519PublicKey: phone.x25519}, phone.private))
 	if !strings.Contains(e.Message, "too many wrong codes") {
 		t.Fatalf("code limiter error = %+v", e)
 	}
@@ -795,7 +854,7 @@ func sendProvenPasswordAuth(t *testing.T, conn net.Conn, msg netproto.Authentica
 	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthChallenge), &challenge); err != nil {
 		t.Fatal(err)
 	}
-	proof, err := auth.SignLoginChallenge(private, challenge.Challenge)
+	proof, err := auth.SignLoginChallenge(private, loginBindingOf(conn), challenge.Challenge)
 	if err != nil {
 		t.Fatal(err)
 	}

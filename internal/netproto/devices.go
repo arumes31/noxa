@@ -217,7 +217,9 @@ type DeviceRequest struct {
 	// Signature is the approving device's Ed25519 signature over
 	// DeviceApprovalTranscript, or for a revoke the revoking device's
 	// signature over DeviceRevocationTranscript (optional; older clients
-	// revoke without one).
+	// revoke without one). For link_claim and passkey_login_finish it is the
+	// claiming device's own signature over DeviceKeyClaimTranscript, proving
+	// it holds the key it asks to have linked.
 	Signature []byte `json:"signature,omitempty"`
 	// RevokedAt is the signing time (unix seconds) in a signed revoke.
 	RevokedAt int64 `json:"revoked_at,omitempty"`
@@ -283,7 +285,7 @@ func (r DeviceRequest) Valid() bool {
 	case DeviceActionPasskeyRegisterFinish:
 		return len(r.WebAuthn) > 0
 	case DeviceActionPasskeyLoginFinish:
-		return len(r.WebAuthn) > 0 && r.Ed25519PublicKey != "" && r.X25519PublicKey != ""
+		return len(r.WebAuthn) > 0 && r.Ed25519PublicKey != "" && r.X25519PublicKey != "" && len(r.Signature) == 64
 	case DeviceActionPasskeyDelete:
 		return r.PasskeyID != ""
 	case DeviceActionSignOut:
@@ -308,7 +310,7 @@ func (r DeviceRequest) Valid() bool {
 	case DeviceActionLinkClaim:
 		hasQR := r.LinkID != "" && len(r.Proof) > 0 && r.Code == ""
 		hasCode := r.Code != "" && r.LinkID == "" && len(r.Proof) == 0
-		return (hasQR || hasCode) && r.Ed25519PublicKey != "" && r.X25519PublicKey != ""
+		return (hasQR || hasCode) && r.Ed25519PublicKey != "" && r.X25519PublicKey != "" && len(r.Signature) == 64
 	case DeviceActionLinkStatus:
 		return r.LinkID != "" && r.Ed25519PublicKey != ""
 	}
@@ -416,6 +418,14 @@ func KeyFingerprint(publicKey string) string {
 // secret (QR) or the hidden code (typed).
 func LinkClaimTranscript(linkID, ed25519Public, x25519Public string) []byte {
 	return []byte("noxa-device-link-claim-v1\n" + linkID + "\n" + ed25519Public + "\n" + x25519Public)
+}
+
+// DeviceKeyClaimTranscript is what a device signs with the Ed25519 key it asks
+// to have linked, so a key is only ever linked by its holder. ref names the
+// claim: "link:" + link ID (QR), "code:" + normalized code (typed) or
+// "passkey:" + the WebAuthn challenge of the sign-in (base64url).
+func DeviceKeyClaimTranscript(ref, ed25519Public, x25519Public string) []byte {
+	return []byte("noxa-device-key-claim-v1\n" + ref + "\n" + ed25519Public + "\n" + x25519Public)
 }
 
 // DeviceApprovalTranscript is the message the approving device signs. The

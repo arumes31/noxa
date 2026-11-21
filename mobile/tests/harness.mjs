@@ -199,7 +199,10 @@ export { sign, publicKeyPEM, uniqueIDFromPublicKey };
 export async function guestSession(controlAddr, { version = "0.0.0", nickname = "Guest" } = {}) {
     const { signIn } = await import("../src/core/device.js");
     const identity = generateIdentity();
-    const conn = await Connection.open("unused", function Adapter() { return new TLSSocketAdapter(controlAddr); });
-    const auth = await signIn(conn, identity, { version, nickname });
+    let adapter;
+    const conn = await Connection.open("unused", function Adapter() { return adapter = new TLSSocketAdapter(controlAddr); });
+    // Like the desktop: the login proof names the certificate of this connection.
+    const serverBinding = `tls-sha256:${adapter.socket.getPeerCertificate().fingerprint256.replaceAll(":", "").toLowerCase()}`;
+    const auth = await signIn(conn, identity, { version, nickname, serverBinding });
     return { conn, identity, auth, uniqueID: auth.unique_id };
 }

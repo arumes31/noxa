@@ -79,18 +79,18 @@ func TestIdentityChallengeCredentialPaths(t *testing.T) {
 				}()
 			}
 			calls := 0
-			svc.verifyChallenge = func(key string, gotChallenge, gotSignature []byte) error {
+			svc.verifyChallenge = func(key, binding string, gotChallenge, gotSignature []byte) error {
 				calls++
 				expectedKey := public
 				if tc.wantDummy {
 					expectedKey = dummyChallengePublicKey
 				}
-				if key != expectedKey || !bytes.Equal(gotChallenge, tc.challenge) || !bytes.Equal(gotSignature, tc.signature) {
+				if key != expectedKey || binding != testServerBinding || !bytes.Equal(gotChallenge, tc.challenge) || !bytes.Equal(gotSignature, tc.signature) {
 					t.Fatal("verification used different key or input")
 				}
 				return VerifyChallenge(key, gotChallenge, gotSignature)
 			}
-			key, ok, err := svc.AuthenticateIdentityChallenge(t.Context(), uid, tc.challenge, tc.signature)
+			key, ok, err := svc.AuthenticateIdentityChallenge(t.Context(), uid, testServerBinding, tc.challenge, tc.signature)
 			if (tc.missing && !errors.Is(err, ErrUserNotFound)) || (!tc.missing && err != nil) {
 				t.Fatalf("error=%v missing=%v", err, tc.missing)
 			}
@@ -105,8 +105,11 @@ func TestIdentityChallengeCredentialPaths(t *testing.T) {
 	t.Run("database failure", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		svc.verifyChallenge = func(string, []byte, []byte) error { t.Fatal("verifier called after database failure"); return nil }
-		key, ok, err := svc.AuthenticateIdentityChallenge(ctx, "anything", challenge, signature)
+		svc.verifyChallenge = func(string, string, []byte, []byte) error {
+			t.Fatal("verifier called after database failure")
+			return nil
+		}
+		key, ok, err := svc.AuthenticateIdentityChallenge(ctx, "anything", testServerBinding, challenge, signature)
 		if key != "" || ok || !errors.Is(err, context.Canceled) {
 			t.Fatalf("key=%q ok=%v err=%v", key, ok, err)
 		}
