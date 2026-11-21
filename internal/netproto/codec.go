@@ -496,7 +496,7 @@ type Authenticate struct {
 	Anonymous bool   `json:"anonymous,omitempty"`
 	PublicKey string `json:"public_key,omitempty"`
 	// PublicKeyProof proves PublicKey on a password login: the login signature
-	// (AuthChallengeSchemeV1) over the AuthChallenge this connection received
+	// (AuthChallengeSchemeV2) over the AuthChallenge this connection received
 	// for an earlier password-less Authenticate. Without it the key is neither
 	// bound nor used as the session's signing key.
 	PublicKeyProof []byte `json:"public_key_proof,omitempty"`
@@ -594,15 +594,27 @@ type ICEServer struct {
 // private key and reply with an AuthSignature.
 type AuthChallenge struct {
 	Challenge []byte `json:"challenge"`
-	// Scheme advertises how the challenge must be signed. Servers that verify
-	// the domain-separated login signature set AuthChallengeSchemeV1; updated
-	// clients sign only then and refuse older servers (never raw signing).
+	// Scheme advertises how the challenge must be signed: always
+	// AuthChallengeSchemeV2. Clients sign only that scheme and refuse a
+	// server that offers another (never raw signing).
 	Scheme string `json:"scheme,omitempty"`
 }
 
-// AuthChallengeSchemeV1: sign "noxa-auth-challenge-v1\n" || challenge
-// (auth.SignLoginChallenge).
-const AuthChallengeSchemeV1 = "noxa-auth-challenge-v1"
+// AuthChallengeSchemeV2: sign "noxa-auth-challenge-v2\n" || server binding ||
+// "\n" || challenge (auth.SignLoginChallenge). The binding is the server
+// identity as the client observed it and is not carried in any message: the
+// pinned control-channel certificate, or the page origin for the web app
+// (LoginBindingOrigin). The server verifies against its own. It is the only
+// accepted scheme.
+const AuthChallengeSchemeV2 = "noxa-auth-challenge-v2"
+
+// ClientFeatureBoundLogin: the client signs AuthChallengeSchemeV2. A client
+// that does not announce it is refused before a challenge is issued.
+const ClientFeatureBoundLogin = "login-bound-v2"
+
+// LoginBindingOrigin is the login server binding of a web app session: the
+// origin of the page that opened the connection.
+func LoginBindingOrigin(origin string) string { return "origin:" + origin }
 
 // AuthSignature is the client's reply to an AuthChallenge, completing the
 // challenge-response handshake. PublicKey (PEM) is optional: registered

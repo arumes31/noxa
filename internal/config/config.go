@@ -930,7 +930,7 @@ func (c *Config) Warnings() []string {
 		warnings = append(warnings, "server_password is empty in production (allow_anonymous=true); any client, including anonymous guests, may join and receive TURN credentials")
 	}
 	if !c.TLSEnabled {
-		warnings = append(warnings, "tls_enabled=false exposes the control protocol in plaintext")
+		warnings = append(warnings, "tls_enabled=false exposes the control protocol in plaintext and leaves desktops unable to sign in with an identity key")
 	}
 	if !c.FileTLSEnabled || !c.TLSEnabled {
 		warnings = append(warnings, "file transfers are plaintext because file TLS is not fully enabled")

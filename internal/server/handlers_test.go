@@ -4,7 +4,9 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -59,6 +62,7 @@ type fakeAuth struct {
 	bans           map[string]*auth.Ban  // uniqueID or IP -> active ban
 	identifierAuth func(identifier, password string) (*auth.User, error)
 	challengeAuth  func(uniqueID string, challenge, signature []byte) (bool, error)
+	loginBinding   string // the server binding of the last challenge login
 	getE2EKeyFn    func(context.Context, string) (string, error)
 
 	mu       sync.Mutex
@@ -87,7 +91,8 @@ func (f *fakeAuth) AuthenticateIdentifier(_ context.Context, identifier, passwor
 	return u, nil
 }
 
-func (f *fakeAuth) AuthenticateIdentityChallenge(_ context.Context, uid string, challenge, signature []byte) (string, bool, error) {
+func (f *fakeAuth) AuthenticateIdentityChallenge(_ context.Context, uid, binding string, challenge, signature []byte) (string, bool, error) {
+	f.loginBinding = binding
 	if f.challengeAuth != nil {
 		ok, err := f.challengeAuth(uid, challenge, signature)
 		if !ok || err != nil {
@@ -99,7 +104,7 @@ func (f *fakeAuth) AuthenticateIdentityChallenge(_ context.Context, uid string, 
 	if !ok {
 		return "", false, auth.ErrUserNotFound
 	}
-	if err := auth.VerifyLoginChallenge(pub, challenge, signature); err != nil { // mirrors AuthService
+	if err := auth.VerifyLoginChallenge(pub, binding, challenge, signature); err != nil { // mirrors AuthService
 		return "", false, nil
 	}
 	return pub, true, nil
@@ -1040,11 +1045,35 @@ func dialRetry(t *testing.T, addr string) net.Conn {
 func send(t *testing.T, conn net.Conn, mt netproto.MessageType, msg any) {
 	t.Helper()
 	if mt == netproto.MsgAuthenticate {
-		if request, ok := msg.(netproto.Authenticate); ok && len(request.AuthorizationModels) == 0 {
-			request.AuthorizationModels = []string{netproto.AuthorizationModelRolesV1}
+		if request, ok := msg.(netproto.Authenticate); ok {
+			if len(request.AuthorizationModels) == 0 {
+				request.AuthorizationModels = []string{netproto.AuthorizationModelRolesV1}
+			}
+			// Like every current client; sendFrame writes a request as given.
+			if !slices.Contains(request.ClientFeatures, netproto.ClientFeatureBoundLogin) {
+				request.ClientFeatures = append(slices.Clone(request.ClientFeatures), netproto.ClientFeatureBoundLogin)
+			}
 			msg = request
 		}
 	}
+	sendFrame(t, conn, mt, msg)
+}
+
+// loginBindingOf is the server binding a login proof on conn names, taken
+// like a client takes it: from the certificate of its own TLS connection, or
+// (the web app, here every connection without TLS) from its page origin.
+func loginBindingOf(conn net.Conn) string {
+	secured, ok := conn.(*tls.Conn)
+	if !ok || len(secured.ConnectionState().PeerCertificates) == 0 {
+		return netproto.LoginBindingOrigin(passkeyTestOrigin)
+	}
+	sum := sha256.Sum256(secured.ConnectionState().PeerCertificates[0].Raw)
+	return "tls-sha256:" + hex.EncodeToString(sum[:])
+}
+
+// sendFrame writes msg exactly as given.
+func sendFrame(t *testing.T, conn net.Conn, mt netproto.MessageType, msg any) {
+	t.Helper()
 	f, err := netproto.Encode(mt, msg)
 	if err != nil {
 		t.Fatalf("encode %s: %v", mt, err)
@@ -1587,7 +1616,7 @@ func TestGuestSignatureDoesNotClearAccountSourceFailures(t *testing.T) {
 	if err := netproto.Decode(challengeFrame, &challenge); err != nil {
 		t.Fatalf("decode guest challenge: %v", err)
 	}
-	signature, err := auth.SignChallenge(privateKey, challenge.Challenge)
+	signature, err := auth.SignLoginChallenge(privateKey, loginBindingOf(guest), challenge.Challenge)
 	if err != nil {
 		t.Fatalf("sign guest challenge: %v", err)
 	}
@@ -2013,7 +2042,7 @@ func TestChallengeAuthHandshake(t *testing.T) {
 	}
 
 	// Round 2: sign the challenge and reply.
-	sig, err := auth.SignChallenge(privPEM, ch.Challenge)
+	sig, err := auth.SignLoginChallenge(privPEM, loginBindingOf(conn), ch.Challenge)
 	if err != nil {
 		t.Fatalf("SignChallenge: %v", err)
 	}
@@ -2402,7 +2431,7 @@ func TestPasswordLockoutDoesNotBlockKeyLogin(t *testing.T) {
 	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthChallenge), &ch); err != nil {
 		t.Fatalf("decode auth challenge: %v", err)
 	}
-	sig, err := auth.SignChallenge(privPEM, ch.Challenge)
+	sig, err := auth.SignLoginChallenge(privPEM, loginBindingOf(conn), ch.Challenge)
 	if err != nil {
 		t.Fatalf("SignChallenge: %v", err)
 	}

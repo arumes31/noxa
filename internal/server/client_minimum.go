@@ -1,6 +1,8 @@
 package server
 
 import (
+	"fmt"
+
 	"noxa/internal/netproto"
 	"noxa/internal/version"
 )
@@ -35,6 +37,15 @@ func (s *TCPServer) announceClientVersions(resp *netproto.AuthResponse) {
 	configured := s.cfg.ClientRecommendedVersion
 	s.configMu.RUnlock()
 	resp.ClientRecommendedVersion, _ = version.ClientRecommended(configured, version.Short())
+}
+
+// boundLoginRejection refuses a client that cannot produce the server-bound
+// login proof, in the wording clients already turn into their update prompt.
+func boundLoginRejection(clientVersion string) string {
+	if clientVersion == "" {
+		clientVersion = "unknown"
+	}
+	return fmt.Sprintf("client version rejected: installed %s; required >=%s; update noXa to connect", clientVersion, version.Short())
 }
 
 func (s *TCPServer) rejectClientVersion(client *Client, reason string) error {

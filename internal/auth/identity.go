@@ -110,42 +110,54 @@ const LoginChallengeSize = 32
 // delegations, Olm bundles and resets all carry their own "noxa-…" domain or
 // a length-prefixed format), so a server can never turn a login into a
 // signature over a transcript of its choosing.
-const LoginChallengeDomain = "noxa-auth-challenge-v1\n"
+const LoginChallengeDomain = "noxa-auth-challenge-v2\n"
 
 // ErrUnsafeChallenge: a challenge an updated client refuses to sign.
 var ErrUnsafeChallenge = errors.New("the server sent an invalid login challenge; refusing to sign it")
 
-// LoginChallengeMessage is what a login signature covers.
-func LoginChallengeMessage(challenge []byte) []byte {
-	return append([]byte(LoginChallengeDomain), challenge...)
+// ErrNoServerBinding: there is no server identity to bind a login proof to
+// (the control connection has no TLS), so none is signed or accepted.
+var ErrNoServerBinding = errors.New("signing in with an identity key needs a TLS connection to the server")
+
+// LoginChallengeMessage is what a login signature covers:
+// LoginChallengeDomain || serverBinding || "\n" || challenge. serverBinding
+// names the server the proof is for, as the signer itself observed it: the
+// pinned control-channel certificate ("tls-sha256:<hex>") or, for the web
+// app, the page origin ("origin:https://host"). It is never a value taken
+// from the challenge, so a proof made for one server verifies at no other.
+func LoginChallengeMessage(serverBinding string, challenge []byte) []byte {
+	m := append([]byte(LoginChallengeDomain), serverBinding...)
+	return append(append(m, '\n'), challenge...)
 }
 
-// SignLoginChallenge signs a server login challenge. It refuses anything but
-// exactly LoginChallengeSize bytes that do not start with "noxa-", and it
-// never signs the raw bytes: only LoginChallengeDomain || challenge.
-func SignLoginChallenge(privateKeyPEM string, challenge []byte) ([]byte, error) {
+func validServerBinding(serverBinding string) bool {
+	return serverBinding != "" && len(serverBinding) <= 512 && !strings.ContainsAny(serverBinding, "\r\n")
+}
+
+// SignLoginChallenge signs a server login challenge for the server named by
+// serverBinding. It refuses a missing binding, and anything but exactly
+// LoginChallengeSize challenge bytes that do not start with "noxa-"; it never
+// signs the raw bytes.
+func SignLoginChallenge(privateKeyPEM, serverBinding string, challenge []byte) ([]byte, error) {
+	if !validServerBinding(serverBinding) {
+		return nil, ErrNoServerBinding
+	}
 	if len(challenge) != LoginChallengeSize || strings.HasPrefix(string(challenge), "noxa-") {
 		return nil, ErrUnsafeChallenge
 	}
-	return SignChallenge(privateKeyPEM, LoginChallengeMessage(challenge))
+	return SignChallenge(privateKeyPEM, LoginChallengeMessage(serverBinding, challenge))
 }
 
-// VerifyLoginChallenge accepts the domain-separated login signature and, for
-// clients released before it, the legacy raw signature over the challenge.
-// (Accepting the legacy form does not let anyone obtain signatures; only
-// signing raw server bytes did, and updated clients never do.)
-func VerifyLoginChallenge(publicKeyPEM string, challenge, signature []byte) error {
+// VerifyLoginChallenge accepts only a login signature bound to serverBinding,
+// the verifying server's own identity. A server without one accepts none.
+func VerifyLoginChallenge(publicKeyPEM, serverBinding string, challenge, signature []byte) error {
+	if !validServerBinding(serverBinding) {
+		return ErrNoServerBinding
+	}
 	if len(challenge) == 0 {
 		return errors.New("challenge must not be empty")
 	}
-	err := VerifyChallenge(publicKeyPEM, LoginChallengeMessage(challenge), signature)
-	if err == nil {
-		return nil
-	}
-	if legacy := VerifyChallenge(publicKeyPEM, challenge, signature); legacy == nil {
-		return nil
-	}
-	return err
+	return VerifyChallenge(publicKeyPEM, LoginChallengeMessage(serverBinding, challenge), signature)
 }
 
 // VerifyChallenge verifies an Ed25519 signature over the given challenge using

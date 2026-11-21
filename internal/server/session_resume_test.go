@@ -743,7 +743,7 @@ func TestKeyGuestWithOwnDeviceLeavesNoKeptPlace(t *testing.T) {
 		if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthChallenge), &challenge); err != nil {
 			t.Fatal(err)
 		}
-		signature, err := auth.SignLoginChallenge(keys.private, challenge.Challenge)
+		signature, err := auth.SignLoginChallenge(keys.private, loginBindingOf(conn), challenge.Challenge)
 		if err != nil {
 			t.Fatal(err)
 		}

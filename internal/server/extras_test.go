@@ -541,7 +541,7 @@ func TestGuestWithIdentity(t *testing.T) {
 		t.Fatalf("decode challenge: %v", err)
 	}
 
-	sig, err := auth.SignChallenge(privPEM, ch.Challenge)
+	sig, err := auth.SignLoginChallenge(privPEM, loginBindingOf(conn), ch.Challenge)
 	if err != nil {
 		t.Fatalf("SignChallenge: %v", err)
 	}
@@ -656,7 +656,7 @@ func TestChallengeAuthWithBoundKey(t *testing.T) {
 		t.Fatalf("decode challenge: %v", err)
 	}
 
-	sig, err := auth.SignChallenge(privPEM, ch.Challenge)
+	sig, err := auth.SignLoginChallenge(privPEM, loginBindingOf(conn), ch.Challenge)
 	if err != nil {
 		t.Fatalf("SignChallenge: %v", err)
 	}

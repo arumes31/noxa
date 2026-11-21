@@ -234,14 +234,30 @@ the keys for that participant.
 
 **Upgrading to end-to-end encryption.**
 
-- **Deploy the server first (or together with the clients).** Updated
-  desktops and mobile web apps sign in only with the domain-separated login
-  challenge that updated servers offer. Against an older server they refuse
-  to sign in with "this server needs an update" and do not fall back. Older
-  clients can still sign in to an updated server, but they cannot join voice
-  channels (they are asked to update), cannot use end-to-end encrypted direct
-  or group messages, and can send legacy direct messages only to contacts
-  with a single desktop device.
+- **Update the server and the clients together.** A sign-in with an identity
+  key signs the server's challenge together with the identity of the server
+  the client itself sees: the desktop names the control-channel certificate
+  of its own pinned TLS connection, the mobile web app the origin of the page
+  it was loaded from. The server accepts only a proof that names itself (its
+  certificate, or the `Origin` of that WebSocket handshake), so a proof made
+  for one server signs nobody in at another. There is no compatibility mode:
+  - A desktop without this proof gets no challenge and is refused with
+    "client version rejected … update noXa to connect", which its sign-in
+    screen turns into an **Update now** button; the updater needs no
+    session. This also applies to its password sign-in, which asks for a
+    challenge to prove its key. Tools that send only a password, and guests
+    without an identity key, are not affected.
+  - Updated desktops and web apps refuse a server that does not offer the
+    bound challenge with "this server needs an update" and do not fall back.
+  - The web app is served by the server and updates with it; reload it once
+    after the server update.
+  - **A server with `tls_enabled: false` has no certificate to name**, so
+    desktops cannot sign in to it with an identity key (which includes
+    desktop guests); they can still sign in with an account password. The
+    web app is unaffected. The same holds when a proxy terminates TLS for
+    the control port: the desktop then sees the proxy's certificate, not the
+    server's. A reverse proxy in front of the web listener must pass the
+    `Origin` header through unchanged.
 - **Private calls need current apps on both ends.** Call media is end-to-end
   encrypted; a call between an updated and an older app ends with "needs to
   update noXa" instead of carrying unencrypted media. No server change is
@@ -905,7 +921,7 @@ and validation, [`config.yaml`](config.yaml) for a development example, and
 | `NOXA_REDIS_ADDR` | `localhost:6379` | Optional Redis address (readiness check only; no fan-out) |
 | `NOXA_REDIS_ENABLED` | `true` | Set `false` to run without Redis; the supplied Compose stack starts Redis by default |
 | `NOXA_REDIS_PASSWORD` | empty | Redis password; required in production when `NOXA_REDIS_ADDR` is not loopback (Compose passes `REDIS_PASSWORD`) |
-| `NOXA_TLS_ENABLED` | `true` | Enable TLS 1.3 encryption on control port |
+| `NOXA_TLS_ENABLED` | `true` | Enable TLS 1.3 encryption on control port; without it desktops cannot sign in with an identity key (see [upgrading](#e2ee-upgrade)) |
 | `NOXA_TLS_DIR` | `./data/tls` | Directory storing the generated TLS certificate and key |
 | `NOXA_TLS_CERT_FILE` / `NOXA_TLS_KEY_FILE` | empty | Custom certificate and key; both must be configured together |
 | `NOXA_FILE_TLS_ENABLED` | `true` | Enable TLS 1.3 on file transfers; disabling is development-only |

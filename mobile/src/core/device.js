@@ -118,24 +118,41 @@ export async function waitForDecision(identity, linkID, { open = () => Connectio
 
 /** auth.LoginChallengeSize / auth.LoginChallengeDomain (internal/auth). */
 export const LOGIN_CHALLENGE_SIZE = 32;
-export const LOGIN_CHALLENGE_SCHEME = "noxa-auth-challenge-v1";
+export const LOGIN_CHALLENGE_SCHEME = "noxa-auth-challenge-v2";
 export const SERVER_LOGIN_OUTDATED = "this server needs an update: it does not support secure sign-in; ask the administrator to update the server";
-export const LOGIN_CHALLENGE_DOMAIN = "noxa-auth-challenge-v1\n";
+export const LOGIN_CHALLENGE_DOMAIN = "noxa-auth-challenge-v2\n";
 
 /**
- * What a login signature covers: LOGIN_CHALLENGE_DOMAIN || challenge. Refuses
- * anything but exactly LOGIN_CHALLENGE_SIZE bytes not starting with "noxa-",
- * so a server can never obtain this device's signature over a transcript of
- * its choosing (device approvals, passkey delegations, Olm bundles...).
+ * The server a login proof from this page is for: the page's own origin
+ * (netproto.LoginBindingOrigin). A browser cannot see the certificate, so the
+ * origin it loaded the app from is the server identity it observed itself;
+ * the server compares it with the Origin of this connection's handshake.
+ * Never a value from the challenge or from /api/v1/web/info.
  */
-export function loginChallengeMessage(challenge) {
+export function pageServerBinding(location = globalThis.location) {
+    const origin = location?.origin;
+    return origin && origin !== "null" ? `origin:${origin}` : "";
+}
+
+/**
+ * What a login signature covers: LOGIN_CHALLENGE_DOMAIN || serverBinding ||
+ * "\n" || challenge (auth.LoginChallengeMessage). Refuses a missing binding,
+ * and anything but exactly LOGIN_CHALLENGE_SIZE bytes not starting with
+ * "noxa-", so a server can never obtain this device's signature over a
+ * transcript of its choosing (device approvals, passkey delegations, Olm
+ * bundles...) or one that signs this device in to another server.
+ */
+export function loginChallengeMessage(serverBinding, challenge) {
+    if (typeof serverBinding !== "string" || !serverBinding || serverBinding.length > 512 || /[\r\n]/.test(serverBinding)) {
+        throw Object.assign(new Error("signing in with an identity key needs a known server origin"), { code: "no_server_binding" });
+    }
     const prefix = utf8("noxa-");
     if (!(challenge instanceof Uint8Array) || challenge.length !== LOGIN_CHALLENGE_SIZE || prefix.every((b, i) => challenge[i] === b)) {
         throw Object.assign(new Error("the server sent an invalid login challenge; refusing to sign it"), { code: "unsafe_challenge" });
     }
-    const domain = utf8(LOGIN_CHALLENGE_DOMAIN), out = new Uint8Array(domain.length + challenge.length);
-    out.set(domain);
-    out.set(challenge, domain.length);
+    const head = utf8(`${LOGIN_CHALLENGE_DOMAIN}${serverBinding}\n`), out = new Uint8Array(head.length + challenge.length);
+    out.set(head);
+    out.set(challenge, head.length);
     return out;
 }
 
@@ -154,14 +171,17 @@ export const CLIENT_FEATURE_BUSY = "busy-v1";
 export const CLIENT_FEATURE_GOODBYE = "goodbye-v1";
 // The app presents its resume token on reconnect (internal/netproto/goodbye.go).
 export const CLIENT_FEATURE_RESUME = "resume-v1";
+// The login proof is bound to the server (netproto.ClientFeatureBoundLogin);
+// the server issues no challenge to a client that does not announce it.
+export const CLIENT_FEATURE_BOUND_LOGIN = "login-bound-v2";
 
-export async function signIn(conn, identity, { version, nickname = "", serverPassword = "", goodbye = false, resumeToken = "" } = {}) {
+export async function signIn(conn, identity, { version, nickname = "", serverPassword = "", goodbye = false, resumeToken = "", serverBinding = pageServerBinding() } = {}) {
     const uniqueID = uniqueIDFromPublicKey(identity.edPublic);
     const x25519 = toBase64(identity.xPublic);
     const authenticate = {
         client_version: version, authorization_models: ["roles-v1"], username: uniqueID, anonymous: true,
         nickname, server_password: serverPassword, x25519_public_key: x25519,
-        client_features: [CLIENT_FEATURE_POW, CLIENT_FEATURE_RETRY_HINT, CLIENT_FEATURE_BUSY, ...(goodbye ? [CLIENT_FEATURE_GOODBYE, CLIENT_FEATURE_RESUME] : [])],
+        client_features: [CLIENT_FEATURE_POW, CLIENT_FEATURE_RETRY_HINT, CLIENT_FEATURE_BUSY, CLIENT_FEATURE_BOUND_LOGIN, ...(goodbye ? [CLIENT_FEATURE_GOODBYE, CLIENT_FEATURE_RESUME] : [])],
         ...(resumeToken ? { resume_token: resumeToken } : {}),
     };
     let first = await conn.request(Msg.Authenticate, authenticate, [Msg.AuthChallenge, Msg.AuthResponse, Msg.PowChallenge], { timeout: 10000 });
@@ -183,13 +203,13 @@ export async function signIn(conn, identity, { version, nickname = "", serverPas
         if (first.algorithm) throw signInError("proof of work rejected");
     }
     if (!first.challenge) throw signInError(first.reason);
-    // Strict: sign only the advertised domain-separated scheme; an older
-    // server gets no signature (never a raw fallback).
+    // Strict: sign only the advertised server-bound scheme; a server that
+    // offers another gets no signature (never an unbound or raw fallback).
     if (first.scheme !== LOGIN_CHALLENGE_SCHEME) {
         conn.close?.();
         throw signInError(SERVER_LOGIN_OUTDATED);
     }
-    const signature = sign(loginChallengeMessage(Uint8Array.from(atob(first.challenge), c => c.charCodeAt(0))), identity.edSecret);
+    const signature = sign(loginChallengeMessage(serverBinding, Uint8Array.from(atob(first.challenge), c => c.charCodeAt(0))), identity.edSecret);
     const response = await conn.request(Msg.AuthSignature, {
         unique_id: "", public_key: publicKeyPEM(identity.edPublic), signature: toBase64(signature), x25519_public_key: x25519,
     }, Msg.AuthResponse);

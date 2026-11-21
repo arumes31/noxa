@@ -262,10 +262,10 @@ func namedKeyLoginOn(t *testing.T, conn net.Conn, keys linkTestKeys, nickname st
 	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthChallenge), &challenge); err != nil {
 		t.Fatal(err)
 	}
-	if challenge.Scheme != netproto.AuthChallengeSchemeV1 {
+	if challenge.Scheme != netproto.AuthChallengeSchemeV2 {
 		t.Fatalf("new servers advertise the login scheme: %+v", challenge)
 	}
-	signature, err := auth.SignLoginChallenge(keys.private, challenge.Challenge)
+	signature, err := auth.SignLoginChallenge(keys.private, loginBindingOf(conn), challenge.Challenge)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -854,7 +854,7 @@ func sendProvenPasswordAuth(t *testing.T, conn net.Conn, msg netproto.Authentica
 	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthChallenge), &challenge); err != nil {
 		t.Fatal(err)
 	}
-	proof, err := auth.SignLoginChallenge(private, challenge.Challenge)
+	proof, err := auth.SignLoginChallenge(private, loginBindingOf(conn), challenge.Challenge)
 	if err != nil {
 		t.Fatal(err)
 	}

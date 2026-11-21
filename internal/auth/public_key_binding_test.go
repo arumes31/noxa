@@ -159,11 +159,11 @@ func TestUnprovenBindingNeverRoutesAndProvenWins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signature, err := SignLoginChallenge(private, challenge)
+	signature, err := SignLoginChallenge(private, testServerBinding, challenge)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, _ := svc.AuthenticateIdentityChallenge(ctx, attacker.UniqueID, challenge, signature); ok {
+	if _, ok, _ := svc.AuthenticateIdentityChallenge(ctx, attacker.UniqueID, testServerBinding, challenge, signature); ok {
 		t.Fatal("an unproven binding authenticated a challenge login")
 	}
 	// An unproven claim cannot take a key from another account either.
@@ -198,11 +198,11 @@ func TestUnprovenBindingNeverRoutesAndProvenWins(t *testing.T) {
 	if err := svc.BindPublicKey(ctx, attacker.ID, upgraded, true); err != nil {
 		t.Fatal(err)
 	}
-	signature, err = SignLoginChallenge(upgradedPrivate, challenge)
+	signature, err = SignLoginChallenge(upgradedPrivate, testServerBinding, challenge)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, err := svc.AuthenticateIdentityChallenge(ctx, attacker.UniqueID, challenge, signature); !ok || err != nil {
+	if _, ok, err := svc.AuthenticateIdentityChallenge(ctx, attacker.UniqueID, testServerBinding, challenge, signature); !ok || err != nil {
 		t.Fatalf("upgraded binding challenge login = %v, %v", ok, err)
 	}
 }

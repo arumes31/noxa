@@ -400,6 +400,7 @@ func TestPushDropsGoneSubscriptions(t *testing.T) {
 type webPipe struct{ net.Conn }
 
 func (webPipe) WebTransport() bool { return true }
+func (webPipe) WebOrigin() string  { return passkeyTestOrigin }
 
 func TestWebSessionsAreMarkedOnMobile(t *testing.T) {
 	p := startPushTestEnv(t)

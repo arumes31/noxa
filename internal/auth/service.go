@@ -43,7 +43,7 @@ type AuthService struct {
 	store            *store.Store
 	logger           *zap.Logger
 	verifyPassword   func(password, encodedHash string) error
-	verifyChallenge  func(string, []byte, []byte) error
+	verifyChallenge  func(string, string, []byte, []byte) error
 	lookupIdentifier func(context.Context, string) (passwordCredential, error)
 	loginLimiter     *LoginFailureLimiter // set before serving; nil disables alias budgets
 }
@@ -120,11 +120,12 @@ func validateRegistrationPassword(password string) error {
 	return nil
 }
 
-// AuthenticateIdentityChallenge verifies the Ed25519 signature over the
-// challenge with the user's proven public key and returns that exact key,
-// avoiding a second lookup that could race an account key replacement. A
-// signature mismatch returns false with a nil error. Every call verifies.
-func (a *AuthService) AuthenticateIdentityChallenge(ctx context.Context, uniqueID string, challenge, signature []byte) (string, bool, error) {
+// AuthenticateIdentityChallenge verifies the Ed25519 login signature over the
+// challenge, bound to this server (serverBinding, see LoginChallengeMessage),
+// with the user's proven public key and returns that exact key, avoiding a
+// second lookup that could race an account key replacement. A signature
+// mismatch returns false with a nil error. Every call verifies.
+func (a *AuthService) AuthenticateIdentityChallenge(ctx context.Context, uniqueID, serverBinding string, challenge, signature []byte) (string, bool, error) {
 	var pubPEM string
 	// An unproven binding never authenticates; it verifies like an unbound key.
 	const q = `SELECT CASE WHEN public_key_proven THEN COALESCE(public_key, '') ELSE '' END FROM users WHERE unique_id = $1`
@@ -150,7 +151,7 @@ func (a *AuthService) AuthenticateIdentityChallenge(ctx context.Context, uniqueI
 	if verify == nil {
 		verify = VerifyLoginChallenge
 	}
-	verificationErr := verify(verificationKey, challenge, signature)
+	verificationErr := verify(verificationKey, serverBinding, challenge, signature)
 	if missing {
 		return "", false, ErrUserNotFound
 	}

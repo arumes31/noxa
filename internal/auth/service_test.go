@@ -235,12 +235,20 @@ func TestRegisterAuthenticateChallengeRoundTrip(t *testing.T) {
 		t.Fatalf("expected 32-byte challenge, got %d", len(challenge))
 	}
 
-	sig, err := SignChallenge(privPEM, challenge)
+	sig, err := SignLoginChallenge(privPEM, testServerBinding, challenge)
 	if err != nil {
-		t.Fatalf("SignChallenge: %v", err)
+		t.Fatalf("SignLoginChallenge: %v", err)
+	}
+	// A proof without this server's binding, or for another server, is refused.
+	raw, _ := SignChallenge(privPEM, challenge)
+	if _, ok, _ := svc.AuthenticateIdentityChallenge(context.Background(), newUID, testServerBinding, challenge, raw); ok {
+		t.Fatal("an unbound signature authenticated")
+	}
+	if _, ok, _ := svc.AuthenticateIdentityChallenge(context.Background(), newUID, "origin:https://other.example", challenge, sig); ok {
+		t.Fatal("a proof for another server authenticated")
 	}
 
-	_, ok, err := svc.AuthenticateIdentityChallenge(context.Background(), newUID, challenge, sig)
+	_, ok, err := svc.AuthenticateIdentityChallenge(context.Background(), newUID, testServerBinding, challenge, sig)
 	if err != nil {
 		t.Fatalf("AuthenticateIdentityChallenge(valid): %v", err)
 	}
@@ -252,7 +260,7 @@ func TestRegisterAuthenticateChallengeRoundTrip(t *testing.T) {
 	tampered := make([]byte, len(sig))
 	copy(tampered, sig)
 	tampered[0] ^= 0xff
-	_, ok, err = svc.AuthenticateIdentityChallenge(context.Background(), newUID, challenge, tampered)
+	_, ok, err = svc.AuthenticateIdentityChallenge(context.Background(), newUID, testServerBinding, challenge, tampered)
 	if err != nil {
 		t.Fatalf("AuthenticateIdentityChallenge(tampered): %v", err)
 	}

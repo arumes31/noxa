@@ -19,7 +19,7 @@ func dialNamedIdentity(t *testing.T, addr, uniqueID, public, private, nickname s
 	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthChallenge), &challenge); err != nil {
 		t.Fatal(err)
 	}
-	signature, err := auth.SignChallenge(private, challenge.Challenge)
+	signature, err := auth.SignLoginChallenge(private, loginBindingOf(conn), challenge.Challenge)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -23,6 +23,10 @@ import (
 // valid before the client must request a new one.
 const authChallengeTTL = 30 * time.Second
 
+// reasonNoServerBinding refuses a key login on a control port without TLS:
+// there is no certificate to bind the login proof to.
+const reasonNoServerBinding = "this server runs without TLS, so signing in with an identity key is unavailable; use an account password or ask the administrator to enable TLS"
+
 // handleAuthenticate starts authentication. Paths:
 //   - Password: verified against the users table (registered users).
 //   - No password: challenge-response handshake (registered users, and
@@ -56,6 +60,12 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	}
 	if reason := s.clientVersionRejection(msg.ClientVersion); reason != "" {
 		return s.rejectClientVersion(client, reason)
+	}
+	// Every login that asks for a challenge must sign the server-bound proof.
+	// A client that cannot is told to update instead of failing a signature.
+	wantsChallenge := msg.Password == "" && (!msg.Anonymous || msg.Username != "")
+	if wantsChallenge && !slices.Contains(msg.ClientFeatures, netproto.ClientFeatureBoundLogin) {
+		return s.rejectClientVersion(client, boundLoginRejection(msg.ClientVersion))
 	}
 	// The challenge a key proof signs was issued for an earlier attempt on
 	// this connection; take it before negotiation clears it. It only ever
@@ -153,6 +163,9 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 			return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "too many failed logins, try again later"})
 		}
 		attempt.Cancel()
+		if s.loginBinding(client) == "" {
+			return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: reasonNoServerBinding})
+		}
 		challenge, err := auth.GenerateChallenge()
 		if err != nil {
 			s.logger.Warn("challenge generation failed",
@@ -162,7 +175,7 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 			return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "internal error"})
 		}
 		client.setChallenge(msg.Username, msg.Nickname, challenge, time.Now().Add(authChallengeTTL))
-		return s.writeMessage(client, netproto.MsgAuthChallenge, netproto.AuthChallenge{Challenge: challenge, Scheme: netproto.AuthChallengeSchemeV1})
+		return s.writeMessage(client, netproto.MsgAuthChallenge, netproto.AuthChallenge{Challenge: challenge, Scheme: netproto.AuthChallengeSchemeV2})
 	}
 
 	attempt, allowed, busy := s.loginLimiter.ReservePassword(accountSourceScope, principalScope, accountScope)
@@ -199,7 +212,7 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	// this password session signs, which is harmless because the account
 	// holder cannot sign with someone else's key.
 	if msg.PublicKey != "" {
-		proven := len(proofChallenge) > 0 && auth.VerifyLoginChallenge(msg.PublicKey, proofChallenge, msg.PublicKeyProof) == nil
+		proven := len(proofChallenge) > 0 && auth.VerifyLoginChallenge(msg.PublicKey, s.loginBinding(client), proofChallenge, msg.PublicKeyProof) == nil
 		if canonical, err := auth.CanonicalPublicKey(msg.PublicKey); err == nil {
 			msg.PublicKey = canonical
 		}
@@ -282,7 +295,7 @@ func (s *TCPServer) handleAuthSignature(ctx context.Context, client *Client, f *
 	}
 	defer attempt.Cancel()
 
-	verifiedKey, verified, err := s.deps.Auth.AuthenticateIdentityChallenge(ctx, msg.UniqueID, challenge, msg.Signature)
+	verifiedKey, verified, err := s.deps.Auth.AuthenticateIdentityChallenge(ctx, msg.UniqueID, s.loginBinding(client), challenge, msg.Signature)
 	if err != nil {
 		if errors.Is(err, auth.ErrUserNotFound) {
 			attempt.Fail()
@@ -350,7 +363,7 @@ func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, ms
 	}
 	defer attempt.Cancel()
 
-	if err := auth.VerifyLoginChallenge(msg.PublicKey, challenge, msg.Signature); err != nil {
+	if err := auth.VerifyLoginChallenge(msg.PublicKey, s.loginBinding(client), challenge, msg.Signature); err != nil {
 		attempt.Fail()
 		s.metricsSink().IncAuthFailure("tcp", "invalid_credentials")
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "invalid credentials"})
