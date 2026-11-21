@@ -104,6 +104,12 @@ const RATCHET_INFO = "noxa-media-ratchet-v1";
 const REASON_RANK = { membership: 1, publication: 1, start: 2, renewal: 2, removal: 3 };
 export const SENDER_RETIRE_MS = 1_500;
 export const DEBOUNCE_MS = 200;
+// A join or a publication start changes nobody's access, so its keys go out
+// almost at once when the rekey will not wait for activation (a ratchet, or
+// the first epoch); the short wait only merges one roster update's changes.
+// A fresh rekey waits ACTIVATE_DELAY_MS, so joins before it keep DEBOUNCE_MS:
+// two joins 100 ms apart share one rekey instead of two serial waits.
+export const JOIN_DEBOUNCE_MS = 50;
 // The removal bound: the sender encrypts only under an epoch never sent to a
 // removed device at most this long after the removal was seen in the roster
 // (the debounce that coalesces roster changes plus the activation deadline).
@@ -348,11 +354,19 @@ export class MediaKeyEngine {
             const removal = gone.length > 0;
             if (removal) this.#noteRemoval();
             this.#recipientKey = key; this.#recipients = recipients;
-            this.#schedule(removal ? "removal" : "membership", DEBOUNCE_MS);
+            this.#schedule(removal ? "removal" : "membership", removal ? DEBOUNCE_MS : this.#joinDebounce("membership"));
         }
     }
 
-    publicationsChanged() { if (this.running) this.#schedule("publication", DEBOUNCE_MS); }
+    publicationsChanged() { if (this.running) this.#schedule("publication", this.#joinDebounce("publication")); }
+
+    #joinDebounce(reason) {
+        const selfKey = `${this.self.principal}\n${this.self.device}`;
+        const ids = this.#recipients.map(r => `${r.principal}\n${r.device}`);
+        // A pending renewal, start or removal keeps its reason (see #schedule) and rekeys fresh.
+        const pending = this.#busyOrPending && (REASON_RANK[this.#reason] || 0) > REASON_RANK[reason] ? this.#reason : reason;
+        return !this.activeEpoch || this.#ratchetHead(pending, ids, selfKey) ? JOIN_DEBOUNCE_MS : DEBOUNCE_MS;
+    }
 
     #schedule(reason, delay) {
         if (!this.running) return;
