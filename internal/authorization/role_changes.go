@@ -324,10 +324,72 @@ func authorizeChangedChannelAccess(before, after *RoleEvaluator, actorID int64) 
 	if actorID == before.policy.OwnerID {
 		return nil
 	}
+	groups := before.roleSetGroups()
 	for id := range after.channels {
 		oldOverrides, newOverrides := before.effectiveOverrides(id), after.effectiveOverrides(id)
 		if err := authorizeOverrideChanges(before, actorID, id, oldOverrides, newOverrides); err != nil {
 			return err
+		}
+		if err := authorizeOverrideGains(before, after, actorID, id, id, groups, oldOverrides, newOverrides); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// roleSetGroups groups users whose capabilities are the same wherever no
+// override names them: user 0 (guests and members without roles) and the
+// members of each distinct set of roles. The owner holds everything already.
+func (e *RoleEvaluator) roleSetGroups() [][]int64 {
+	groups := [][]int64{{0}}
+	index := map[string]int{}
+	for id, roles := range e.members {
+		if id == e.policy.OwnerID {
+			continue
+		}
+		key := fmt.Sprint(roles)
+		i, ok := index[key]
+		if !ok {
+			i, index[key] = len(groups), len(groups)
+			groups = append(groups, nil)
+		}
+		groups[i] = append(groups[i], id)
+	}
+	return groups
+}
+
+// authorizeOverrideGains rejects an override change through which anyone gains
+// a channel capability the actor cannot use there. authorizeOverrideChanges
+// checks only the capability each override names, but one override can make
+// dependent grants effective (an allowed ViewChannel unlocks an existing
+// ReadHistory). A new channel is compared with its parent (oldChannel).
+// groups comes from roleSetGroups: every user an override names is checked,
+// and for each group one member that none names.
+func authorizeOverrideGains(before, after *RoleEvaluator, actorID, oldChannel, newChannel int64, groups [][]int64, oldOverrides, newOverrides []RoleOverride) error {
+	if actorID == before.policy.OwnerID || slices.Equal(oldOverrides, newOverrides) {
+		return nil
+	}
+	named := map[int64]bool{}
+	var subjects []int64
+	for _, override := range append(slices.Clone(oldOverrides), newOverrides...) {
+		if override.UserID > 0 && !named[override.UserID] {
+			named[override.UserID] = true
+			subjects = append(subjects, override.UserID)
+		}
+	}
+	for _, group := range groups {
+		if i := slices.IndexFunc(group, func(id int64) bool { return !named[id] }); i >= 0 {
+			subjects = append(subjects, group[i])
+		}
+	}
+	for _, info := range Capabilities() {
+		if !info.Channel || before.Evaluate(actorID, oldChannel, info.Key).Allowed {
+			continue
+		}
+		for _, subject := range subjects {
+			if !before.Evaluate(subject, oldChannel, info.Key).Allowed && after.Evaluate(subject, newChannel, info.Key).Allowed {
+				return ErrRoleForbidden
+			}
 		}
 	}
 	return nil

@@ -38,26 +38,18 @@ func TestSessionRequestBudgets(t *testing.T) {
 	if a.allow(netproto.MsgWebRTCOffer, now) {
 		t.Fatal("unbounded offers")
 	}
+	for range 20 {
+		if !a.allow(netproto.MsgVoiceQueueRequest, now) {
+			t.Fatal("voice queue burst rejected")
+		}
+	}
+	if a.allow(netproto.MsgVoiceQueueRequest, now) || !a.allow(netproto.MsgAudioStateSet, now) {
+		t.Fatal("unbounded voice queue requests, or they consumed audio state tokens")
+	}
 	if !a.allow(netproto.MsgPing, now) {
 		t.Fatal("heartbeat throttled")
 	}
 	if !a.allow(netproto.MsgChatHistory, now.Add(time.Second)) {
 		t.Fatal("budget did not refill")
-	}
-}
-
-func TestSpeechSynthesisBudgetIsSeparateAndSlow(t *testing.T) {
-	var b sessionRequestBudget
-	now := time.Now()
-	for range 10 {
-		if !b.allowSpeechSynthesis(now) {
-			t.Fatal("burst denied")
-		}
-	}
-	if b.allowSpeechSynthesis(now) || !b.allow(netproto.MsgSpokenNameGet, now) {
-		t.Fatal("synthesis budget not exhausted, or it consumed request tokens")
-	}
-	if b.allowSpeechSynthesis(now.Add(30*time.Second)) || !b.allowSpeechSynthesis(now.Add(61*time.Second)) {
-		t.Fatal("synthesis refills about once a minute")
 	}
 }

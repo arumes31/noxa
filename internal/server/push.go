@@ -332,6 +332,13 @@ func (s *TCPServer) deliverPush(ctx context.Context, sub store.PushSubscription,
 	if !ok {
 		return
 	}
+	// A banned account gets no notifications (the lookup sign-in uses), also
+	// not one scheduled before the ban; a temporary ban simply ends.
+	if s.deps.Auth != nil {
+		if ban, err := s.deps.Auth.LookupActiveBan(ctx, sub.Principal, ""); err != nil || ban != nil {
+			return
+		}
+	}
 	// A notice can wait behind desktop activity or another send. Re-read the
 	// subscription so a later mute, sign-out or privacy change takes effect.
 	// This check lets filtered notices skip the slot queue; prepare repeats it

@@ -43,10 +43,9 @@ type PeerConnectionWrapper struct {
 	remoteCandidates chan webrtc.ICECandidateInit
 
 	// candidateMu guards the distinct remote candidates seen since the last
-	// remote ICE credentials (see AddICECandidate).
+	// ICE restart (see AddICECandidate).
 	candidateMu     sync.Mutex
 	seenCandidates  map[string]struct{}
-	remoteUfrag     string
 	candidateWarned bool
 
 	onTrack             func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver)
@@ -175,25 +174,46 @@ func checkRemoteSDPBudget(sdp string) error {
 	return nil
 }
 
-// admitDescriptionCandidates charges a remote description's candidates to
-// the peer's budget, which restarts when the description carries new ICE
-// credentials (an ICE restart reuses this peer). Pion adds a description's
-// candidates on every SetRemoteDescription, so re-offers count too.
-func (w *PeerConnectionWrapper) admitDescriptionCandidates(sdp string) error {
-	ufrag, candidates := "", []string(nil)
+// descriptionCandidates lists the candidates a remote description carries.
+// Pion adds them on every SetRemoteDescription, so re-offers count too.
+func descriptionCandidates(sdp string) (candidates []string) {
 	for _, line := range strings.FieldsFunc(sdp, func(r rune) bool { return r == '\r' || r == '\n' }) {
-		line = strings.TrimSpace(line)
-		if value, ok := strings.CutPrefix(line, "a=ice-ufrag:"); ok && ufrag == "" {
-			ufrag = value
-		} else if strings.HasPrefix(line, "a=candidate:") {
+		if line = strings.TrimSpace(line); strings.HasPrefix(line, "a=candidate:") {
 			candidates = append(candidates, line[len("a="):])
 		}
 	}
-	w.candidateMu.Lock()
-	if ufrag != w.remoteUfrag {
-		w.remoteUfrag, w.seenCandidates, w.candidateWarned = ufrag, nil, false
+	return candidates
+}
+
+// remoteICEUfrag is the remote ICE username fragment Pion uses now, "" before
+// it has one.
+func (w *PeerConnectionWrapper) remoteICEUfrag() string {
+	params, err := w.pc.SCTP().Transport().ICETransport().GetRemoteParameters()
+	if err != nil {
+		return ""
 	}
-	return w.admitCandidatesLocked(candidates...)
+	return params.UsernameFragment
+}
+
+// offerRestartsICE reports whether Pion, if it applies offer, sees new remote
+// ICE credentials and so restarts ICE, discarding its remote candidates. The
+// offer is parsed with Pion's own parser: Pion takes the fragment from the
+// session or from one media section, so an offer that names the current one
+// anywhere is not treated as a restart.
+func offerRestartsICE(offer webrtc.SessionDescription, current string) bool {
+	parsed, err := offer.Unmarshal()
+	if err != nil || current == "" {
+		return false
+	}
+	if ufrag, _ := parsed.Attribute("ice-ufrag"); ufrag == current {
+		return false
+	}
+	for _, media := range parsed.MediaDescriptions {
+		if ufrag, _ := media.Attribute("ice-ufrag"); ufrag == current {
+			return false
+		}
+	}
+	return true
 }
 
 // admitCandidatesLocked records new candidates, refusing all of them once
@@ -250,11 +270,36 @@ func (w *PeerConnectionWrapper) handleOffer(sdp string, bounds *VideoBounds) (re
 	if err := checkRemoteSDPBudget(sdp); err != nil {
 		return "", err
 	}
-	if err := w.admitDescriptionCandidates(sdp); err != nil {
-		return "", err
-	}
 	offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: sdp}
-	if err := w.pc.SetRemoteDescription(offer); err != nil {
+	// The candidate budget restarts only together with Pion's candidate set:
+	// an ICE restart offer is not charged to the old budget (checkRemoteSDPBudget
+	// capped it at the limit), every other description is.
+	candidates := descriptionCandidates(sdp)
+	ufrag := w.remoteICEUfrag()
+	restart := offerRestartsICE(offer, ufrag)
+	if !restart {
+		w.candidateMu.Lock()
+		if err := w.admitCandidatesLocked(candidates...); err != nil {
+			return "", err
+		}
+	}
+	err := w.pc.SetRemoteDescription(offer)
+	if restart {
+		// Pion may have restarted ICE even when it then rejected the offer.
+		restarted := w.remoteICEUfrag() != ufrag
+		w.candidateMu.Lock()
+		if restarted {
+			w.seenCandidates, w.candidateWarned = nil, false
+		}
+		if w.seenCandidates == nil {
+			w.seenCandidates = make(map[string]struct{})
+		}
+		for _, c := range candidates {
+			w.seenCandidates[c] = struct{}{}
+		}
+		w.candidateMu.Unlock()
+	}
+	if err != nil {
 		return "", fmt.Errorf("setting remote offer: %w", err)
 	}
 
@@ -289,7 +334,9 @@ func (w *PeerConnectionWrapper) HandleAnswer(sdp string) error {
 	if err := checkRemoteSDPBudget(sdp); err != nil {
 		return err
 	}
-	if err := w.admitDescriptionCandidates(sdp); err != nil {
+	// An answer never restarts ICE, so it never restarts the candidate budget.
+	w.candidateMu.Lock()
+	if err := w.admitCandidatesLocked(descriptionCandidates(sdp)...); err != nil {
 		return err
 	}
 	answer := webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: sdp}

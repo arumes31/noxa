@@ -147,6 +147,9 @@ func (s *TCPServer) ChangeIntegrationRoles(ctx context.Context, principal auth.I
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	if err := s.roleChangePreflight(ctx, principal.UserID(), change, nil); err != nil {
+		return netproto.RoleChangeResult{}, err
+	}
 	p, err := s.deps.Authority.ChangeRolePolicyValidated(ctx, principal.UserID(), change, func(ctx context.Context) error {
 		s.roleMetadataMu.Lock()
 		defer s.roleMetadataMu.Unlock()
