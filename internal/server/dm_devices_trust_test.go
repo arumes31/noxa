@@ -133,3 +133,78 @@ func TestGuestDeviceCopyLostAfterPreflightIsNotAcknowledged(t *testing.T) {
 		}
 	}
 }
+
+// A guest reaches by unique ID only a principal it shares a visible scope
+// with. Every other target gets one answer, whether no such account exists,
+// it is offline, it is online but invisible, or it has a linked phone; and
+// the invisible member receives nothing.
+func TestGuestDMByUniqueIDAnswersAlikeForUnseenTargets(t *testing.T) {
+	e := startDMTestEnv(t)
+	env := e.env
+	env.srv.chatRate = nil
+	member, _ := dialAuthed(t, env.addr, "admin-uid")
+	defer func() { _ = member.Close() }()
+	env.state.AddChannel(testChannel(1))
+	send(t, member, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
+	waitFor(t, "member in channel", func() bool { return len(env.state.ChannelMembers(1)) == 1 })
+	guest, resp := dialGuest(t, env.addr, "guest", "")
+	defer func() { _ = guest.Close() }()
+	if !resp.OK {
+		t.Fatalf("guest login: %+v", resp)
+	}
+	dm := func(uid, id string) {
+		send(t, guest, netproto.MsgChatSend, netproto.ChatSend{ToUniqueID: uid, Text: "b3BhcXVl", Enc: true, ClientMsgID: id})
+	}
+
+	// A visible member stays reachable.
+	dm("admin-uid", "seen")
+	if got := chatEvent(t, member); !got.Direct || got.ClientMsgID != "seen" {
+		t.Fatalf("visible member received %+v", got)
+	}
+
+	send(t, member, netproto.MsgSetStatus, netproto.SetStatus{Status: "invisible"})
+	waitFor(t, "member invisible", func() bool {
+		for _, c := range env.state.ListClients() {
+			if c.UniqueID == "admin-uid" {
+				return env.state.PresenceHidden(c)
+			}
+		}
+		return false
+	})
+	dm("nobody-uid", "unknown")
+	want := sendError(t, guest)
+	if want.Code != errCodeNotFound || want.Message != errGuestOffline {
+		t.Fatalf("unknown target = %+v", want)
+	}
+	dm("user-uid", "offline")
+	if got := sendError(t, guest); got != want {
+		t.Fatalf("offline account = %+v, want %+v", got, want)
+	}
+	dm("admin-uid", "unseen")
+	if got := sendError(t, guest); got != want {
+		t.Fatalf("invisible online account = %+v, want %+v", got, want)
+	}
+	// The same account with a linked phone.
+	keys := newLinkTestKeys(t)
+	desktop, desktopID := e.desktopAs(t, "user-uid", keys)
+	e.approvedPhone(t, "user-uid", 2, desktopID, keys)
+	_ = desktop.Close()
+	waitFor(t, "account offline", func() bool { return len(env.srv.sessionsOf("user-uid")) == 0 })
+	dm("user-uid", "phone")
+	if got := sendError(t, guest); got != want {
+		t.Fatalf("offline account with a phone = %+v, want %+v", got, want)
+	}
+
+	_ = member.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	for {
+		frame, err := netproto.ReadFrame(member)
+		if err != nil {
+			break // nothing more arrived
+		}
+		if netproto.MessageType(frame.Type) == netproto.MsgEvent {
+			if typ, _ := decodeEvent(t, frame); typ == eventChat {
+				t.Fatal("the invisible member received a guest's direct message")
+			}
+		}
+	}
+}

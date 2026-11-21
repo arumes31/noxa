@@ -104,6 +104,29 @@ func TestIntegrationBanPagesUseCurrentAccessThroughDelivery(t *testing.T) {
 	if err != nil || len(page.Bans) != 1 || page.Bans[0].ID != ids[0] || page.NextBeforeID != 0 {
 		t.Fatalf("last page: %+v %v", page, err)
 	}
+	// The address of an IP ban needs ViewRemoteAddresses as well.
+	var ipBan int64
+	if err := db.DB().QueryRowContext(t.Context(), "INSERT INTO bans (ban_type,value) VALUES (0,'203.0.113.9') RETURNING id").Scan(&ipBan); err != nil {
+		t.Fatal(err)
+	}
+	page, err = read(principal, netproto.BanQuery{Limit: 1})
+	if err != nil || len(page.Bans) != 1 || page.Bans[0].ID != ipBan || page.Bans[0].Type != 0 || page.Bans[0].Value != "hidden" {
+		t.Fatalf("IP ban without ViewRemoteAddresses: %+v %v", page, err)
+	}
+	backend.mu.Lock()
+	backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.BanMembers, authorization.ViewRemoteAddresses}
+	backend.policy.Revision++
+	backend.mu.Unlock()
+	if err := authority.Reload(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	page, err = read(principal, netproto.BanQuery{Limit: 1})
+	if err != nil || len(page.Bans) != 1 || page.Bans[0].Value != "203.0.113.9" {
+		t.Fatalf("IP ban with ViewRemoteAddresses: %+v %v", page, err)
+	}
+	if err := setGrant(true); err != nil {
+		t.Fatal(err)
+	}
 	entered, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
 	defer once.Do(func() { close(release) })

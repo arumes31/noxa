@@ -227,7 +227,7 @@ func (m *connManager) dmDeviceList(uid string, force bool) ([]dmTrustedDevice, e
 		log.Printf("dm devices: refusing the device list of %s: %v", uid, err)
 		return nil, err
 	}
-	var ownRevoked []string
+	var ownRevoked ownDeviceRevocations
 	if uid == ownUID {
 		if ownRevoked, err = m.ownRevokedDevices(); err != nil {
 			return nil, err

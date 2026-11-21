@@ -541,7 +541,7 @@ func TestRevokedApproverDropsTheDevicesItApproved(t *testing.T) {
 	first.FirstDevice = true
 	list := []netproto.DMDevice{first, phone.approve(t, principal, desktop), tablet.approve(t, principal, phone), laptop.approve(t, principal, desktop)}
 	pins := []signedRevocationPin{{DeviceID: "phone", Ed25519Public: phone.deviceInfo.Ed25519Public}}
-	trusted, err := verifyDMDevices(principal, desktop.signingKey(t), desktop.xPublic, withoutRevokedApprovers(list, pins, nil))
+	trusted, err := verifyDMDevices(principal, desktop.signingKey(t), desktop.xPublic, withoutRevokedApprovers(list, pins, ownDeviceRevocations{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,14 +551,14 @@ func TestRevokedApproverDropsTheDevicesItApproved(t *testing.T) {
 	// Matching by key alone (the server renamed the revoked device) and a
 	// local revocation record have the same effect.
 	renamed := []signedRevocationPin{{DeviceID: "other-id", Ed25519Public: phone.deviceInfo.Ed25519Public}}
-	if got := len(withoutRevokedApprovers(list, renamed, nil)); got != 3 {
+	if got := len(withoutRevokedApprovers(list, renamed, ownDeviceRevocations{})); got != 3 {
 		t.Fatalf("key match kept %d entries, want 3", got)
 	}
-	if got := len(withoutRevokedApprovers(list, nil, []string{"phone"})); got != 3 {
+	if got := len(withoutRevokedApprovers(list, nil, ownDeviceRevocations{Devices: []string{"phone"}})); got != 3 {
 		t.Fatalf("own revocation kept %d entries, want 3", got)
 	}
 	// The first device anchors the account and is never dropped here.
-	if got := len(withoutRevokedApprovers(list, []signedRevocationPin{{DeviceID: "desktop"}}, nil)); got != 4 {
+	if got := len(withoutRevokedApprovers(list, []signedRevocationPin{{DeviceID: "desktop"}}, ownDeviceRevocations{})); got != 4 {
 		t.Fatalf("first device dropped: kept %d entries", got)
 	}
 }

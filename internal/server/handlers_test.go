@@ -2415,3 +2415,51 @@ func TestPasswordLockoutDoesNotBlockKeyLogin(t *testing.T) {
 		t.Fatalf("key login refused while only the password scope is locked: %+v", resp)
 	}
 }
+
+// The verified-password cache saves the KDF only: a source locked out for
+// wrong server passwords stays locked when it presents the right one, also
+// after an earlier login put that password in the cache.
+func TestServerPasswordLockoutHoldsForAKnownPassword(t *testing.T) {
+	limiter := auth.NewLoginFailureLimiter(auth.LoginFailureLimiterConfig{
+		MaxFailures:     2,
+		LockoutDuration: time.Minute,
+		FailureTTL:      time.Minute,
+		MaxEntries:      32,
+	})
+	env := startTestEnvDeps(t, nil, nil, func(deps *Deps) {
+		deps.LoginLimiter = limiter
+		deps.ServerPasswordHash = "test-server-password-hash"
+		deps.VerifyServerPassword = func(password, _ string) error {
+			if password == "correct" {
+				return nil
+			}
+			return errors.New("password mismatch")
+		}
+	})
+	defer env.stop()
+	login := func(password string) netproto.AuthResponse {
+		t.Helper()
+		conn := dialRetry(t, env.addr)
+		defer func() { _ = conn.Close() }()
+		send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Anonymous: true, Nickname: "visitor", ServerPassword: password})
+		var response netproto.AuthResponse
+		if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthResponse), &response); err != nil {
+			t.Fatalf("decode auth response: %v", err)
+		}
+		return response
+	}
+	if response := login("correct"); !response.OK {
+		t.Fatalf("login that fills the cache: %+v", response)
+	}
+	if response := login("correct"); !response.OK {
+		t.Fatalf("login with the cached password: %+v", response)
+	}
+	for range 2 {
+		if response := login("wrong"); response.Reason != "invalid server password" {
+			t.Fatalf("failed-password response = %+v", response)
+		}
+	}
+	if response := login("correct"); response.OK || response.Reason != "too many failed logins, try again later" {
+		t.Fatalf("locked-out source with the cached password = %+v, want the lockout", response)
+	}
+}

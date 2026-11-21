@@ -382,7 +382,8 @@ type TCPServer struct {
 	privateCalls          map[string]netproto.CallSession
 	privateCallByClient   map[string]string
 	privateCallDirty      map[string]bool
-	recordingNotices      sync.Map // channel ID -> *recordingNotice; protected by roleRecordingMu
+	privateCallHidden     map[string]map[string]bool // call ID -> sessions that get no events of it
+	recordingNotices      sync.Map                   // channel ID -> *recordingNotice; protected by roleRecordingMu
 	recordingNoticeWG     sync.WaitGroup
 	recordingNoticeStop   chan struct{}
 	roleRecordingOwners   sync.Map   // channel ID -> initiating registered user ID

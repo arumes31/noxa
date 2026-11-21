@@ -15,7 +15,6 @@ import (
 	"errors"
 	"log"
 	"os"
-	"slices"
 	"sync"
 
 	"noxa/internal/auth"
@@ -162,14 +161,17 @@ func withoutPinnedRevocations(devices []dmTrustedDevice, pins []signedRevocation
 // revokedDevice reports whether a pin or a local revocation names a device by
 // ID or signing key. The first device is the account identity itself and is
 // never treated as revoked here: its approvals anchor every other device.
-func revokedDevice(d netproto.DMDevice, pins []signedRevocationPin, ownRevoked []string) bool {
+func revokedDevice(d netproto.DMDevice, pins []signedRevocationPin, ownRevoked ownDeviceRevocations) bool {
 	if d.FirstDevice {
 		return false
 	}
-	if slices.Contains(ownRevoked, d.DeviceID) {
+	key, keyErr := auth.LoadPublicKey(d.Ed25519Public)
+	if keyErr != nil {
+		key = nil
+	}
+	if ownRevoked.names(d.DeviceID, key) {
 		return true
 	}
-	key, keyErr := auth.LoadPublicKey(d.Ed25519Public)
 	for _, p := range pins {
 		if p.DeviceID == d.DeviceID {
 			return true
@@ -184,14 +186,14 @@ func revokedDevice(d netproto.DMDevice, pins []signedRevocationPin, ownRevoked [
 // ownRevocationState returns uid's pinned signed revocations and, for this
 // account, the devices revoked from this desktop. Unreadable records are
 // errors: callers must not treat them as "nothing revoked".
-func (m *connManager) ownRevocationState(uid string) ([]signedRevocationPin, []string, error) {
+func (m *connManager) ownRevocationState(uid string) ([]signedRevocationPin, ownDeviceRevocations, error) {
 	var pins []signedRevocationPin
 	if path, err := m.signedRevocationsPath(uid); err == nil {
 		signedRevocationsMu.Lock()
 		r, err := readSignedRevocations(path)
 		signedRevocationsMu.Unlock()
 		if err != nil {
-			return nil, nil, err
+			return nil, ownDeviceRevocations{}, err
 		}
 		pins = r.Pins
 	}
@@ -202,7 +204,7 @@ func (m *connManager) ownRevocationState(uid string) ([]signedRevocationPin, []s
 // withoutRevokedApprovers drops revoked devices from a directory listing
 // before the approval chain is walked, so a revoked device cannot vouch for
 // a device the server lists as approved by it.
-func withoutRevokedApprovers(list []netproto.DMDevice, pins []signedRevocationPin, ownRevoked []string) []netproto.DMDevice {
+func withoutRevokedApprovers(list []netproto.DMDevice, pins []signedRevocationPin, ownRevoked ownDeviceRevocations) []netproto.DMDevice {
 	out := make([]netproto.DMDevice, 0, len(list))
 	for _, d := range list {
 		if !revokedDevice(d, pins, ownRevoked) {

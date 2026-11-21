@@ -7,6 +7,8 @@
 package main
 
 import (
+	"bytes"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"log"
@@ -22,6 +24,28 @@ var ownRevocationsMu sync.Mutex
 type ownDeviceRevocations struct {
 	Version int      `json:"version"`
 	Devices []string `json:"devices"`
+	// SigningKeys holds, per revoked device ID, the signing key this desktop
+	// had verified for the device before it was revoked. A device ID is not
+	// part of what an approval signs, so the key is what identifies the
+	// device. Records written before this field existed name IDs only.
+	SigningKeys map[string][]byte `json:"signing_keys,omitempty"`
+}
+
+// names reports whether the record revokes a device, by its ID or by its
+// signing key under any ID.
+func (r ownDeviceRevocations) names(deviceID string, signing ed25519.PublicKey) bool {
+	if slices.Contains(r.Devices, deviceID) {
+		return true
+	}
+	if len(signing) != ed25519.PublicKeySize {
+		return false
+	}
+	for _, key := range r.SigningKeys {
+		if bytes.Equal(key, signing) {
+			return true
+		}
+	}
+	return false
 }
 
 // ownRevocationsPath names the record for this identity, server and account.
@@ -62,8 +86,9 @@ func readOwnRevocations(path string) (ownDeviceRevocations, error) {
 	return r, nil
 }
 
-// recordOwnDeviceRevocation durably adds deviceID to the local record.
-func (m *connManager) recordOwnDeviceRevocation(deviceID string) error {
+// recordOwnDeviceRevocation durably adds deviceID, and its signing key when
+// one is known, to the local record.
+func (m *connManager) recordOwnDeviceRevocation(deviceID string, signing ed25519.PublicKey) error {
 	path, err := m.ownRevocationsPath()
 	if err != nil {
 		return err
@@ -79,6 +104,12 @@ func (m *connManager) recordOwnDeviceRevocation(deviceID string) error {
 	}
 	r.Version = 1
 	r.Devices = append(r.Devices, deviceID)
+	if len(signing) == ed25519.PublicKeySize {
+		if r.SigningKeys == nil {
+			r.SigningKeys = map[string][]byte{}
+		}
+		r.SigningKeys[deviceID] = signing
+	}
 	raw, err := json.Marshal(r)
 	if err != nil {
 		return err
@@ -88,28 +119,59 @@ func (m *connManager) recordOwnDeviceRevocation(deviceID string) error {
 
 // ownRevokedDevices returns the devices revoked from this desktop. An
 // unreadable record is an error: callers must not treat it as "none".
-func (m *connManager) ownRevokedDevices() ([]string, error) {
+func (m *connManager) ownRevokedDevices() (ownDeviceRevocations, error) {
 	path, err := m.ownRevocationsPath()
 	if err != nil {
 		// Without an identity/server namespace nothing can have been recorded.
-		return nil, nil
+		return ownDeviceRevocations{}, nil
 	}
 	ownRevocationsMu.Lock()
 	defer ownRevocationsMu.Unlock()
-	r, err := readOwnRevocations(path)
-	return r.Devices, err
+	return readOwnRevocations(path)
+}
+
+// verifiedOwnDeviceKey returns the signing key of one of this account's
+// devices from this desktop's verified device list, or nil. Every key in
+// that list carries an approval chain rooted in this identity, so a list
+// fetched now is as good as a cached one; callers ask before the revoke
+// request is sent. The account identity key is never returned, since it
+// anchors every other device.
+func (m *connManager) verifiedOwnDeviceKey(deviceID string) ed25519.PublicKey {
+	m.mu.Lock()
+	principal := m.uniqueID
+	m.mu.Unlock()
+	id, err := m.identity()
+	if err != nil {
+		return nil
+	}
+	root, err := auth.LoadPublicKey(id.PublicKey)
+	if err != nil {
+		return nil
+	}
+	devices, _ := m.dmDeviceList(principal, false)
+	for _, d := range devices {
+		if d.DeviceID == deviceID && !d.First && !bytes.Equal(d.Signing, root) {
+			return d.Signing
+		}
+	}
+	return nil
 }
 
 // withoutOwnRevokedDevices drops locally revoked devices from this account's
-// verified device list, whatever approvals the directory still serves.
+// verified device list, whatever approvals the directory still serves and
+// whatever device ID it lists their keys under.
 func (m *connManager) withoutOwnRevokedDevices(devices []dmTrustedDevice) ([]dmTrustedDevice, error) {
 	revoked, err := m.ownRevokedDevices()
-	if err != nil || len(revoked) == 0 {
+	if err != nil || len(revoked.Devices) == 0 {
 		return devices, err
 	}
 	out := devices[:0:0]
 	for _, d := range devices {
-		if !slices.Contains(revoked, d.DeviceID) {
+		key := d.Signing
+		if d.First {
+			key = nil // the account identity is never revoked by key
+		}
+		if !revoked.names(d.DeviceID, key) {
 			out = append(out, d)
 		}
 	}
@@ -127,7 +189,7 @@ func (m *connManager) syncOwnRevocationsToRatchet(consumer *ratchetConsumer) err
 	if err != nil {
 		return err
 	}
-	for _, device := range revoked {
+	for _, device := range revoked.Devices {
 		if err := consumer.revokeDevice(principal, device); err != nil {
 			return err
 		}
