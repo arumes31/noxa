@@ -516,9 +516,71 @@ jobs:
       pull-requests: read
       security-events: write
 
+  # Pull request image build: a check only, never pushed, read-only token.
+  # Keep its build inputs in step with docker-publish below.
   docker:
     needs: [build-metadata, proto-contract, mobile-checks, test, frontend-e2e, security-gate]
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      NOXA_VERSION: ${{ needs.build-metadata.outputs.version }}
+      NOXA_COMMIT: ${{ needs.build-metadata.outputs.commit }}
+      NOXA_BUILD_DATE: ${{ needs.build-metadata.outputs.build-date }}
+      NOXA_DIRTY: ${{ needs.build-metadata.outputs.dirty }}
+      NOXA_PRERELEASE: ${{ needs.build-metadata.outputs.prerelease }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository }}
+          labels: |
+            org.opencontainers.image.version=${{ env.NOXA_VERSION }}
+          tags: |
+            type=ref,event=pr
+            type=sha,format=short
+
+      - name: Build Docker image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            NOXA_VERSION=${{ env.NOXA_VERSION }}
+            NOXA_COMMIT=${{ env.NOXA_COMMIT }}
+            NOXA_DIRTY=${{ env.NOXA_DIRTY }}
+            NOXA_BUILD_DATE=${{ env.NOXA_BUILD_DATE }}
+            NOXA_UPDATE_REPO=${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
+  # Branch and tag pushes publish the image; only this job may write packages.
+  docker-publish:
+    needs: [build-metadata, proto-contract, mobile-checks, test, frontend-e2e, security-gate]
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -547,7 +609,6 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
@@ -576,7 +637,7 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
@@ -591,7 +652,6 @@ jobs:
           sbom: true
 
       - name: Verify published server build version
-        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           image="ghcr.io/$GITHUB_REPOSITORY:sha-${NOXA_COMMIT:0:7}"
