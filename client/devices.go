@@ -17,14 +17,18 @@ import (
 
 	"noxa/internal/auth"
 	"noxa/internal/deviceproof"
+	"noxa/internal/devicetrust"
 	"noxa/internal/netproto"
 )
 
 // deviceLinkKeys are the link keys a creating session keeps so it can derive
-// the same comparison code (SAS) as the claiming device.
+// the same comparison code (SAS) as the claiming device, and the claimed keys
+// whose key claim it verified: only those are ever approved.
 type deviceLinkKeys struct {
 	secret []byte
 	code   string
+
+	claimedEd25519, claimedX25519 string
 }
 
 // DeviceLinkView is a created link as the "PWA / Mobile login"
@@ -101,10 +105,23 @@ func (m *connManager) handleDeviceEvent(f *netproto.Frame) {
 		if !ok {
 			return
 		}
-		linkKey := keys.secret
+		linkKey, ref := keys.secret, "link:"+event.LinkID
 		if event.Via == "code" {
-			linkKey = []byte(keys.code)
+			linkKey, ref = []byte(keys.code), "code:"+keys.code
 		}
+		// The fingerprint shown covers the signing key only: the claiming
+		// device's own signature ties the relayed encryption key to it.
+		if !devicetrust.VerifyKeyClaim(ref, event.Ed25519PublicKey, event.X25519PublicKey, event.KeyClaim) {
+			log.Printf("device link %s: dropping a claim without a valid key claim", event.LinkID)
+			return
+		}
+		keys.claimedEd25519 = event.Ed25519PublicKey
+		keys.claimedX25519 = event.X25519PublicKey
+		m.mu.Lock()
+		if _, ok := m.deviceLinks[event.LinkID]; ok {
+			m.deviceLinks[event.LinkID] = keys
+		}
+		m.mu.Unlock()
 		transcript := netproto.LinkClaimTranscript(event.LinkID, event.Ed25519PublicKey, event.X25519PublicKey)
 		view.SAS = netproto.LinkSAS(linkKey, transcript)
 		view.Fingerprint = netproto.KeyFingerprint(event.Ed25519PublicKey)
@@ -224,6 +241,12 @@ func (a *App) ConfirmDeviceForTab(tabID, deviceID, ed25519Public, x25519Public s
 	// field can smuggle a line into the signed transcript.
 	if !validClaimedDeviceKeys(signingKey, target.X25519Public) {
 		return netproto.DeviceInfo{}, errors.New("the device's keys are not in the expected format")
+	}
+	// The fingerprint the user compared covers the signing key only. The
+	// device's own signature must tie the listed encryption key to it, or a
+	// relay could have this desktop vouch for an encryption key it chose.
+	if !devicetrust.VerifyKeyClaim(netproto.DeviceKeyClaimRef(principal), signingKey, target.X25519Public, target.KeyClaim) {
+		return netproto.DeviceInfo{}, errors.New("this device has not proven its encryption key; sign in on it with an up-to-date noXa (the server must be up to date too), then confirm it again")
 	}
 	id, err := cm.identity()
 	if err != nil {
@@ -451,11 +474,14 @@ func (a *App) DecideDeviceLinkForTab(tabID, linkID string, approve bool, ed25519
 		return netproto.DeviceResult{}, err
 	}
 	cm.mu.Lock()
-	_, known := cm.deviceLinks[linkID]
+	link, known := cm.deviceLinks[linkID]
 	principal, deviceID := cm.uniqueID, cm.deviceID
 	cm.mu.Unlock()
 	if !known {
 		return netproto.DeviceResult{}, errors.New("this link is no longer pending")
+	}
+	if approve && (link.claimedEd25519 == "" || link.claimedEd25519 != ed25519Public || link.claimedX25519 != x25519Public) {
+		return netproto.DeviceResult{}, errors.New("the claiming device's keys are not the ones it proved")
 	}
 	request := netproto.DeviceRequest{Action: netproto.DeviceActionLinkDecide, LinkID: linkID, Approve: approve}
 	if approve && !validClaimedDeviceKeys(ed25519Public, x25519Public) {
@@ -562,6 +588,41 @@ func (a *App) ReportReadForTab(tabID, scope, id, messageID string) error {
 		return nil
 	}
 	return cm.write(netproto.MsgDeviceRequest, request)
+}
+
+// publishKeyClaim sends this device's signature over its own signing and
+// encryption key. The account's other devices verify it before they confirm
+// this device, so a relay cannot swap the encryption key they vouch for.
+// Best effort: a server without the action refuses it.
+func (m *connManager) publishKeyClaim(conn net.Conn) {
+	m.mu.Lock()
+	due := m.conn == conn && conn != nil && m.supportsDevices && !m.keyless && !m.isGuest && m.deviceID != ""
+	principal := m.uniqueID
+	m.mu.Unlock()
+	if !due {
+		return
+	}
+	id, err := m.identity()
+	if err != nil {
+		return
+	}
+	// The server stores the canonical spelling and checks the claim over it.
+	signing, err := auth.CanonicalPublicKey(id.PublicKey)
+	if err != nil {
+		return
+	}
+	encryption, _, err := id.x25519()
+	if err != nil {
+		return
+	}
+	transcript := netproto.DeviceKeyClaimTranscript(netproto.DeviceKeyClaimRef(principal), signing, base64.StdEncoding.EncodeToString(encryption[:]))
+	claim, err := auth.SignChallenge(id.PrivateKey, transcript)
+	if err != nil {
+		return
+	}
+	if _, err := m.requestOn(conn, netproto.MsgDeviceRequest, netproto.MsgDeviceResult, netproto.DeviceRequest{Action: netproto.DeviceActionKeyClaim, Signature: claim}, 10*time.Second); err != nil {
+		log.Printf("devices: publishing this device's key claim failed: %v", err)
+	}
 }
 
 // approvePasskeyDevices issues normal device endorsements only after checking a

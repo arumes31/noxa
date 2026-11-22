@@ -16,6 +16,7 @@ import (
 	"noxa/internal/authorization"
 	"noxa/internal/broadcast"
 	"noxa/internal/config"
+	"noxa/internal/devicetrust"
 	"noxa/internal/eventbus"
 	"noxa/internal/netproto"
 	"noxa/internal/store"
@@ -113,6 +114,16 @@ func (f *fakeDevices) MarkDeviceKeyProven(_ context.Context, id string) error {
 		f.devices[i].KeyUnproven = false
 	}
 	return nil
+}
+
+func (f *fakeDevices) SetDeviceKeyClaim(_ context.Context, principal, id string, claim []byte) (store.Device, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if i, ok := f.find(func(d store.Device) bool { return d.Principal == principal && d.DeviceID == id && d.Active() }); ok {
+		f.devices[i].KeyClaim = claim
+		return f.devices[i], nil
+	}
+	return store.Device{}, store.ErrDeviceNotFound
 }
 
 func (f *fakeDevices) RenameDevice(_ context.Context, principal, id, name string) (store.Device, error) {
@@ -400,6 +411,11 @@ func TestDeviceLinkQRFlowSignsPhoneInAsAccount(t *testing.T) {
 	}
 	if event.Event != netproto.DeviceEventLinkClaimed || event.Ed25519PublicKey != phone.public || event.Via != "qr" {
 		t.Fatalf("claim event = %+v", event)
+	}
+	// The creator can check that the claimed encryption key belongs to the
+	// claimed signing key.
+	if !devicetrust.VerifyKeyClaim("link:"+event.LinkID, event.Ed25519PublicKey, event.X25519PublicKey, event.KeyClaim) {
+		t.Fatalf("claim event relays no valid key claim: %+v", event)
 	}
 	transcript := netproto.LinkClaimTranscript(linkID, phone.public, phone.x25519)
 	if netproto.LinkSAS(secret, transcript) != netproto.LinkSAS(secret, netproto.LinkClaimTranscript(event.LinkID, event.Ed25519PublicKey, event.X25519PublicKey)) {

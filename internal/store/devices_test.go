@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/pem"
 	"errors"
@@ -249,6 +250,26 @@ func TestAddDeviceRejectsAnotherAccountsIdentityKey(t *testing.T) {
 	keyed.Ed25519Public = other
 	if _, err := s.AddDevice(ctx, keyed, 3); err != nil {
 		t.Fatalf("key-derived account's own key as own device: %v", err)
+	}
+}
+
+func TestSetDeviceKeyClaim(t *testing.T) {
+	s := pollTestStore(t)
+	ctx := t.Context()
+	principal := fmt.Sprintf("key-claim-%d", time.Now().UnixNano())
+	d, err := s.AddDevice(ctx, newTestDevice(principal, 0), 3)
+	if err != nil || d.KeyClaim != nil {
+		t.Fatalf("device = %+v, %v", d, err)
+	}
+	claim := bytes.Repeat([]byte{7}, 64)
+	if got, err := s.SetDeviceKeyClaim(ctx, principal, d.DeviceID, claim); err != nil || !bytes.Equal(got.KeyClaim, claim) {
+		t.Fatalf("stored = %+v, %v", got, err)
+	}
+	if got, err := s.DeviceByID(ctx, principal, d.DeviceID); err != nil || !bytes.Equal(got.KeyClaim, claim) {
+		t.Fatalf("read back = %+v, %v", got, err)
+	}
+	if _, err := s.SetDeviceKeyClaim(ctx, "someone-else", d.DeviceID, claim); !errors.Is(err, ErrDeviceNotFound) {
+		t.Fatalf("another account's device: %v", err)
 	}
 }
 

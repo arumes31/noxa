@@ -56,16 +56,26 @@ function subscriptionKeys(sub) {
     return { endpoint: sub.endpoint, p256dh: bytesToBase64URL(sub.getKey("p256dh")), auth: bytesToBase64URL(sub.getKey("auth")) };
 }
 
+// Counts account departures (dropPushSubscription): a sync that started for
+// the departed account must not leave or register a subscription.
+let departures = 0;
+
 /**
  * Reads the server's push settings and refreshes this device's subscription
  * when notifications are allowed. Returns {available, preferences}.
  */
 export async function syncPush(conn) {
+    const started = departures;
     const config = await deviceRequest(conn, { action: "push_config" });
     const state = { available: !!config.vapid_public_key && pushSupported(), vapidKey: config.vapid_public_key, preferences: config.preferences || {} };
-    if (!state.available || Notification.permission !== "granted") return state;
+    if (!state.available || Notification.permission !== "granted" || started !== departures) return state;
     // Refresh on every connect: browsers rotate subscriptions silently.
     const sub = await browserSubscription(state.vapidKey, state.preferences.subscribed);
+    if (started !== departures) {
+        // The account left while the browser was subscribing.
+        await sub?.unsubscribe().catch(() => {});
+        return state;
+    }
     if (sub) {
         const result = await deviceRequest(conn, { action: "push_subscribe", subscription: subscriptionKeys(sub) });
         state.preferences = result.preferences || state.preferences;
@@ -92,6 +102,29 @@ export async function disablePush(conn) {
     await sub?.unsubscribe();
     const result = await deviceRequest(conn, { action: "push_unsubscribe" });
     return result.preferences;
+}
+
+/**
+ * Ends this browser's push subscription when the account it served leaves
+ * this browser (sign-out, revocation, account replacement), so the next
+ * account never receives its notifications. conn, the departing account's
+ * session when one is still open, removes it on the server too; otherwise the
+ * server drops the endpoint once the push service reports it gone.
+ */
+export async function dropPushSubscription(conn) {
+    departures++;
+    if (!pushSupported()) return;
+    try {
+        if (conn?.open) await conn.request(Msg.DeviceRequest, { action: "push_unsubscribe" }, Msg.DeviceResult, { accept: r => r.action === "push_unsubscribe", timeout: 3000 });
+    } catch {
+        // Best effort: the browser-side unsubscribe below still applies.
+    }
+    try {
+        const reg = await navigator.serviceWorker.getRegistration("/app/");
+        await (await reg?.pushManager.getSubscription())?.unsubscribe();
+    } catch {
+        // Best effort.
+    }
 }
 
 export async function setPushPreferences(conn, preferences) {

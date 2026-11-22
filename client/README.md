@@ -162,7 +162,10 @@ channel media E2EE. See the root README for the precise encryption boundaries.
 
 A linked phone normally signs in with its saved device key or a passkey.
 Trusted desktops automatically endorse passkey-created devices only after
-verifying the signed proof. Normal phone sign-out preserves its passkeys; the
+verifying the signed proof. A device confirmed by hand (fingerprint comparison)
+must also present its own signature over its encryption key; a device linked
+before this was introduced publishes it the next time an up-to-date client
+signs in on it. Normal phone sign-out preserves its passkeys; the
 first/master device cannot be remotely signed out from another device.
 
 The updater verifies a signed manifest and artifact hash, then supervises

@@ -19,6 +19,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"noxa/internal/auth"
+	"noxa/internal/devicetrust"
 	"noxa/internal/eventbus"
 	"noxa/internal/netproto"
 	"noxa/internal/store"
@@ -32,6 +33,7 @@ type DeviceStore interface {
 	ListDevices(ctx context.Context, principal string, includeRevoked bool) ([]store.Device, error)
 	TouchDevice(ctx context.Context, deviceID string, at time.Time) error
 	MarkDeviceKeyProven(ctx context.Context, deviceID string) error
+	SetDeviceKeyClaim(ctx context.Context, principal, deviceID string, claim []byte) (store.Device, error)
 	RenameDevice(ctx context.Context, principal, deviceID, name string) (store.Device, error)
 	RevokeDevice(ctx context.Context, principal, deviceID, reason string) (store.Device, error)
 	SignOutDevice(ctx context.Context, principal, deviceID string) (store.Device, error)
@@ -69,6 +71,7 @@ type deviceLink struct {
 
 	claimKey      string
 	claimX25519   string
+	claimSig      []byte
 	claimPlatform string
 	claimVia      string
 
@@ -172,6 +175,7 @@ func deviceInfo(d store.Device, currentDeviceID string) netproto.DeviceInfo {
 		Name:          d.Name,
 		Fingerprint:   netproto.KeyFingerprint(d.Ed25519Public),
 		X25519Public:  d.X25519Public,
+		KeyClaim:      d.KeyClaim,
 		FirstDevice:   d.FirstDevice,
 		Ed25519Public: d.Ed25519Public,
 		Confirmed:     d.FirstDevice || len(d.ApprovalSignature) > 0,
@@ -441,6 +445,8 @@ func (s *TCPServer) handleDeviceRequest(ctx context.Context, client *Client, f *
 	switch r.Action {
 	case netproto.DeviceActionEndorse:
 		return s.handleEndorse(ctx, client, r)
+	case netproto.DeviceActionKeyClaim:
+		return s.handleKeyClaim(ctx, client, r)
 	case netproto.DeviceActionHistoryPut, netproto.DeviceActionHistoryGet, netproto.DeviceActionHistoryAck:
 		return s.handleHistory(ctx, client, r)
 	case netproto.DeviceActionPushConfig, netproto.DeviceActionPushSubscribe, netproto.DeviceActionPushUnsubscribe,
@@ -533,6 +539,27 @@ func (s *TCPServer) handleDeviceRequest(ctx context.Context, client *Client, f *
 		return s.handleLinkDecide(ctx, client, r)
 	}
 	return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid device request")
+}
+
+// handleKeyClaim stores the calling device's signature over its own stored
+// keys, so the account's other devices can check that its encryption key
+// belongs to its signing key before they confirm it.
+func (s *TCPServer) handleKeyClaim(ctx context.Context, client *Client, r netproto.DeviceRequest) error {
+	d, err := s.ensureDesktopDevice(ctx, client)
+	if err != nil {
+		return s.deviceFailure(ctx, client, err)
+	}
+	principal := client.uniqueID()
+	if !devicetrust.VerifyKeyClaim(netproto.DeviceKeyClaimRef(principal), d.Ed25519Public, d.X25519Public, r.Signature) {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "the key claim does not match this device's keys")
+	}
+	if !bytes.Equal(d.KeyClaim, r.Signature) {
+		if d, err = s.deps.Devices.SetDeviceKeyClaim(ctx, principal, d.DeviceID, r.Signature); err != nil {
+			return s.deviceFailure(ctx, client, err)
+		}
+	}
+	info := deviceInfo(d, client.currentDeviceID())
+	return s.writeMessage(client, netproto.MsgDeviceResult, netproto.DeviceResult{Action: r.Action, Device: &info})
 }
 
 func (s *TCPServer) deviceFailure(ctx context.Context, client *Client, err error) error {
@@ -799,6 +826,7 @@ func (s *TCPServer) handleLinkClaim(ctx context.Context, client *Client, r netpr
 	link.state = netproto.LinkStateClaimed
 	link.claimKey = r.Ed25519PublicKey
 	link.claimX25519 = r.X25519PublicKey
+	link.claimSig = r.Signature
 	link.claimPlatform = strings.TrimSpace(r.Platform)
 	link.claimVia = via
 	link.expires = now.Add(deviceLinkTTL)
@@ -809,6 +837,7 @@ func (s *TCPServer) handleLinkClaim(ctx context.Context, client *Client, r netpr
 		Platform:         link.claimPlatform,
 		Ed25519PublicKey: link.claimKey,
 		X25519PublicKey:  link.claimX25519,
+		KeyClaim:         link.claimSig,
 		Via:              via,
 	}
 	creatorClientID, creatorKey, expires := link.creatorClientID, link.creatorKey, link.expires

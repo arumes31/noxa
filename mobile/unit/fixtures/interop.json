@@ -14,6 +14,7 @@
   "link_proof": "svnrFnpyPSPw5Zr6sArwJCZdsujmCAirWUzXHgX45iU=",
   "link_sas": "72",
   "claim_key_signature": "AenMaV9GX30t5ZvkxX/5b7FWf5ZrolfttA5NWup1lPE6XQusy162tNOVl5hl2J4Si3JI+IzNkyH7jMMTg43cAg==",
+  "device_key_claim_signature": "/rxlE7OVvpy9rOYRD4mTKdr+kHovp5MTvFYUg2M8v/ezxNpyM0Wq0A4uXQYKc4VybmZyAQGthgmaxGS3u3i8BQ==",
   "code_sas": "75",
   "code": "K7QM4XPA",
   "scope_key": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",

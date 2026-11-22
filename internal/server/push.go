@@ -87,6 +87,9 @@ type pushNotice struct {
 }
 
 type pushPayload struct {
+	// To is the receiving account, so a browser that meanwhile holds another
+	// account drops the notification.
+	To    string `json:"to,omitempty"`
 	Kind  string `json:"kind"`
 	Tag   string `json:"tag"`
 	From  string `json:"from,omitempty"`
@@ -356,7 +359,7 @@ func (s *TCPServer) deliverPush(ctx context.Context, sub store.PushSubscription,
 			return webpush.Subscription{}, webpush.Message{}, errPushNotSent
 		}
 		sub = current
-		payload := pushPayload{Kind: n.Kind, Tag: n.Tag, Video: n.Video, At: time.Now().Unix()}
+		payload := pushPayload{To: sub.Principal, Kind: n.Kind, Tag: n.Tag, Video: n.Video, At: time.Now().Unix()}
 		if !sub.HideDetails {
 			payload.From, payload.Place = n.From, n.Place
 		}

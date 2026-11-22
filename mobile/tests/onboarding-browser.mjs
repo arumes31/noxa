@@ -50,7 +50,7 @@ export const sheet=async()=>true;
 export const notifier={install(){},decide(){return {count:true}},read(){}};
 export const activityShared=()=>false,isMuted=()=>false,syncMuted=()=>{},watchCallLog=()=>{},resetCallLog=async()=>{};
 export const enqueue=()=>{},flush=async()=>{},showPending=async()=>{},waitingCount=async()=>0;
-export const announceRead=()=>{},closeAllNotifications=async()=>{},closeNotifications=()=>{},reportVisibility=()=>{},setBadge=()=>{},syncPush=async()=>({});
+export const announceRead=()=>{},closeAllNotifications=async()=>{},closeNotifications=()=>{},dropPushSubscription=async()=>{},reportVisibility=()=>{},setBadge=()=>{},syncPush=async()=>({});
 export const addServer=()=>{};
 // (#52) reconnect jitter imported by app.js.
 export const holdUpdates=()=>()=>{};

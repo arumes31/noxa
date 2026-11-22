@@ -6,7 +6,7 @@
 import { solvePow } from "./pow.js";
 import { Connection, ProtocolError } from "./connection.js";
 import {
-    deviceKeyClaimTranscript, fromBase64URL, keyFingerprint, linkClaimTranscript, linkProof, linkSAS, normalizeLinkCode, publicKeyPEM, sign,
+    deviceKeyClaimTranscript, fromBase64URL, keyClaimRef, keyFingerprint, linkClaimTranscript, linkProof, linkSAS, normalizeLinkCode, publicKeyPEM, sign,
     toBase64, toBase64URL, uniqueIDFromPublicKey, utf8,
 } from "./crypto.js";
 import { Msg } from "./frame.js";
@@ -175,7 +175,10 @@ export const CLIENT_FEATURE_RESUME = "resume-v1";
 // the server issues no challenge to a client that does not announce it.
 export const CLIENT_FEATURE_BOUND_LOGIN = "login-bound-v2";
 
-export async function signIn(conn, identity, { version, nickname = "", serverPassword = "", goodbye = false, resumeToken = "", serverBinding = pageServerBinding() } = {}) {
+// keyClaim: after signing in, publish this device's signature over its own
+// signing and encryption key. The account's other devices verify it before
+// they confirm this device (core/devices.js endorseDevice). Best effort.
+export async function signIn(conn, identity, { version, nickname = "", serverPassword = "", goodbye = false, resumeToken = "", serverBinding = pageServerBinding(), keyClaim = false } = {}) {
     const uniqueID = uniqueIDFromPublicKey(identity.edPublic);
     const x25519 = toBase64(identity.xPublic);
     const authenticate = {
@@ -214,6 +217,10 @@ export async function signIn(conn, identity, { version, nickname = "", serverPas
         unique_id: "", public_key: publicKeyPEM(identity.edPublic), signature: toBase64(signature), x25519_public_key: x25519,
     }, Msg.AuthResponse);
     if (!response.ok) throw signInError(response.reason);
+    if (keyClaim && response.device_id && typeof response.unique_id === "string" && !/[\r\n]/.test(response.unique_id)) {
+        const claim = sign(deviceKeyClaimTranscript(keyClaimRef(response.unique_id), publicKeyPEM(identity.edPublic), x25519), identity.edSecret);
+        conn.request(Msg.DeviceRequest, { action: "key_claim", signature: toBase64(claim) }, Msg.DeviceResult, { accept: r => r.action === "key_claim" }).catch(() => {});
+    }
     return response;
 }
 

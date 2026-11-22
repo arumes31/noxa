@@ -18,7 +18,7 @@ import { signIn } from "./core/device.js";
 import { signKeyRecord } from "./core/dm-trust.js";
 import { assertIdentityFence, beginIdentity, clearIdentity, loadIdentity, saveIdentity, updateMeta } from "./core/identity-store.js";
 import { enqueue, flush as flushOutbox, showPending, waitingCount } from "./core/outbox.js";
-import { announceRead, closeAllNotifications, closeNotifications, reportVisibility, setBadge, syncPush } from "./core/push.js";
+import { announceRead, closeAllNotifications, closeNotifications, dropPushSubscription, reportVisibility, setBadge, syncPush } from "./core/push.js";
 import { get as setting } from "./core/settings.js";
 import { addServer } from "./core/servers.js";
 import { notifier } from "./notifier.js";
@@ -135,7 +135,10 @@ export async function rememberLinkedIdentity(identity, meta, fence) {
 /** Drops the in-memory state of a replaced account (its stores are already cleared). */
 async function resetAccountMemory() {
     clearReminders();
-    // Shown notifications name the departed account's contacts and channels.
+    // Shown notifications name the departed account's contacts and channels,
+    // and its push subscription would keep delivering new ones. A session
+    // still open here is the departed account's (the new one is not published yet).
+    await dropPushSubscription(app.session?.conn);
     await closeAllNotifications();
     await resetCallLog();
     await app.saved?.clear();
@@ -149,6 +152,9 @@ export async function forgetDevice(fence) {
     connectionGeneration++;
     stopRatchet();
     clearReminders();
+    // The server already removed this device's subscription (sign-out,
+    // revocation); the browser must not keep it for the next account.
+    await dropPushSubscription();
     await closeAllNotifications();
     app.groups?.close();
     app.groups = null;
@@ -543,6 +549,7 @@ export async function connect({ guest = null, fence } = {}) {
             serverPassword: guest ? guest.serverPassword : app.guestPassword || "",
             goodbye: true,
             resumeToken: resume.identity === identity ? resume.token : "",
+            keyClaim: !guest && !app.meta.guest,
         });
     } catch (error) {
         conn.close();

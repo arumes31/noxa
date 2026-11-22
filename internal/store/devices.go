@@ -65,6 +65,9 @@ type Device struct {
 	// without signing for it: it serves that account's sessions but never
 	// routes a key login, and a proven registration of the key replaces it.
 	KeyUnproven bool
+	// KeyClaim is the device's own signature binding its encryption key to
+	// its signing key (netproto.DeviceKeyClaimRef); nil until it publishes one.
+	KeyClaim []byte
 }
 
 // Active reports whether the device is not revoked.
@@ -91,7 +94,7 @@ type NewDevice struct {
 
 const deviceColumns = `device_id, principal, COALESCE(user_id, 0), kind, name, ed25519_public,
 	x25519_public, first_device, approved_by, approval_signature, created_at, last_seen_at,
-	expiry_warned_at, revoked_at, revoked_reason, passkey_proof, key_proven`
+	expiry_warned_at, revoked_at, revoked_reason, passkey_proof, key_proven, key_claim`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
@@ -101,7 +104,7 @@ func scanDevice(row rowScanner) (Device, error) {
 	var proven bool
 	err := row.Scan(&d.DeviceID, &d.Principal, &d.UserID, &d.Kind, &d.Name, &d.Ed25519Public,
 		&d.X25519Public, &d.FirstDevice, &d.ApprovedBy, &d.ApprovalSignature, &d.CreatedAt,
-		&d.LastSeenAt, &warned, &revoked, &d.RevokedReason, &d.PasskeyProof, &proven)
+		&d.LastSeenAt, &warned, &revoked, &d.RevokedReason, &d.PasskeyProof, &proven, &d.KeyClaim)
 	if err != nil {
 		return Device{}, err
 	}
@@ -261,6 +264,20 @@ func (s *Store) MarkDeviceKeyProven(ctx context.Context, deviceID string) error 
 		return fmt.Errorf("marking device key proven: %w", err)
 	}
 	return nil
+}
+
+// SetDeviceKeyClaim stores an active device's own key claim. The caller
+// verified it against the device's stored keys.
+func (s *Store) SetDeviceKeyClaim(ctx context.Context, principal, deviceID string, claim []byte) (Device, error) {
+	d, err := scanDevice(s.db.QueryRowContext(ctx, `UPDATE user_devices SET key_claim=$3
+		WHERE principal=$1 AND device_id=$2 AND revoked_at IS NULL RETURNING `+deviceColumns, principal, deviceID, claim))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Device{}, ErrDeviceNotFound
+	}
+	if err != nil {
+		return Device{}, fmt.Errorf("storing device key claim: %w", err)
+	}
+	return d, nil
 }
 
 // DeviceByKey returns the device registered with the identity key, revoked

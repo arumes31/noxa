@@ -7,6 +7,8 @@ import (
 	"fmt"
 
 	"filippo.io/edwards25519"
+
+	"noxa/internal/netproto"
 )
 
 // LoadPublicKey parses a PEM-encoded Ed25519 public key and returns the raw
@@ -26,6 +28,17 @@ func LoadPublicKey(publicKeyPEM string) (ed25519.PublicKey, error) {
 		return nil, errors.New("invalid ed25519 public key: small-order point")
 	}
 	return ed25519.PublicKey(block.Bytes), nil
+}
+
+// VerifyKeyClaim reports whether claim is the signature of the Ed25519 key
+// ed25519Public over netproto.DeviceKeyClaimTranscript(ref, ...): the holder
+// of the signing key states that x25519Public is its encryption key. A device
+// checks this before it signs an approval over keys a server relayed, so the
+// encryption key is tied to the signing key the user verified.
+func VerifyKeyClaim(ref, ed25519Public, x25519Public string, claim []byte) bool {
+	key, err := LoadPublicKey(ed25519Public)
+	return err == nil && len(claim) == ed25519.SignatureSize &&
+		ed25519.Verify(key, netproto.DeviceKeyClaimTranscript(ref, ed25519Public, x25519Public), claim)
 }
 
 // smallOrderPublicKey reports a key in the small torsion subgroup (such as the

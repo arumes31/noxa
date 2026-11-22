@@ -1,6 +1,7 @@
 package devicetrust
 
 import (
+	"bytes"
 	"crypto/ed25519"
 
 	"noxa/internal/netproto"
@@ -19,8 +20,9 @@ type VerifiedRevocation struct {
 // device in trusted (the result of Verify for the same account) signed over
 // DeviceRevocationTranscript. Unsigned (server-only) entries, malformed
 // entries, forged signatures, signers outside the trusted set and duplicates
-// are left out. The first device can only be revoked by itself: no other
-// device of the account may take the root's place in the chain.
+// are left out. The first device can only be revoked by itself, under its own
+// device ID: no other device of the account may take the root's place in the
+// chain, and an entry that carries the root's key under another ID is refused.
 //
 // A revocation stays valid after its signer is revoked in turn, but a client
 // can only verify it while the signer is still trusted; clients pin verified
@@ -32,10 +34,11 @@ func VerifyRevocations(principal string, trusted []Device, list []netproto.Devic
 	}
 	byID := make(map[string]Device, len(trusted))
 	root := ""
+	var rootKey ed25519.PublicKey
 	for _, d := range trusted {
 		byID[d.ID] = d
 		if d.First {
-			root = d.ID
+			root, rootKey = d.ID, d.Signing
 		}
 	}
 	seen := map[string]bool{}
@@ -48,12 +51,14 @@ func VerifyRevocations(principal string, trusted []Device, list []netproto.Devic
 		if !ok || len(signer.Signing) != ed25519.PublicKeySize {
 			continue
 		}
-		// The root can only revoke itself; a revoked device's key must be a
-		// valid signing key so the pin can match it later.
-		if r.DeviceID == root && r.SignerDeviceID != root {
+		// A revoked device's key must be a valid signing key so the pin can
+		// match it later. The root can only revoke itself: an entry naming
+		// its ID or carrying its key counts only as its own self-revocation.
+		key, err := LoadPublicKey(r.Ed25519Public)
+		if err != nil {
 			continue
 		}
-		if _, err := LoadPublicKey(r.Ed25519Public); err != nil {
+		if (r.DeviceID == root || bytes.Equal(key, rootKey)) && (r.DeviceID != root || r.SignerDeviceID != root) {
 			continue
 		}
 		transcript := netproto.DeviceRevocationTranscript(principal, r.SignerDeviceID, r.DeviceID, r.Ed25519Public, r.X25519Public, r.SignedAt, r.Reason)

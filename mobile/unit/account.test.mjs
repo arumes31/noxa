@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { BackupError, exportBackup, importBackup } from "../src/core/backup.js";
-import { fromBase64, generateIdentity, keyFingerprint, openDM, publicKeyPEM, toBase64 } from "../src/core/crypto.js";
+import { deviceKeyClaimTranscript, fromBase64, generateIdentity, keyClaimRef, keyFingerprint, openDM, publicKeyPEM, sign, toBase64 } from "../src/core/crypto.js";
 import { approvalTranscript, buildHistoryChunks, endorseDevice, historyMessagesSince, needsConfirmation } from "../src/core/devices.js";
 import { isForThisServer, parseInviteLink, pendingInvite, setPendingInvite, webInviteURL } from "../src/core/invite.js";
 import { classifySignIn } from "../src/core/login-errors.js";
@@ -195,7 +195,8 @@ describe("device confirmation", () => {
         const me = generateIdentity();
         const other = generateIdentity();
         const pem = publicKeyPEM(other.edPublic);
-        const target = { device_id: "dev-2", name: "Tablet", fingerprint: keyFingerprint(pem), ed25519_public_key: pem, x25519_public_key: toBase64(other.xPublic) };
+        const target = { device_id: "dev-2", name: "Tablet", fingerprint: keyFingerprint(pem), ed25519_public_key: pem, x25519_public_key: toBase64(other.xPublic),
+            key_claim: toBase64(sign(deviceKeyClaimTranscript(keyClaimRef("uid-1"), pem, toBase64(other.xPublic)), other.edSecret)) };
         assert.equal(needsConfirmation(target), true);
         assert.equal(needsConfirmation({ ...target, confirmed: true }), false);
         let sent;

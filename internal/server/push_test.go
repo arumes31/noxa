@@ -293,7 +293,7 @@ func TestPushSkipsForegroundPhoneAndHidesDetails(t *testing.T) {
 	})
 	p.env.srv.pushNotify("user-uid", pushNotice{Kind: pushKindDM, Tag: "dm:ivy", From: "Ivy"})
 	got := p.sender.next(t)
-	if got.payload.Kind != pushKindDM || got.payload.From != "Ivy" || got.payload.Tag != "dm:ivy" || got.msg.Topic != pushTopic(p.subAuth(t), "dm:ivy") {
+	if got.payload.To != "user-uid" || got.payload.Kind != pushKindDM || got.payload.From != "Ivy" || got.payload.Tag != "dm:ivy" || got.msg.Topic != pushTopic(p.subAuth(t), "dm:ivy") {
 		t.Fatalf("push = %+v", got)
 	}
 
@@ -304,8 +304,8 @@ func TestPushSkipsForegroundPhoneAndHidesDetails(t *testing.T) {
 		t.Fatalf("hidden-details push = %+v", got.payload)
 	}
 	raw, _ := json.Marshal(got.payload)
-	if string(raw) != `{"kind":"mention","tag":"channel:4","at":`+jsonInt(got.payload.At)+`}` {
-		t.Fatalf("hidden-details payload carries more than kind and tag: %s", raw)
+	if string(raw) != `{"to":"user-uid","kind":"mention","tag":"channel:4","at":`+jsonInt(got.payload.At)+`}` {
+		t.Fatalf("hidden-details payload carries more than the receiving account, kind and tag: %s", raw)
 	}
 }
 

@@ -917,6 +917,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 		m.ensureDeviceRegistered(conn)
 		m.approvePasskeyDevices(conn)
 		m.startRatchetRecorded(conn)
+		m.publishKeyClaim(conn)
 	})
 	// Settings may change during authentication. The reader now permits a
 	// confirmed correction without exposing another tab's settings failure.

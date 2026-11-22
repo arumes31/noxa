@@ -431,7 +431,9 @@ export class DirectMessages extends EventTarget {
                 entry.trust = Trust.ok;
                 entry.signingKey = signingKey;
                 entry.encryptionKey = encryptionKey;
-                entry.devices = trustedDevices(uid, devices, signingKey, entry.encryptionKey);
+                // A device already pinned as revoked signs no further
+                // revocations, even when the directory lists it as active again.
+                entry.devices = withoutRevokedPins(trustedDevices(uid, withoutRevokedApprovers(devices, pinned?.revoked), signingKey, entry.encryptionKey), pinned?.revoked);
                 // (38) Revocations a device of this account signed are pinned
                 // and keep the device out, whatever later directories list.
                 const merged = mergeRevocationPins(pinned?.revoked, verifyRevocations(uid, entry.devices, response.revocations || []));
