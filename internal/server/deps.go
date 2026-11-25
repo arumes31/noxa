@@ -14,7 +14,6 @@ import (
 	"noxa/internal/auth"
 	"noxa/internal/authorization"
 	"noxa/internal/broadcast"
-	"noxa/internal/channels"
 	"noxa/internal/chatcrypto"
 	"noxa/internal/filetransfer"
 	"noxa/internal/metrics"
