@@ -100,18 +100,3 @@ export function muteToggle(tag) {
         h("span", { class: "row-main" }, h("span", { class: "row-title" }, t("conv.mute")), h("span", { class: "row-sub" }, t("conv.muteHint"))),
         input);
 }
-
-/** Saves text as a file download. */
-export function downloadText(name, text) {
-    const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
-    const link = h("a", { href: url, download: name, hidden: true });
-    document.body.append(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
-}
-
-/** A file-name-safe version of a conversation name. */
-export function safeFileName(name) {
-    return String(name || "conversation").replace(/[^\p{L}\p{N}._-]+/gu, "_").slice(0, 60) || "conversation";
-}
