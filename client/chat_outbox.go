@@ -203,7 +203,11 @@ func (a *App) ChatOutboxForTab(tabID string, request ChatOutboxRequest) (ChatOut
 	// app-wide outbox lock is held. The decision is re-validated below.
 	var cancelChecked *ChatOutboxEntry
 	if request.Action == "cancel" && !request.AcknowledgeUndelivered {
-		if pre, err := store.load(); err == nil {
+		// load reads outboxSending, which the pump changes under outboxMu.
+		outboxMu.Lock()
+		pre, err := store.load()
+		outboxMu.Unlock()
+		if err == nil {
 			for _, e := range pre {
 				if e.ID == request.ID {
 					if err := cm.ratchetOutboxCancelable(e); err != nil {

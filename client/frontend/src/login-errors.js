@@ -13,6 +13,9 @@ export function loginFailure(error, request = {}) {
     if (reason === "invalid credentials" || reason === "account password is incorrect") return { kind: "account", field: "login-accountpw", invalid: true };
     if (reason === "authentication failed") return { kind: "authentication", field: "login-accountpw" };
     if (reason === "banned") return { kind: "banned" };
+    // The server appends the ban's reason; show it in its original case.
+    const ban = /^(?:TLS connection failed: )?banned: ([\s\S]+)$/i.exec(text);
+    if (ban) return { kind: "banned", reason: ban[1] };
     if (reason === "too many failed logins, try again later") return { kind: "rateLimit" };
     if (reason === "server is busy, try again in a moment") return { kind: "busy" };
     if (reason === "server address is required") return { kind: "addressRequired", field: "login-addr", invalid: true };
@@ -82,7 +85,7 @@ export function createLoginFeedback($) {
             const badge = document.createElement("span"); badge.className = "login-failure-category"; badge.dataset.category = category;
             badge.textContent = t(`login.category.${category}`); area.append(badge);
         }
-        const message = document.createElement("p"); message.textContent = t(`login.failure.${failure.kind}`, failure); area.append(message);
+        const message = document.createElement("p"); message.textContent = t(failure.reason ? "login.failure.bannedReason" : `login.failure.${failure.kind}`, failure); area.append(message);
         const action = t(`login.recovery.${failure.kind}`, failure);
         const field = failure.field && $(failure.field);
         if (field) {

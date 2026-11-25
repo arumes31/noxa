@@ -396,7 +396,7 @@ func (a *App) newTabManager(id string, identity *identity) *connManager {
 	cm.reconcileLobbyPrivacy = func() error { return a.applyLobbyPrivacyFor(cm) }
 	cm.sink = tabSink{app: a, tabID: id, owner: cm}
 	cm.dmChanges = a.recordDMChange
-	cm.ratchetProject = a.projectRatchetRecord
+	cm.ratchetProject = a.projectRatchetRecords
 	cm.dmTTL = func(peer string) int64 { return a.dmDisappearingTTL(cm, peer) }
 	cm.allowPlaintext = allowPlaintext
 	if a.knownServers != nil {

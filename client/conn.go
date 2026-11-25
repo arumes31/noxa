@@ -176,12 +176,13 @@ type connManager struct {
 	// in-memory transports, store dir, protection). Every authenticated
 	// session uses the new protocol (ratchetDefault); supportsOlm records the
 	// server's capability. ratchetSess is the consumer of the current
-	// (conn, epoch); ratchetProject persists its records (App).
+	// (conn, epoch); ratchetProject persists its records (App): one live
+	// record, or the whole archive replayed at session start.
 	ratchetCfg     *ratchetConfig
 	ratchetDefault bool
 	supportsOlm    bool
 	ratchetSess    *ratchetSession
-	ratchetProject func(m *connManager, r RatchetRecord, isNew bool)
+	ratchetProject func(m *connManager, records []RatchetRecord, isNew bool)
 	// dmTTL returns a direct conversation's disappearing-messages timer
 	// (App, dm_disappearing.go); nil = off.
 	dmTTL func(peer string) int64
