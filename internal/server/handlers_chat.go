@@ -474,20 +474,28 @@ func (s *TCPServer) ackSpooled(ctx context.Context, client *Client, fromUniqueID
 	for id, w := range s.spoolAwait {
 		if w.client == client && w.msgID == clientMsgID && w.from == fromUniqueID {
 			ids = append(ids, id)
-			delete(s.spoolAwait, id)
 		}
 	}
 	s.spoolAwaitMu.Unlock()
 	if len(ids) == 0 {
 		return
 	}
-	// A failed mark leaves the rows pending; they replay on the next login.
+	// A failed mark leaves the rows pending and still awaited, so this
+	// session is not written them again; they replay on the next login.
 	if err := s.deps.Spool.MarkMessagesDelivered(ctx, ids); err != nil {
 		s.logger.Warn("marking spooled messages delivered failed",
 			zap.String("client_id", client.ID),
 			zap.Error(err),
 		)
+		return
 	}
+	s.spoolAwaitMu.Lock()
+	for _, id := range ids {
+		if s.spoolAwait[id].client == client {
+			delete(s.spoolAwait, id)
+		}
+	}
+	s.spoolAwaitMu.Unlock()
 }
 
 // awaitSpoolReceipt reports whether the row now waits for this session's
@@ -540,6 +548,10 @@ func (s *TCPServer) deliverSpooledPass(ctx context.Context, client *Client, user
 	ids := make([]int64, 0, len(msgs)) // marked delivered when written
 	written := 0
 	for _, m := range msgs {
+		// A ban or removal can land while the pass runs: stop writing then.
+		if client.sessionRevoked() {
+			break
+		}
 		afterID = m.ID
 		switch {
 		case m.RecipientDeviceID != "":
