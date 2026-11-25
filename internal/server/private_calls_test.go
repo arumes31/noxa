@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,9 +23,14 @@ type privateCallTestStore struct {
 	calls   map[string]netproto.CallSession
 	groupMu sync.Mutex
 	group   netproto.Conversation
+	// failSaves is the number of coming SavePrivateCall calls that fail.
+	failSaves atomic.Int32
 }
 
 func (f *privateCallTestStore) SavePrivateCall(_ context.Context, call netproto.CallSession) error {
+	if f.failSaves.Add(-1) >= 0 {
+		return errors.New("store unavailable")
+	}
 	f.callMu.Lock()
 	defer f.callMu.Unlock()
 	call.Participants = append([]netproto.CallParticipant(nil), call.Participants...)
@@ -551,4 +558,98 @@ func TestPrivateCallStartAnswersAlikeForHiddenAndOfflineCallee(t *testing.T) {
 			t.Fatalf("hidden online callee = %+v, want it like offline %+v", got, want)
 		}
 	})
+}
+
+// A call whose end could not be saved stays live in memory until a retry
+// saved it; only then is it retired.
+func TestPrivateCallExpirySaveFailureRetriesBeforeRetiring(t *testing.T) {
+	env, backend := privateCallsTestEnv(t)
+	defer env.stop()
+	caller, _ := dialCallAuthed(t, env, "admin-uid")
+	defer func() { _ = caller.Close() }()
+	callee, _ := dialCallAuthed(t, env, "user-uid")
+	defer func() { _ = callee.Close() }()
+	call := privateCallRequest(t, caller, netproto.CallRequest{Action: "start", Target: "user-uid"})
+	state := func() (live netproto.CallSession, found, dirty bool) {
+		env.srv.privateCallsMu.Lock()
+		defer env.srv.privateCallsMu.Unlock()
+		live, found = env.srv.privateCalls[call.ID]
+		return live, found, env.srv.privateCallDirty[call.ID]
+	}
+	stored := func() netproto.CallSession {
+		backend.callMu.Lock()
+		defer backend.callMu.Unlock()
+		return backend.calls[call.ID]
+	}
+	env.srv.privateCallsMu.Lock()
+	ringing := env.srv.privateCalls[call.ID]
+	ringing.RingUntil = time.Now().Unix() - 1
+	env.srv.privateCalls[call.ID] = ringing
+	env.srv.privateCallsMu.Unlock()
+
+	backend.failSaves.Store(1)
+	env.srv.expirePrivateCall(call.ID)
+	if live, found, dirty := state(); !found || live.EndedAt == 0 || !dirty || stored().EndedAt != 0 {
+		t.Fatalf("after a failed save: live=%+v found=%t dirty=%t stored=%+v", live, found, dirty, stored())
+	}
+	env.srv.retirePrivateCall(call.ID)
+	if _, found, _ := state(); !found {
+		t.Fatal("call retired before its end was saved")
+	}
+	// The retry (normally 10 s later) saves the current state.
+	env.srv.privateCallsMu.Lock()
+	env.srv.saveCallCleanup(env.srv.privateCalls[call.ID])
+	env.srv.privateCallsMu.Unlock()
+	if _, _, dirty := state(); dirty || stored().EndedAt == 0 {
+		t.Fatalf("retry did not save the end: dirty=%t stored=%+v", dirty, stored())
+	}
+	env.srv.retirePrivateCall(call.ID)
+	if _, found, _ := state(); found {
+		t.Fatal("saved call was not retired")
+	}
+}
+
+// A participant whose connection stopped taking writes does not hold the
+// call lock: neither a signal on its way to it nor the reply to its own
+// request keeps other call actions and disconnect cleanup waiting.
+func TestPrivateCallWritesDoNotHoldCallLock(t *testing.T) {
+	env, _ := privateCallsTestEnv(t)
+	defer env.stop()
+	caller, callerID := dialCallAuthed(t, env, "admin-uid")
+	defer func() { _ = caller.Close() }()
+	callee, calleeID := dialCallAuthed(t, env, "user-uid")
+	defer func() { _ = callee.Close() }()
+	call := privateCallRequest(t, caller, netproto.CallRequest{Action: "start", Target: "user-uid"})
+	privateCallRequest(t, callee, netproto.CallRequest{Action: "accept", ID: call.ID})
+	lockFree := func(what string) {
+		t.Helper()
+		time.Sleep(300 * time.Millisecond) // lets the blocked write be reached
+		if !env.srv.privateCallsMu.TryLock() {
+			t.Fatalf("call lock held while %s", what)
+		}
+		env.srv.privateCallsMu.Unlock()
+	}
+
+	// A stalled writer: every write to the session waits for wmu.
+	recipient, _ := env.srv.clientByID(calleeID)
+	if err := recipient.wmu.LockContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := privateCallSignalPayload(t, call.ID)
+	delivered := make(chan error, 1)
+	go func() { delivered <- env.srv.writeRoleBroadcast(recipient, payload) }()
+	lockFree("a signal waits for its recipient's connection")
+	recipient.wmu.Unlock()
+	if err := <-delivered; err != nil {
+		t.Fatal(err)
+	}
+
+	requester, _ := env.srv.clientByID(callerID)
+	if err := requester.wmu.LockContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	send(t, caller, netproto.MsgCallRequest, netproto.CallRequest{Action: "get", ID: call.ID})
+	lockFree("a reply waits for the requester's connection")
+	requester.wmu.Unlock()
+	readOfType(t, caller, netproto.MsgCallResult)
 }
