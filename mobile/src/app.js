@@ -744,8 +744,14 @@ export async function connect({ guest = null, fence } = {}) {
         await updateMeta({ deviceID: session.deviceID || auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname, priorPrincipal: undefined }, fence);
         checkAttempt();
     } catch (error) {
-        if (app.session === session) disconnect();
-        else session.close();
+        if (app.session === session) {
+            disconnect();
+            // This attempt's own rollback, not a deliberate leave: it stays retryable.
+            if (error?.code !== "fenced") {
+                app.paused = false;
+                error.rollback = true;
+            }
+        } else session.close();
         conn.close();
         throw error;
     }
@@ -1009,13 +1015,41 @@ function scheduleReconnect(nextDelay) {
     app.reconnects++;
     clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
-        if (!app.identity || app.paused) return;
+        // A newer attempt may have connected since this timer was set.
+        if (!app.identity || app.paused || (app.session && app.online)) return;
+        const attempt = connectionGeneration + 1;
         connect().catch(error => {
-            // Revoked devices and servers that need an update never loop.
-            if (error.kind === "restarting") scheduleReconnect(error.retryAfter * 1000);
-            else if (!error.revoked && error.kind !== "serverOutdated") scheduleReconnect();
+            // A superseded attempt leaves retrying to the newer one.
+            if ((attempt !== connectionGeneration && !error.rollback) || retryConnect(error) || error.revoked) return;
+            disconnect();
+            emit("refused", error);
         });
     }, delay);
+}
+
+/**
+ * After a failed sign-in: schedules another attempt and returns true, or
+ * returns false for a refusal that waiting cannot fix (a ban, a wrong server
+ * password, an unsupported version, a revoked device: core/login-errors.js).
+ */
+export function retryConnect(error) {
+    if (error.revoked || error.definitive) return false;
+    scheduleReconnect(error.kind === "restarting" ? error.retryAfter * 1000 : undefined);
+    return true;
+}
+
+/**
+ * Runs a start that failed before the server answered again, once: when the
+ * network returns or after the next reconnect step.
+ */
+export function retryStart(start) {
+    const again = () => {
+        clearTimeout(timer);
+        window.removeEventListener("online", again);
+        start();
+    };
+    const timer = setTimeout(again, RECONNECT_STEPS[Math.min(reconnectAttempt++, RECONNECT_STEPS.length - 1)]);
+    window.addEventListener("online", again);
 }
 
 // Reconnect promptly when the phone comes back online or to the foreground.

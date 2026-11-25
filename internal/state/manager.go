@@ -208,12 +208,6 @@ func (m *Manager) AddChannel(ch *Channel) {
 	m.logger.Debug("state: channel added", zap.Int64("channel_id", stored.ChannelID), zap.String("name", stored.Name))
 }
 
-// RemoveChannel removes one channel. All clients still in the channel have
-// their ChannelID reset to 0, and the channel's membership set is dropped.
-func (m *Manager) RemoveChannel(channelID int64) {
-	_ = m.RemoveChannels([]int64{channelID})
-}
-
 // RemovedChannelMember records a client displaced by channel deletion.
 type RemovedChannelMember struct {
 	ClientID  string
@@ -421,17 +415,6 @@ func (m *Manager) SetChannelHasIcon(channelID int64, hasIcon bool) bool {
 	return m.UpdateChannel(channelID, ChannelUpdate{HasIcon: &hasIcon})
 }
 
-// ChannelHasIcon returns a lock-protected value snapshot for one channel.
-func (m *Manager) ChannelHasIcon(channelID int64) (hasIcon bool, found bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	channel, ok := m.channels[channelID]
-	if !ok {
-		return false, false
-	}
-	return channel.HasIcon, true
-}
-
 // ChannelCount returns the number of registered channels.
 func (m *Manager) ChannelCount() int {
 	m.mu.RLock()
@@ -450,83 +433,9 @@ func (m *Manager) ListChannels() []*Channel {
 	return out
 }
 
-// ChannelTree returns channels sorted by ParentID then OrderIndex, suitable
-// for building a channel tree.
-func (m *Manager) ChannelTree() []*Channel {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	out := make([]*Channel, 0, len(m.channels))
-	for _, ch := range m.channels {
-		out = append(out, cloneChannel(ch))
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].ParentID != out[j].ParentID {
-			return out[i].ParentID < out[j].ParentID
-		}
-		return out[i].OrderIndex < out[j].OrderIndex
-	})
-	return out
-}
-
 // ---------------------------------------------------------------------------
 // Membership methods
 // ---------------------------------------------------------------------------
-
-// JoinChannel validates that the client and channel exist, updates the
-// client's ChannelID, adds the client to the channel's membership set, and
-// increments the channel's ClientCount.
-func (m *Manager) JoinChannel(clientID string, channelID int64) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	c, ok := m.clients[clientID]
-	if !ok {
-		return ErrClientNotFound
-	}
-	ch, ok := m.channels[channelID]
-	if !ok {
-		return ErrChannelNotFound
-	}
-	if ch.TextOnly || ch.SystemKind == "home" {
-		return ErrTextChannel
-	}
-
-	// If already in this channel, nothing to do.
-	if c.ChannelID == channelID {
-		return nil
-	}
-
-	// Leave previous channel membership if any.
-	if c.ChannelID != 0 {
-		if members, ok := m.membership[c.ChannelID]; ok {
-			delete(members, clientID)
-			if len(members) == 0 {
-				delete(m.membership, c.ChannelID)
-			}
-			if prev, ok := m.channels[c.ChannelID]; ok && prev.ClientCount > 0 {
-				prev.ClientCount--
-			}
-		}
-	}
-
-	c.ChannelID = channelID
-	c.ChannelEpoch++
-	c.PresenceToken = rand.Text()
-	c.HandRaisedOrder = 0
-	c.HandCalled = false
-	members, ok := m.membership[channelID]
-	if !ok {
-		members = make(map[string]bool)
-		m.membership[channelID] = members
-	}
-	members[clientID] = true
-	ch.ClientCount++
-
-	m.logger.Debug("state: client joined channel",
-		zap.String("client_id", clientID),
-		zap.Int64("channel_id", channelID))
-	return nil
-}
 
 // LeaveChannel removes the client from its current channel's membership set,
 // decrements the channel's ClientCount, and sets the client's ChannelID to 0.
@@ -981,26 +890,6 @@ func (m *Manager) SetLobbyPrivacy(clientID string, hidden bool) {
 	if c := m.clients[clientID]; c != nil {
 		c.HideLobbyPresence = hidden
 	}
-}
-
-// SpeakingClients returns a snapshot slice of all current SpeakingStates.
-func (m *Manager) SpeakingClients() []*SpeakingState {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	out := make([]*SpeakingState, 0, len(m.speaking))
-	for _, ss := range m.speaking {
-		cloned := *ss
-		out = append(out, &cloned)
-	}
-	return out
-}
-
-// IsSpeaking reports whether the given client is currently speaking.
-func (m *Manager) IsSpeaking(clientID string) bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	_, ok := m.speaking[clientID]
-	return ok
 }
 
 // ---------------------------------------------------------------------------

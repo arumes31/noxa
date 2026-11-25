@@ -62,11 +62,11 @@ func TestMarkChannelIconsUsesConfinedValidatedDiscovery(t *testing.T) {
 		t.Fatalf("marked = %d, want 1", marked)
 	}
 	for id := int64(1); id <= 7; id++ {
-		hasIcon, ok := manager.ChannelHasIcon(id)
+		channel, ok := manager.GetChannel(id)
 		if !ok {
 			t.Fatalf("channel %d missing", id)
 		}
-		if got, want := hasIcon, id == 1; got != want {
+		if got, want := channel.HasIcon, id == 1; got != want {
 			t.Fatalf("channel %d HasIcon = %t, want %t", id, got, want)
 		}
 	}

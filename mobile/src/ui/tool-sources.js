@@ -41,11 +41,6 @@ export function conversations(session = app.session) {
     return out;
 }
 
-/** The title of a conversation tag. */
-export function conversationTitle(session, tag) {
-    return conversations(session).find(c => c.tag === tag)?.title || t("dm.someone");
-}
-
 /** People seen in the conversations, by name: [{uid, name}]. */
 export function people(session, list = conversations(session)) {
     const byUID = new Map();

@@ -314,13 +314,17 @@ func (m *connManager) startRatchet(conn net.Conn) error {
 		// it holds (idempotent). Live views load the DM log/group history
 		// themselves, so the replay emits no per-record frontend events.
 		if records, err := consumer.history(); err == nil {
-			for _, r := range records {
-				if consumer.check() != nil {
-					return
+			if consumer.check() != nil {
+				return
+			}
+			if hook := m.ratchetProject; hook != nil {
+				current := records[:0]
+				for _, r := range records {
+					if r.Protocol == ratchetProtocol {
+						current = append(current, r)
+					}
 				}
-				if hook := m.ratchetProject; hook != nil && r.Protocol == ratchetProtocol {
-					hook(m, r, false)
-				}
+				hook(m, current, false)
 			}
 		} else {
 			log.Printf("ratchet: history replay: %v", err)
@@ -640,7 +644,7 @@ func (m *connManager) projectRatchet(r RatchetRecord, isNew bool, current func()
 		return
 	}
 	if hook := m.ratchetProject; hook != nil {
-		hook(m, r, isNew)
+		hook(m, []RatchetRecord{r}, isNew)
 	}
 	// Ownership recheck after the projector's disk I/O (P3-3).
 	if current != nil && current() != nil {
@@ -680,12 +684,25 @@ func ratchetBodyText(body json.RawMessage) string {
 // client message IDs in the shared dmPending map.
 func ratchetPendingRef(ref string) string { return "olm\x00" + ref }
 
-// projectRatchetRecord merges one direct record into the identity's sealed DM
-// log, idempotently: entries are keyed by (protocol, sender, logical ID), so
+// projectRatchetRecords merges direct records into the identity's sealed DM
+// logs, idempotently: entries are keyed by (protocol, sender, logical ID), so
 // legacy entries and other senders reusing a logical string never collide.
-// The log is a view; the protected archive replays it after a crash.
-func (a *App) projectRatchetRecord(m *connManager, r RatchetRecord, _ bool) {
-	if r.Scope != "direct" || r.Peer == "" {
+// The log is a view; the protected archive replays it after a crash. Each
+// conversation's log is read once and written once if it changed, so a replay
+// of the whole archive does not reread a log per record.
+func (a *App) projectRatchetRecords(m *connManager, records []RatchetRecord, isNew bool) {
+	var peers []string
+	byPeer := map[string][]RatchetRecord{}
+	for _, r := range records {
+		if r.Scope != "direct" || r.Peer == "" {
+			continue
+		}
+		if _, seen := byPeer[r.Peer]; !seen {
+			peers = append(peers, r.Peer)
+		}
+		byPeer[r.Peer] = append(byPeer[r.Peer], r)
+	}
+	if len(peers) == 0 {
 		return
 	}
 	dir, err := a.dmHistoryDir()
@@ -700,14 +717,37 @@ func (a *App) projectRatchetRecord(m *connManager, r RatchetRecord, _ bool) {
 	if err != nil {
 		return
 	}
+	for _, peer := range peers {
+		a.projectRatchetPeer(m, store, peer, byPeer[peer], isNew)
+	}
+}
+
+func (a *App) projectRatchetPeer(m *connManager, store dmHistoryStore, peer string, records []RatchetRecord, isNew bool) {
 	a.dmMu.Lock()
 	defer a.dmMu.Unlock()
-	l, err := store.load(r.Peer)
+	l, err := store.load(peer)
 	if err != nil {
 		log.Printf("ratchet projection: %v", err)
 		return
 	}
-	l.Peer = r.Peer
+	l.Peer = peer
+	changed := false
+	for _, r := range records {
+		if a.applyRatchetRecord(m, store, &l, r, isNew) {
+			changed = true
+		}
+	}
+	if !changed {
+		return
+	}
+	if err := store.save(l); err != nil {
+		log.Printf("ratchet projection: %v", err)
+	}
+}
+
+// applyRatchetRecord merges one direct record into its loaded log and reports
+// whether the log changed. The caller holds dmMu and saves.
+func (a *App) applyRatchetRecord(m *connManager, store dmHistoryStore, l *dmLog, r RatchetRecord, isNew bool) bool {
 	find := func(sender, logical string) *DMEntry {
 		for i := range l.Messages {
 			e := &l.Messages[i]
@@ -717,67 +757,81 @@ func (a *App) projectRatchetRecord(m *connManager, r RatchetRecord, _ bool) {
 		}
 		return nil
 	}
-	if r.Purpose == netproto.DMActionEdit || r.Purpose == netproto.DMActionDelete {
+	change := r.Purpose == netproto.DMActionEdit || r.Purpose == netproto.DMActionDelete
+	target := r.LogicalID
+	if change {
+		target = r.Reference
+	}
+	e := find(r.Sender, target)
+	// "Delete history" keeps the archive, so a replayed record from before
+	// the clear stays out. A new delivery is kept whatever its send time (it
+	// may have waited on the server, or come from a slow clock).
+	if e == nil && !isNew && l.ClearedAt > 0 && r.SentAt <= l.ClearedAt {
+		return false
+	}
+	if change {
 		// An own change applies only once accepted (a linked copy from another
 		// own device carries no status and was accepted there).
 		if r.Self && r.Status != "" && r.Status != "accepted" {
-			return
+			return false
 		}
 		c := dmChange{Action: r.Purpose, Ref: r.Reference, From: r.Sender, Body: ratchetBodyText(r.Body), At: int64(r.SentAt)}
 		if r.Purpose == netproto.DMActionEdit && strings.TrimSpace(c.Body) == "" {
-			return
+			return false
 		}
-		if e := find(r.Sender, r.Reference); e != nil {
-			if reopenRedactionForLateEdit(e, r.Purpose) {
-				a.dmDisappear.reopened.Add(1) // under dmMu: a running redaction cannot settle this entry
-				defer a.reopenDisappearingRedaction()
-			}
-			applyDMChange(e, c)
-			e.EncVerified, e.EncMode = true, "e2e"
-			_ = store.save(l)
-		} else {
+		if e == nil {
 			a.dmPending.add(store.path(r.Peer), dmChange{Action: c.Action, Ref: ratchetPendingRef(c.Ref), From: c.From, Body: c.Body, At: c.At}, time.Now())
+			return false
 		}
-		return
+		before := *e
+		if reopenRedactionForLateEdit(e, r.Purpose) {
+			a.dmDisappear.reopened.Add(1) // under dmMu: a running redaction cannot settle this entry
+			a.reopenDisappearingRedaction()
+		}
+		applyDMChange(e, c)
+		e.EncVerified, e.EncMode = true, "e2e"
+		return *e != before
 	}
 	status := r.Status
 	if status == "" && !r.Self {
 		status = "received"
 	}
-	if e := find(r.Sender, r.LogicalID); e != nil {
+	if e != nil {
 		// A terminal state never regresses to pending (stale replay snapshot).
 		if e.Status == status || status == "pending" && (e.Status == "accepted" || e.Status == "rejected" || e.Status == "aborted") {
-			return
+			return false
 		}
 		e.Status = status
-		_ = store.save(l)
-		return
+		return true
 	}
-	e := DMEntry{FromUniqueID: r.Sender, Body: ratchetBodyText(r.Body), SentAt: int64(r.SentAt), Self: r.Self, ClientMsgID: r.LogicalID,
+	entry := DMEntry{FromUniqueID: r.Sender, Body: ratchetBodyText(r.Body), SentAt: int64(r.SentAt), Self: r.Self, ClientMsgID: r.LogicalID,
 		EncVerified: true, EncMode: "e2e", Protocol: ratchetProtocol, Key: r.Key, Status: status}
 	// Disappearing messages: a redacted (expired) archive record never comes
 	// back as a message; a TTL or a setting change is recorded on the entry.
-	if !applyRatchetDisappearing(&l, &e, r, time.Now()) {
-		return
+	if !applyRatchetDisappearing(l, &entry, r, time.Now()) {
+		return false
 	}
-	if e.TTL > 0 {
-		e.Archive = m.ratchetArchiveServer()
+	if entry.TTL > 0 {
+		entry.Archive = m.ratchetArchiveServer()
 	}
-	a.noteDisappearing(e.ExpiresAt)
+	a.noteDisappearing(entry.ExpiresAt)
 	if n := len(l.Messages); n > 0 {
-		e.Seq = l.Messages[n-1].Seq + 1
+		entry.Seq = l.Messages[n-1].Seq + 1
 	} else {
-		e.Seq = 1
+		entry.Seq = 1
 	}
-	l.Messages = append(l.Messages, e)
+	l.Messages = append(l.Messages, entry)
 	for _, change := range a.dmPending.take(store.path(r.Peer), ratchetPendingRef(r.LogicalID), time.Now()) {
 		if change.From == r.Sender {
 			applyDMChange(&l.Messages[len(l.Messages)-1], change)
 		}
 	}
-	if err := store.save(l); err != nil {
-		log.Printf("ratchet projection: %v", err)
+	// The cap save applies, so later records of a batch see the same log as
+	// when each record was saved on its own.
+	if n := len(l.Messages); n > dmHistoryMax {
+		l.Messages = l.Messages[n-dmHistoryMax:]
 	}
+	return true
 }
 
 // RatchetConversationHistoryForTab returns the authoritative new-protocol

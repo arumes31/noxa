@@ -236,3 +236,117 @@ test('staged session closes before retaining more than 8 MiB of aggregate UTF-8 
  assert.throws(()=>session.activateIncoming(),/replay limit exceeded/);
  assert.deepEqual(seen,[]);
 });
+
+
+// Loads app.js with captured timers, for the reconnect tests below.
+async function loadReconnectApp({ open, signIn = async () => ({ unique_id: 'alice', device_id: 'phone', client_id: 'c1' }) }) {
+ const { signInError } = await import('../src/core/login-errors.js');
+ class Empty extends EventTarget { ready = Promise.resolve(); async refresh() {} async importHistory() {} close() {} }
+ const none = () => {};
+ const sources = {
+  './core/chat-session.js': {ChatSession},
+  './core/direct.js': {DirectMessages:Empty}, './core/calls.js': {Calls:Empty}, './core/groups.js':{Groups:Empty}, './core/voice.js':{Voice:Empty},
+  './core/connection.js':{Connection:{open}}, './core/reconnect-hint.js': { noteShutdownJitter() {}, clearShutdownJitter() {}, takeShutdownJitterMs: () => 0 }, './core/frame.js':{Msg:{}}, './core/olm-directory.js':{signBundle:()=>({})}, './core/olm-reset.js':{signReset:()=>({})}, './core/link-binding.js':{verifyLinkBinding:()=>'',announcedBinding:()=>''}, './core/dm-trust.js':{signKeyRecord:()=>''}, './core/ratchet-consumer.js':{RatchetConsumer:class{},connectionTransport:()=>({})}, './core/crypto.js':{generateIdentity},
+  './core/device.js':{signIn},
+  './core/identity-store.js':{assertIdentityFence:none,beginIdentity:none,clearIdentity:none,loadIdentity:none,saveIdentity:none,updateMeta:none},
+  './core/outbox.js':{enqueue:none,flush:async()=>{},showPending:async()=>{},waitingCount:async()=>0},
+  './core/push.js':{announceRead:none,closeAllNotifications:none,closeNotifications:none,dropPushSubscription:none,reportVisibility:none,setBadge:none,syncPush:async()=>({})},
+  './core/settings.js':{get:()=>[]},'./core/servers.js':{addServer:()=>[]},
+  './notifier.js':{notifier:{install(){},decide(){return {count:true}},read(){}}},
+  './core/conversation-prefs.js':{activityShared:()=>false,isMuted:()=>false,syncMuted:()=>{},watchCallLog:()=>{},resetCallLog:()=>{}},
+  './core/saved.js':{SavedMessages:class extends EventTarget {}},
+ };
+ const timers = new Map(); let id = 0;
+ const window = new EventTarget(), document = Object.assign(new EventTarget(), {visibilityState:'visible'});
+ const context = vm.createContext({EventTarget,CustomEvent,console,window,document,clearInterval,
+  setTimeout:fn=>{timers.set(++id,fn);return id},clearTimeout:i=>timers.delete(i)});
+ const mod = new vm.SourceTextModule(await fs.readFile(new URL('../src/app.js',import.meta.url),'utf8'),{context});
+ await mod.link(spec=>new vm.SyntheticModule(Object.keys(sources[spec]),function(){for(const [k,v] of Object.entries(sources[spec]))this.setExport(k,v)},{context}));
+ await mod.evaluate();
+ const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r)); };
+ // Runs every pending timer once (the reconnect back-off) and lets its work finish.
+ const fire = async () => { const due = [...timers.values()]; timers.clear(); for (const fn of due) fn(); await settle(); };
+ return { ...mod.namespace, window, timers, fire, settle, signInError };
+}
+
+test('a stale reconnect attempt failing after a newer one succeeded starts no further connect', async () => {
+ const connections = []; let failStale;
+ const open = () => {
+  // The second attempt hangs on a slow network; the others connect at once.
+  if (connections.length === 1 && !failStale) return new Promise((_, reject) => { failStale = reject; });
+  const conn = new FakeConnection(); connections.push(conn); return Promise.resolve(conn);
+ };
+ const { app, connect, window, fire, settle } = await loadReconnectApp({ open });
+ app.identity = {};
+ await connect();
+ connections[0].dispatchEvent(new Event('close')); // the connection drops
+ await fire();                                     // attempt A: in flight
+ assert.ok(failStale);
+ window.dispatchEvent(new Event('online'));        // the phone is back: attempt B
+ await fire();
+ assert.equal(connections.length, 2);
+ assert.equal(app.online, true);
+ failStale(new Error('could not reach the server')); // A fails late
+ await settle();
+ await fire();
+ await fire();
+ assert.equal(connections.length, 2);
+ assert.equal(connections[1].open, true);
+ assert.equal(app.session.conn, connections[1]);
+});
+
+test('a failed first sign-in is retried until a refusal that waiting cannot fix', async () => {
+ for (const [reason, definitive] of [
+  ['banned', true], ['banned: spam', true], ['invalid server password', true], ['guest login is disabled on this server', true],
+  ['client version rejected: installed 1.0.0; required >=2.0.0; update noXa to connect', true],
+  ['unsupported authorization model; upgrade your noXa client', true],
+  ['this server needs an update: it does not support secure sign-in', true],
+  ['server is full', false], ['server is busy, try again in a moment', false], ['internal error', false], [null, false],
+ ]) {
+  let opens = 0, error;
+  const loaded = await loadReconnectApp({
+   open: async () => { opens++; if (reason === null) throw new Error('could not reach the server'); return new FakeConnection(); },
+   signIn: async () => { throw loaded.signInError(reason); },
+  });
+  const { app, connect, retryConnect, timers, fire } = loaded;
+  let refused = null, disconnected = 0;
+  app.addEventListener('refused', event => { refused = event.detail; });
+  app.addEventListener('disconnected', () => { disconnected++; });
+  app.identity = {};
+  await connect().catch(e => { error = e; });
+  // What the start does with a failed first sign-in.
+  assert.equal(retryConnect(error), !definitive, String(reason));
+  if (definitive) {
+   assert.equal(timers.size, 0, reason);
+   // The same refusal met by the retry loop ends it and is shown.
+   app.paused = false;
+   retryConnect(new Error('could not reach the server'));
+   await fire();
+   assert.equal(opens, 2, reason);
+   assert.equal(timers.size, 0, reason);
+   assert.equal(refused?.message, reason);
+   assert.equal(disconnected, 1, reason);
+   assert.equal(app.paused, true, reason);
+   await fire();
+   assert.equal(opens, 2, reason);
+  } else {
+   for (let i = 2; i <= 4; i++) { await fire(); assert.equal(opens, i, String(reason)); }
+   assert.equal(timers.size, 1, String(reason));
+   assert.equal(refused, null);
+  }
+ }
+});
+
+test('a failed start runs again once, when the network returns or the wait ends', async () => {
+ const { retryStart, window, timers, fire } = await loadReconnectApp({ open: async () => new FakeConnection() });
+ let runs = 0;
+ retryStart(() => { runs++; });
+ window.dispatchEvent(new Event('online'));
+ window.dispatchEvent(new Event('online'));
+ assert.equal(runs, 1);
+ assert.equal(timers.size, 0);
+ retryStart(() => { runs++; });
+ await fire();
+ window.dispatchEvent(new Event('online'));
+ assert.equal(runs, 2);
+});

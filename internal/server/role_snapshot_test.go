@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"noxa/internal/authorization"
 	"noxa/internal/broadcast"
@@ -241,5 +242,33 @@ func TestRoleSnapshotAuditAccessFollowsCapabilityAndRevocation(t *testing.T) {
 	}
 	if buildRoleSnapshot(sm, evaluator, 3, "viewer").CanViewAuditLog {
 		t.Fatal("revoked auditor kept access")
+	}
+}
+
+func buildRoleSnapshot(sm *state.Manager, evaluator *authorization.RoleEvaluator, actorID int64, uniqueID string) *broadcast.TreeSnapshot {
+	snapshot, _ := buildRoleSnapshotContext(context.Background(), sm, evaluator, actorID, uniqueID)
+	return snapshot
+}
+
+func TestSnapshotRequestReportsBuildDuration(t *testing.T) {
+	observed := make(chan time.Duration, 16)
+	env := startTestEnvDeps(t, nil, nil, func(d *Deps) {
+		d.ObserveSnapshot = func(duration time.Duration) {
+			select {
+			case observed <- duration:
+			default:
+			}
+		}
+	})
+	defer env.stop()
+	conn, _ := dialAuthed(t, env.addr, "user-uid")
+	defer func() { _ = conn.Close() }()
+	select {
+	case duration := <-observed:
+		if duration < 0 {
+			t.Fatalf("snapshot duration = %s, want non-negative", duration)
+		}
+	case <-time.After(waitDeadline):
+		t.Fatal("building a client's snapshot was not observed")
 	}
 }

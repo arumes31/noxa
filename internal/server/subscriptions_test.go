@@ -38,10 +38,10 @@ func TestChannelScopedBroadcastTargetsReverseIndex(t *testing.T) {
 		recv[cid] = ch
 		srv.clients[cid] = &Client{ID: cid, UserID: uid, UniqueID: cid + "-uid"}
 	}
-	if err := sm.JoinChannel("m1", 1); err != nil {
+	if err := sm.MoveClient("m1", 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := sm.JoinChannel("m2", 1); err != nil {
+	if err := sm.MoveClient("m2", 1); err != nil {
 		t.Fatal(err)
 	}
 	// A member that also subscribed must still be delivered to exactly once.
@@ -148,7 +148,7 @@ func TestChannelSubscribeDeliversKeysHonorsCurrentChannelAndRevokes(t *testing.T
 	if got := env.deps.ScopeKeys.(*fakeScopeKeys).countFor(40); got != 1 {
 		t.Fatalf("scope keys for accepted target = %d, want 1", got)
 	}
-	if err := env.state.JoinChannel(authResp.ClientID, 40); err != nil {
+	if err := env.state.MoveClient(authResp.ClientID, 40); err != nil {
 		t.Fatal(err)
 	}
 	env.state.Unsubscribe(authResp.ClientID, []int64{40})

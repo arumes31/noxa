@@ -171,7 +171,7 @@ func New() *Metrics {
 		}, []string{"component", "result"}),
 		broadcastDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Namespace: "noxa", Name: "broadcast_snapshot_duration_seconds",
-			Help:    "Time to build and marshal a broadcast snapshot.",
+			Help:    "Time to build the channel tree snapshot for one viewer.",
 			Buckets: []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5},
 		}),
 		broadcastBacklog: prometheus.NewHistogram(prometheus.HistogramOpts{

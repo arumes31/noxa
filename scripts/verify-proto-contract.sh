@@ -20,11 +20,10 @@ import re
 from pathlib import Path
 
 expected_ignores = {
-    "PACKAGE_DIRECTORY_MATCH": ["proto/chat.proto", "proto/control.proto", "proto/events.proto", "proto/signaling.proto"],
-    "SERVICE_SUFFIX": ["proto/chat.proto", "proto/control.proto", "proto/events.proto", "proto/signaling.proto"],
-    "RPC_REQUEST_RESPONSE_UNIQUE": ["proto/chat.proto", "proto/signaling.proto"],
-    "RPC_REQUEST_STANDARD_NAME": ["proto/events.proto", "proto/signaling.proto"],
-    "RPC_RESPONSE_STANDARD_NAME": ["proto/chat.proto", "proto/events.proto", "proto/signaling.proto"],
+    "PACKAGE_DIRECTORY_MATCH": ["proto/control.proto", "proto/events.proto"],
+    "SERVICE_SUFFIX": ["proto/control.proto", "proto/events.proto"],
+    "RPC_REQUEST_STANDARD_NAME": ["proto/events.proto"],
+    "RPC_RESPONSE_STANDARD_NAME": ["proto/events.proto"],
 }
 
 buf = Path("buf.yaml").read_text(encoding="utf-8")

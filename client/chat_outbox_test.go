@@ -236,3 +236,54 @@ func TestChatOutboxDefaultDoesNotDelayOnlineMessages(t *testing.T) {
 		t.Fatalf("default message was delayed by %d milliseconds", entry.DueAt-entry.CreatedAt)
 	}
 }
+
+// Cancelling one message while another is being sent reads the in-flight set
+// that the sender changes on its own goroutine. Run with -race: the unguarded
+// read is a concurrent map access, which the runtime treats as fatal.
+func TestChatOutboxCancelWhileAnotherMessageIsSending(t *testing.T) {
+	a, cm := outboxTestApp(t)
+	store, err := a.outboxStore(cm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	busy := store.path + "|busy"
+	outboxMu.Lock()
+	outboxSending[busy] = true
+	err = store.save([]ChatOutboxEntry{{ID: "busy", Scope: "global", Text: "in flight", State: "sending"}})
+	outboxMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			outboxMu.Lock()
+			outboxSending["other"] = true
+			delete(outboxSending, "other")
+			outboxMu.Unlock()
+		}
+	}()
+	t.Cleanup(func() {
+		close(stop)
+		<-done
+		outboxMu.Lock()
+		delete(outboxSending, busy)
+		outboxMu.Unlock()
+	})
+	for range 50 {
+		staged, err := a.ChatOutboxForTab("a", ChatOutboxRequest{Action: "stage", Scope: "channel", Target: "7", Text: "undo me"})
+		if err != nil || len(staged.Entries) != 2 {
+			t.Fatalf("stage: %+v %v", staged, err)
+		}
+		left, err := a.ChatOutboxForTab("a", ChatOutboxRequest{Action: "cancel", ID: staged.Entries[1].ID})
+		if err != nil || len(left.Entries) != 1 || left.Entries[0].State != "sending" {
+			t.Fatalf("cancel: %+v %v", left, err)
+		}
+	}
+}

@@ -380,11 +380,6 @@ func TestValidateRejectsUnsafeValues(t *testing.T) {
 			mutate:  func(c *Config) { c.ChatKeyRotateMinSecs = -1 },
 			wantErr: "chat_key_rotate_min_seconds",
 		},
-		{
-			name:    "zero search cap",
-			mutate:  func(c *Config) { c.ChatSearchMaxMessages = 0 },
-			wantErr: "chat_search_max_messages",
-		},
 		{name: "zero turn ttl", mutate: func(c *Config) { c.TURN.CredentialsTTL = 0 }, wantErr: "turn.credentials_ttl"},
 		{
 			name:    "excessive turn ttl",
@@ -676,19 +671,13 @@ func TestValidateHealthTLSRequiresControlTLS(t *testing.T) {
 func TestWarningsHealthListenerTransport(t *testing.T) {
 	cfg := loadDefaultConfig(t)
 	cfg.HealthAddr = ":12337"
-	cfg.HealthAllowPlaintextCredentials = true
-	warnings := strings.Join(cfg.Warnings(), "\n")
-	for _, text := range []string{"health_addr is reachable", "health_allow_plaintext_credentials"} {
-		if !strings.Contains(warnings, text) {
-			t.Errorf("Warnings() = %q, want text %q", warnings, text)
-		}
+	const text = "health_addr is reachable"
+	if warnings := strings.Join(cfg.Warnings(), "\n"); !strings.Contains(warnings, text) {
+		t.Errorf("Warnings() = %q, want text %q", warnings, text)
 	}
 	cfg.HealthTLSEnabled = true
-	warnings = strings.Join(cfg.Warnings(), "\n")
-	for _, text := range []string{"health_addr is reachable", "health_allow_plaintext_credentials"} {
-		if strings.Contains(warnings, text) {
-			t.Errorf("Warnings() = %q, did not want %q", warnings, text)
-		}
+	if warnings := strings.Join(cfg.Warnings(), "\n"); strings.Contains(warnings, text) {
+		t.Errorf("Warnings() = %q, did not want %q", warnings, text)
 	}
 }
 

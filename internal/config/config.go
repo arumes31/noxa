@@ -49,10 +49,7 @@ type Config struct {
 	DownloadPublicOrigin string `mapstructure:"download_public_origin"`
 	// Only these immediate proxy peers may assert X-Forwarded-Proto: https.
 	HealthTrustedProxies []string `mapstructure:"health_trusted_proxies"`
-	// HealthAllowPlaintextCredentials is a legacy development option.
-	// Production rejects it; use health TLS or explicit HTTPS proxy trust.
-	HealthAllowPlaintextCredentials bool   `mapstructure:"health_allow_plaintext_credentials"`
-	QueryAddr                       string `mapstructure:"query_addr"`
+	QueryAddr            string   `mapstructure:"query_addr"`
 	// QueryAllowRemote is an explicit acknowledgement that the plaintext
 	// ServerQuery listener may bind beyond loopback. Prefer QuerySSH instead.
 	QueryAllowRemote bool `mapstructure:"query_allow_remote"`
@@ -190,11 +187,9 @@ type Config struct {
 	// plaintext rows: "encrypt" (default, sealed in place) or "purge".
 	// ChatKeyRotateMinSecs coalesces channel key rotations so a flapping
 	// client cannot mint one persisted generation per reconnect.
-	// ChatSearchMaxMessages caps the client-side search scan (110).
-	ChatMasterKeyFile     string `mapstructure:"chat_master_key_file"`
-	ChatLegacyHistory     string `mapstructure:"chat_legacy_history"`
-	ChatKeyRotateMinSecs  int    `mapstructure:"chat_key_rotate_min_seconds"`
-	ChatSearchMaxMessages int    `mapstructure:"chat_search_max_messages"`
+	ChatMasterKeyFile    string `mapstructure:"chat_master_key_file"`
+	ChatLegacyHistory    string `mapstructure:"chat_legacy_history"`
+	ChatKeyRotateMinSecs int    `mapstructure:"chat_key_rotate_min_seconds"`
 
 	// FileTLSEnabled wraps the file-transfer data port in TLS 1.3 with the SAME
 	// certificate as the control channel. false is a dev-only escape hatch.
@@ -343,7 +338,6 @@ func newConfigViper() *viper.Viper {
 	v.SetDefault("health_tls_enabled", false)
 	v.SetDefault("download_public_origin", "")
 	v.SetDefault("health_trusted_proxies", []string{})
-	v.SetDefault("health_allow_plaintext_credentials", false)
 	v.SetDefault("query_addr", DefaultQueryAddr)
 	v.SetDefault("query_allow_remote", false)
 	v.SetDefault("query_allowed_cidrs", []string{})
@@ -400,7 +394,6 @@ func newConfigViper() *viper.Viper {
 	v.SetDefault("pii_key_file", "./data/keys/pii.key")
 	v.SetDefault("chat_legacy_history", "encrypt")
 	v.SetDefault("chat_key_rotate_min_seconds", 60)
-	v.SetDefault("chat_search_max_messages", 2000)
 	v.SetDefault("file_tls_enabled", true)
 	v.SetDefault("server_info_motd", false)
 	v.SetDefault("chat_max_length", 4096)
@@ -723,9 +716,6 @@ func (c *Config) Validate() error {
 		errs = append(errs, errors.New("health_tls_enabled requires tls_enabled=true"))
 	}
 	if !c.DevMode {
-		if c.HealthAllowPlaintextCredentials {
-			errs = append(errs, errors.New("health_allow_plaintext_credentials is not allowed in production; configure native HTTPS or a trusted HTTPS proxy"))
-		}
 		if !c.TLSEnabled {
 			errs = append(errs, errors.New("tls_enabled must be true when dev_mode=false"))
 		}
@@ -757,9 +747,6 @@ func (c *Config) Validate() error {
 	}
 	if c.ChatKeyRotateMinSecs < 0 || c.ChatKeyRotateMinSecs > maxChatKeyRotateMinSecs {
 		errs = append(errs, fmt.Errorf("chat_key_rotate_min_seconds %d must be between 0 and %d", c.ChatKeyRotateMinSecs, maxChatKeyRotateMinSecs))
-	}
-	if c.ChatSearchMaxMessages <= 0 {
-		errs = append(errs, fmt.Errorf("chat_search_max_messages %d must be positive", c.ChatSearchMaxMessages))
 	}
 	if c.ChatMaxLength <= 0 {
 		errs = append(errs, fmt.Errorf("chat_max_length %d must be positive", c.ChatMaxLength))
@@ -953,9 +940,6 @@ func (c *Config) Warnings() []string {
 	}
 	if !isLoopbackAddress(c.HealthAddr) && !c.HealthTLSEnabled {
 		warnings = append(warnings, "health_addr is reachable beyond loopback over plaintext HTTP; /dl links, /events credentials and /hooks secrets are exposed, set health_tls_enabled=true or place it behind HTTPS")
-	}
-	if c.HealthAllowPlaintextCredentials && !c.HealthTLSEnabled {
-		warnings = append(warnings, "health_allow_plaintext_credentials accepts integration passwords and webhook secrets over plaintext HTTP")
 	}
 	return warnings
 }

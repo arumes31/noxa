@@ -475,9 +475,6 @@ func run() (retErr error) {
 	// the database and the in-memory state manager, including automatic cleanup
 	// of empty temporary channels.
 	channelMgr := channels.New(dbStore, stateManager, logger)
-	// Enter role mode before loading persisted channels so legacy cleanup timers
-	// and resource writers can never run during startup.
-	channelMgr.EnableRoleMode(nil)
 	// (165) operator-configurable temporary channel lifetime; <= 0 keeps the default.
 	channelMgr.SetCleanupDelay(time.Duration(cfg.ChannelTempLifetimeSeconds) * time.Second)
 	defer channelMgr.Close()
@@ -511,8 +508,7 @@ func run() (retErr error) {
 	// active users and delivers them to registered clients via per-client
 	// outbound channels.
 	broadcaster := broadcast.New(logger, stateManager, broadcast.Observers{
-		ObserveSnapshotDuration: m.ObserveBroadcastSnapshot,
-		ObserveClientBacklog:    m.ObserveBroadcastClientBacklog,
+		ObserveClientBacklog: m.ObserveBroadcastClientBacklog,
 	})
 	defer broadcaster.Close()
 	logger.Info("broadcaster ready")
@@ -856,6 +852,7 @@ func run() (retErr error) {
 		Roles:                   dbStore,
 		BanAdmin:                dbStore,
 		Metrics:                 m,
+		ObserveSnapshot:         m.ObserveBroadcastSnapshot,
 		LoginLimiter:            loginLimiter,
 		Rules:                   rulesSvc,
 		ScopeKeys:               dbStore,

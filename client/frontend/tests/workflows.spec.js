@@ -6163,7 +6163,6 @@ test.beforeEach(async ({ page }) => {
                     const api = window.go.main.App;
                     return parent ? api.SendChatReplyForTab(tab, scope, target, text, parent) : api.SendChatForTab(tab, scope, target, text);
                 };
-                if (nativeMethod === "ReconnectTab" && !window.__tabScopedReconnect) return undefined;
                 // Encrypted channel media (Task 2): the voice session runs the real
                 // worker; keys go nowhere (no peers), offers keep their per-suite mock.
                 if (nativeMethod === "WebRTCOfferSecureForTab") return async (tab, sdp, slots) => {
@@ -6181,7 +6180,7 @@ test.beforeEach(async ({ page }) => {
                     let method = nativeMethod;
                     window.__calls[method] = (window.__calls[method] || 0) + 1;
                     (window.__callArgs[method] ||= []).push(structuredClone(args));
-                    if (method === "ReconnectTab") return window.__reconnectTabHandler(...args);
+                    if (method === "ReconnectTab") return (window.__reconnectTabHandler || (async () => ({ error: "connection refused" })))(...args);
                     if (method.endsWith("ForContext")) {
                         method = method.replace(/ForContext$/, "");
                         args = args.slice(1);
@@ -6418,64 +6417,6 @@ for (const flow of ["login", "reconnect"]) test(`session snapshot keeps an offli
     await expect.poll(() => page.evaluate(() => window.__offlineSnapshotCalls)).toBe(1);
     await expect(page.locator("#conn-pill")).not.toHaveClass(/\bup\b/);
     expect(await page.evaluate(() => window.__calls.MOTDForTab || 0)).toBe(0);
-});
-
-test("session snapshot leaves one retry scheduled after a disconnect during recovery", async ({ page }) => {
-    await page.clock.install();
-    await page.evaluate(() => {
-        Math.random = () => 0;
-        const original = window.go.main.App;
-        window.__sessionSnapshotPending = false;
-        const gate = new Promise((resolve) => { window.__releaseSessionSnapshot = resolve; });
-        window.go.main.App = new Proxy(original, { get(target, method) {
-            if (method === "SessionInfoForTab") return async () => {
-                window.__sessionSnapshotPending = true;
-                await gate;
-                return { client_id: "closed-client", is_admin: true, is_guest: false, connected: true, security: "TLS" };
-            };
-            return target[method];
-        } });
-        const state = window.__noxa.state;
-        state.settings.reconnect_on_loss = true;
-        state.lastConnect = { addr: "closed.example:12333", nick: "Alice", pw: "", spw: "", bookmark: "" };
-        for (const callback of window.__events.disconnected) callback();
-    });
-    await page.clock.runFor(5000);
-    await expect.poll(() => page.evaluate(() => window.__sessionSnapshotPending)).toBe(true);
-    await page.evaluate(() => {
-        for (const callback of window.__events.disconnected) callback();
-        window.__releaseSessionSnapshot();
-    });
-    await page.clock.runFor(100);
-    expect(await page.evaluate(() => window.__noxa.state.reconnectAttempts)).toBe(2);
-    await page.clock.runFor(7900);
-    expect(await page.evaluate(() => window.__calls.ConnectBookmarkTabWithID)).toBe(2);
-});
-
-test("session snapshot keeps retrying during a prolonged outage", async ({ page }) => {
-    await page.clock.install();
-    await page.evaluate(() => {
-        Math.random = () => 0;
-        const original = window.go.main.App;
-        window.go.main.App = new Proxy(original, { get(target, method) {
-            if (method === "SessionInfoForTab") return async () => ({
-                client_id: "", is_admin: false, is_guest: true, connected: false, security: "offline",
-            });
-            return target[method];
-        } });
-        const state = window.__noxa.state;
-        state.settings.reconnect_on_loss = true;
-        state.lastConnect = { addr: "closed.example:12333", nick: "Alice", pw: "", spw: "", bookmark: "" };
-        for (const callback of window.__events.disconnected) callback();
-    });
-    for (let attempt = 1; attempt <= 8; attempt++) {
-        await page.clock.runFor(attempt === 1 ? 5000 : attempt === 2 ? 8000 : attempt === 3 ? 16000 : 24000);
-        await expect.poll(() => page.evaluate(() => window.__calls.ConnectBookmarkTabWithID || 0)).toBe(attempt);
-    }
-    await page.clock.runFor(10000);
-    expect(await page.evaluate(() => window.__calls.ConnectBookmarkTabWithID)).toBe(8);
-    expect(await page.evaluate(() => window.__noxa.state.reconnectAttempts)).toBe(9);
-    await expect(page.locator("#conn-pill")).not.toHaveClass(/\bup\b/);
 });
 
 for (const flow of ["tab", "login", "reconnect"]) test(`session snapshot cannot revive a disconnected ${flow}`, async ({ page }) => {
@@ -8557,38 +8498,17 @@ test("reconnects the last server from the tray only while disconnected", async (
     expect(await page.evaluate(() => window.__calls.ConnectBookmarkTabWithID)).toBe(1);
 });
 
-test("keeps an automatic reconnect pinned to the server that dropped", async ({ page }) => {
+test("tray reconnect replaces only the exact dropped server tab", async ({ page }) => {
     await page.evaluate(() => {
         const state = window.__noxa.state;
-        state.settings.reconnect_on_loss = true;
-        state.lastConnect = {
-            addr: "dropped.example:12333", nick: "Alice", pw: "secret", spw: "", bookmark: "Dropped",
-        };
-        for (const callback of window.__events.disconnected || []) callback();
-        state.lastConnect = {
-            addr: "switched.example:12333", nick: "Bob", pw: "other", spw: "", bookmark: "Switched",
-        };
-    });
-
-    await expect.poll(
-        () => page.evaluate(() => window.__calls.ConnectBookmarkTabWithID || 0),
-        { timeout: 7000 },
-    ).toBe(1);
-    expect(await page.evaluate(() => window.__callArgs.ConnectBookmarkTabWithID[0])).toEqual([
-        "Dropped", "dropped.example:12333", "Alice", "secret", "",
-    ]);
-});
-
-test("successful automatic reconnect replaces only the exact dropped server tab", async ({ page }) => {
-    await page.clock.install();
-    await page.evaluate(async () => {
-        const state = window.__noxa.state;
         state.activeTabID = "dropped-tab";
-        state.settings.reconnect_on_loss = true;
-        state.lastConnect = { addr: "voice.example:12333", nick: "Alice", pw: "secret", spw: "", bookmark: "" };
+        state.lastConnect = null;
+        state.lastSuccessfulConnect = { addr: "voice.example:12333", nick: "Alice", pw: "secret", spw: "", bookmark: "" };
+        document.getElementById("conn-pill").classList.remove("up");
+        // Both tabs share an address: cleanup must target the tab that dropped.
         window.__tabs = [
-            { id: "dropped-tab", addr: state.lastConnect.addr, nickname: "Alice", connected: false, active: true },
-            { id: "other-tab", addr: state.lastConnect.addr, nickname: "Alice", connected: false, active: false },
+            { id: "dropped-tab", addr: "voice.example:12333", nickname: "Alice", connected: false, active: true },
+            { id: "other-tab", addr: "voice.example:12333", nickname: "Alice", connected: false, active: false },
         ];
         window.__connectBookmarkHandler = async (_bookmark, addr, nickname) => {
             const tabID = `replacement-${window.__calls.ConnectBookmarkTabWithID}`;
@@ -8601,130 +8521,10 @@ test("successful automatic reconnect replaces only the exact dropped server tab"
             window.__tabs = window.__tabs.filter((tab) => tab.id !== tabID);
             for (const callback of window.__events.tab_update || []) callback(structuredClone(window.__tabs));
         };
-        for (const callback of window.__events.disconnected || []) callback();
-        // A user changes tabs during the retry countdown. Cleanup must still
-        // target the tab that dropped, including when both addresses match.
-        await window.go.main.App.SetActiveTab("other-tab");
+        for (const callback of window.__events.tray_reconnect || []) callback();
     });
-    await page.clock.runFor(5000);
     await expect.poll(() => page.evaluate(() => window.__tabs.map((tab) => tab.id))).toEqual(["other-tab", "replacement-1"]);
     expect(await page.evaluate(() => window.__callArgs.CloseTab)).toEqual([["dropped-tab"]]);
-
-    await page.evaluate(() => {
-        window.__tabs.find((tab) => tab.active).connected = false;
-        for (const callback of window.__events.disconnected || []) callback();
-    });
-    await page.clock.runFor(5000);
-    await expect.poll(() => page.evaluate(() => window.__tabs.map((tab) => tab.id))).toEqual(["other-tab", "replacement-2"]);
-    expect(await page.evaluate(() => window.__callArgs.CloseTab)).toEqual([["dropped-tab"], ["replacement-1"]]);
-});
-
-test("failed automatic reconnect preserves the dropped server tab", async ({ page }) => {
-    await page.clock.install();
-    await page.evaluate(() => {
-        const state = window.__noxa.state;
-        state.activeTabID = "dropped-tab";
-        state.settings.reconnect_on_loss = true;
-        state.lastConnect = { addr: "voice.example:12333", nick: "Alice", pw: "secret", spw: "", bookmark: "" };
-        window.__tabs = [{ id: "dropped-tab", addr: state.lastConnect.addr, nickname: "Alice", connected: false, active: true }];
-        window.__connectBookmarkResult = "connection refused";
-        for (const callback of window.__events.disconnected || []) callback();
-    });
-    await page.clock.runFor(5000);
-    await expect.poll(() => page.evaluate(() => window.__calls.ConnectBookmarkTabWithID || 0)).toBe(1);
-    expect(await page.evaluate(() => window.__calls.CloseTab || 0)).toBe(0);
-    expect(await page.evaluate(() => window.__tabs.map((tab) => tab.id))).toEqual(["dropped-tab"]);
-});
-
-test("automatic reconnect spreads repeated login admission collisions", async ({ page }) => {
-    await page.clock.install({ time: new Date("2026-09-28T12:00:00Z") });
-    await page.clock.pauseAt(new Date("2026-09-28T12:00:01Z"));
-    await page.evaluate(() => {
-        Math.random = () => 0.8;
-        const started = Date.now();
-        const state = window.__noxa.state;
-        state.activeTabID = "dropped-tab";
-        state.settings.reconnect_on_loss = true;
-        state.lastConnect = { addr: "voice.example:12333", nick: "Alice", pw: "secret", spw: "", bookmark: "" };
-        window.__tabs = [{ id: "dropped-tab", addr: state.lastConnect.addr, nickname: "Alice", connected: false, active: true }];
-        // Another client sharing the source address reserves the login slot
-        // on each synchronized five-second retry. A later retry can succeed.
-        window.__connectBookmarkHandler = async (_bookmark, addr, nickname) => {
-            if ((Date.now() - started) % 5000 < 500) return { error: "too many failed logins, try again later" };
-            window.__tabs = [{ id: "replacement", addr, nickname, connected: true, active: true }];
-            for (const callback of window.__events.tab_reset || []) callback("replacement");
-            return { tab_id: "replacement", error: "" };
-        };
-        for (const callback of window.__events.disconnected || []) callback();
-    });
-    await page.clock.runFor(5000);
-    await expect(page.locator("#conn-pill")).toHaveText("retry 2 in 10s…");
-    await page.clock.runFor(9599);
-    expect(await page.evaluate(() => window.__calls.ConnectBookmarkTabWithID)).toBe(1);
-    await page.clock.runFor(1);
-    await expect(page.locator("#conn-pill")).toHaveClass(/\bup\b/);
-    expect(await page.evaluate(() => window.__calls.ConnectBookmarkTabWithID)).toBe(2);
-});
-
-test("background reconnect failures preserve the selected connected server", async ({ page }) => {
-    await page.clock.install({ time: new Date("2026-09-28T12:00:00Z") });
-    await page.clock.pauseAt(new Date("2026-09-28T12:00:01Z"));
-    await page.evaluate(async () => {
-        Math.random = () => 0;
-        const state = window.__noxa.state;
-        state.activeTabID = "dropped-tab";
-        state.settings.reconnect_on_loss = true;
-        state.lastConnect = { addr: "dropped.example:12333", nick: "Alice", pw: "secret", spw: "", bookmark: "" };
-        state.tabConnects.set("other-tab", { addr: "other.example:12333", nick: "Bob", pw: "other", spw: "", bookmark: "" });
-        window.__tabs = [
-            { id: "dropped-tab", addr: state.lastConnect.addr, nickname: "Alice", connected: false, active: true },
-            { id: "other-tab", addr: "other.example:12333", nickname: "Bob", connected: true, active: false },
-        ];
-        window.__connectBookmarkResult = "connection refused";
-        window.__noxa.showWorkspace(false);
-        for (const callback of window.__events.disconnected || []) callback();
-        await window.go.main.App.SetActiveTab("other-tab");
-    });
-    await expect(page.locator("#conn-pill")).toHaveText("other.example:12333");
-    await page.clock.runFor(1000);
-    await expect(page.locator("#conn-pill")).toHaveText("other.example:12333");
-    for (let attempt = 1; attempt <= 5; attempt++) {
-        await page.clock.runFor(attempt === 1 ? 4000 : attempt === 2 ? 8000 : attempt === 3 ? 16000 : 24000);
-        await expect.poll(() => page.evaluate(() => window.__calls.ConnectBookmarkTabWithID || 0)).toBe(attempt);
-    }
-    await expect(page.locator("#conn-pill")).toHaveText("other.example:12333");
-    await expect(page.locator("#conn-pill")).toHaveClass(/\bup\b/);
-    await expect(page.locator("#login-overlay")).not.toBeVisible();
-    expect(await page.evaluate(() => window.__callArgs.ConnectBookmarkTabWithID.every((args) => args[1] === "dropped.example:12333"))).toBe(true);
-});
-
-test("a newly disconnected foreground tab owns the automatic reconnect timer", async ({ page }) => {
-    await page.clock.install({ time: new Date("2026-09-28T12:00:00Z") });
-    await page.clock.pauseAt(new Date("2026-09-28T12:00:01Z"));
-    await page.evaluate(async () => {
-        Math.random = () => 0;
-        const state = window.__noxa.state;
-        state.activeTabID = "dropped-tab";
-        state.settings.reconnect_on_loss = true;
-        state.lastConnect = { addr: "dropped.example:12333", nick: "Alice", pw: "secret", spw: "", bookmark: "" };
-        state.tabConnects.set("other-tab", { addr: "other.example:12333", nick: "Bob", pw: "other", spw: "", bookmark: "" });
-        window.__tabs = [
-            { id: "dropped-tab", addr: state.lastConnect.addr, nickname: "Alice", connected: false, active: true },
-            { id: "other-tab", addr: "other.example:12333", nickname: "Bob", connected: true, active: false },
-        ];
-        window.__connectBookmarkResult = "connection refused";
-        for (const callback of window.__events.disconnected || []) callback();
-        await window.go.main.App.SetActiveTab("other-tab");
-    });
-    await expect(page.locator("#conn-pill")).toHaveText("other.example:12333");
-    await page.clock.runFor(1000);
-    await page.evaluate(() => {
-        window.__tabs.find(tab => tab.id === "other-tab").connected = false;
-        for (const callback of window.__events.disconnected || []) callback();
-    });
-    await page.clock.runFor(5000);
-    expect(await page.evaluate(() => window.__callArgs.ConnectBookmarkTabWithID.map(args => args[1]))).toEqual(["other.example:12333"]);
-    expect(await page.evaluate(() => window.__noxa.state.reconnectAttempts)).toBe(2);
 });
 
 test.describe("per-tab automatic reconnect", () => {
@@ -8733,7 +8533,6 @@ test.describe("per-tab automatic reconnect", () => {
         await page.clock.pauseAt(new Date("2026-09-28T12:00:01Z"));
         await page.evaluate(async () => {
             Math.random = () => 0;
-            window.__tabScopedReconnect = true;
             const state = window.__noxa.state;
             state.settings.reconnect_on_loss = true;
             window.__tabs = [
@@ -9290,14 +9089,14 @@ test.describe("per-tab automatic reconnect", () => {
     });
 });
 
-test("automatic reconnect does not retire a source tab that is connected again", async ({ page }) => {
-    await page.clock.install();
+test("tray reconnect does not retire a source tab that is connected again", async ({ page }) => {
     await page.evaluate(() => {
         const state = window.__noxa.state;
         state.activeTabID = "dropped-tab";
-        state.settings.reconnect_on_loss = true;
-        state.lastConnect = { addr: "voice.example:12333", nick: "Alice", pw: "secret", spw: "", bookmark: "" };
-        window.__tabs = [{ id: "dropped-tab", addr: state.lastConnect.addr, nickname: "Alice", connected: false, active: true }];
+        state.lastConnect = null;
+        state.lastSuccessfulConnect = { addr: "voice.example:12333", nick: "Alice", pw: "secret", spw: "", bookmark: "" };
+        document.getElementById("conn-pill").classList.remove("up");
+        window.__tabs = [{ id: "dropped-tab", addr: "voice.example:12333", nickname: "Alice", connected: false, active: true }];
         window.__connectBookmarkHandler = async (_bookmark, addr, nickname) => {
             window.__tabs[0].connected = true;
             window.__tabs[0].active = false;
@@ -9305,9 +9104,8 @@ test("automatic reconnect does not retire a source tab that is connected again",
             for (const callback of window.__events.tab_reset || []) callback("replacement");
             return { tab_id: "replacement", error: "" };
         };
-        for (const callback of window.__events.disconnected || []) callback();
+        for (const callback of window.__events.tray_reconnect || []) callback();
     });
-    await page.clock.runFor(5000);
     await expect(page.locator("#conn-pill")).toHaveClass(/\bup\b/);
     expect(await page.evaluate(() => window.__calls.CloseTab || 0)).toBe(0);
     expect(await page.evaluate(() => window.__tabs.map((tab) => tab.id))).toEqual(["dropped-tab", "replacement"]);
@@ -11406,11 +11204,15 @@ test("preserves reconnect batching across the tab created by a real reconnect", 
 
 test("keeps reconnect countdown changes visual and announces the failure once", async ({ page }) => {
     await page.evaluate(() => {
+        const { state } = window.__noxa;
         window.__noxa.showWorkspace(false);
-        delete window.__noxa.state.settings.reconnect_on_loss;
-        window.__noxa.state.settings.notify_connection = true;
-        window.__noxa.state.lastConnect = { addr: "voice.example:12333", nick: "Alice", pw: "", spw: "" };
+        delete state.settings.reconnect_on_loss;
+        state.settings.notify_connection = true;
+        state.activeTabID = "dropped-tab";
+        state.lastConnect = { addr: "voice.example:12333", nick: "Alice", pw: "", spw: "" };
+        state.tabConnects.set("dropped-tab", { ...state.lastConnect });
         for (const callback of window.__events.disconnected || []) callback();
+        for (const callback of window.__events.tab_disconnected || []) callback("dropped-tab");
     });
     await expect(page.locator("#conn-pill")).toContainText("retry 1 in 5s");
     await expect(page.locator("#alert-announcer")).toHaveText("Connection lost");

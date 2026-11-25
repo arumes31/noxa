@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"time"
@@ -115,7 +116,7 @@ func roleSnapshotEvent(kind string) bool {
 // the cause on the session: an earlier queued event may observe the new channel
 // before its move event is delivered. Only the moved recipient gets this hint.
 func (s *TCPServer) roleSnapshotWithOwnMove(client *Client, e *authorization.RoleEvaluator) *broadcast.TreeSnapshot {
-	snapshot := buildRoleSnapshot(s.deps.State, e, client.userID(), client.uniqueID())
+	snapshot, _ := s.roleSnapshot(context.Background(), e, client.userID(), client.uniqueID())
 	s.decorateOwnChannelMove(snapshot, client, e)
 	userID := client.userID()
 	s.decorateConnecting(snapshot)

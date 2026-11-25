@@ -43,8 +43,7 @@ type Broadcaster struct {
 	// observers are immutable constructor dependencies. They run after the
 	// broadcaster releases its locks, so they must remain short and must not
 	// call back into the broadcaster.
-	observeSnapshotDuration func(time.Duration)
-	observeClientBacklog    func(int)
+	observeClientBacklog func(int)
 
 	// sendMu preserves message order when multiple server goroutines publish
 	// concurrently. Registry lifetime remains protected by mu.
@@ -100,8 +99,7 @@ type Stats struct {
 // Observers contains optional, bounded telemetry hooks. They intentionally
 // use plain values and callbacks so broadcast stays independent from metrics.
 type Observers struct {
-	ObserveSnapshotDuration func(time.Duration)
-	ObserveClientBacklog    func(int)
+	ObserveClientBacklog func(int)
 }
 
 // New constructs a Broadcaster wired to the provided logger and state manager.
@@ -114,11 +112,10 @@ func New(logger *zap.Logger, sm *state.Manager, observers ...Observers) *Broadca
 		telemetry = observers[0]
 	}
 	return &Broadcaster{
-		logger:                  logger,
-		sm:                      sm,
-		observeSnapshotDuration: telemetry.ObserveSnapshotDuration,
-		observeClientBacklog:    telemetry.ObserveClientBacklog,
-		clients:                 make(map[string]*clientQueue),
+		logger:               logger,
+		sm:                   sm,
+		observeClientBacklog: telemetry.ObserveClientBacklog,
+		clients:              make(map[string]*clientQueue),
 	}
 }
 
@@ -150,37 +147,6 @@ func (b *Broadcaster) Unregister(clientID string) {
 	}
 	delete(b.clients, clientID)
 	close(queue.ch)
-}
-
-// BroadcastSnapshot builds a TreeSnapshot from the state manager, JSON-marshals
-// it, and sends it to all registered clients. Sends are non-blocking: if a
-// client's channel is full, the message is dropped for that client and a
-// warning is logged.
-//
-// The snapshot is built for one viewer (forAdmin/viewerUniqueID gate invisible
-// users, 381), so every registered client sees that viewer's view: pass the
-// least-privileged values (false, "") for a true fan-out and use
-// BroadcastToClient with a per-client BuildSnapshot when visibility differs.
-func (b *Broadcaster) BroadcastSnapshot(forAdmin bool, viewerUniqueID string) {
-	payload, err := b.snapshotPayload(forAdmin, viewerUniqueID)
-	if err != nil {
-		b.logger.Error("broadcast: failed to marshal snapshot", zap.Error(err))
-		return
-	}
-	b.sendMu.Lock()
-	depths := b.broadcastToAllLocked(payload)
-	b.sendMu.Unlock()
-	b.observeBacklogs(depths)
-}
-
-func (b *Broadcaster) snapshotPayload(forAdmin bool, viewerUniqueID string) (payload []byte, err error) {
-	started := time.Now()
-	defer func() {
-		if b.observeSnapshotDuration != nil {
-			b.observeSnapshotDuration(time.Since(started))
-		}
-	}()
-	return json.Marshal(BuildSnapshot(b.sm, forAdmin, viewerUniqueID))
 }
 
 // BroadcastToChannel sends a raw payload to all clients currently in the given

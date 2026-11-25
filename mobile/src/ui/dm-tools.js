@@ -2,12 +2,12 @@
 // history, export and deleting this device's copy of the conversation.
 import { app, startCall } from "../app.js";
 import { callsWith, clearCalls } from "../core/call-log.js";
-import { Trust, exportConversation } from "../core/direct.js";
+import { Trust } from "../core/direct.js";
 import { formatDuration } from "../core/voice-notes.js";
 import { t } from "../i18n.js";
 import { clock, h, sheet, toast } from "./dom.js";
 import { icon } from "./icons.js";
-import { downloadText, panel, safeFileName } from "./conversation-tools.js";
+import { panel } from "./conversation-tools.js";
 import { SafetyScan, SafetyScheme, buildSafetyPayload, checkSafetyScan, fingerprintPairDigest } from "../core/safety-qr.js";
 import { qrSvg } from "./qr-image.js";
 import { scanQR } from "./qr-scanner.js";
@@ -119,17 +119,6 @@ export async function showCalls(peer, name) {
         view.close();
         startCall(peer).catch(error => toast(error.code ? t(`call.error.${error.code}`) : error.message, "warn"));
     };
-}
-
-/** Downloads the conversation as a text file. */
-export function exportDM(peer, name) {
-    const conversation = app.dm.conversations.get(peer);
-    if (!conversation?.messages.length) {
-        toast(t("dmTools.exportEmpty"));
-        return;
-    }
-    const text = exportConversation(conversation, { selfName: app.session.nickname, peerName: name, format: date => date.toLocaleString() });
-    downloadText(`noxa-${safeFileName(name)}.txt`, text);
 }
 
 /** Deletes this device's copy of the conversation and its calls after confirming. */

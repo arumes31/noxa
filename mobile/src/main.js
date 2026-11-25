@@ -5,7 +5,7 @@ import "./styles.css";
 import "./themes.css";
 import { installLogger } from "./core/log.js";
 import "./ui/appearance.js";
-import { app, connect, flushNow, loadDevice, loadInfo, markRead } from "./app.js";
+import { app, connect, flushNow, loadDevice, loadInfo, markRead, retryConnect, retryStart } from "./app.js";
 import { get as setting, set as setSettings } from "./core/settings.js";
 import { parseLinkFragment } from "./core/device.js";
 import { inviteFromLocation, setPendingInvite } from "./core/invite.js";
@@ -218,6 +218,11 @@ app.addEventListener("secure-messaging", () => {
     try { setSettings({ secureMessagingNoticeSeen: true }); } catch { /* best effort */ }
     Promise.resolve(sheet(t("secure.noticeTitle"), t("secure.noticeBody"), [{ label: t("common.close"), value: null, primary: true }])).catch(() => {});
 });
+function showSignInFailure(error) {
+    import("./ui/account.js").then(account => toast(account.signInMessage(error), "warn"));
+}
+// The reconnect loop met a refusal that waiting cannot fix and stopped.
+app.addEventListener("refused", event => showSignInFailure(event.detail));
 app.addEventListener("signedout", () => {
     toast(t("signin.revoked"), "warn");
     route();
@@ -342,6 +347,8 @@ async function boot() {
         await loadInfo();
     } catch (error) {
         root.replaceChildren(h("main", { class: "connect" }, h("p", { class: "error" }, t("common.error", { error: error.message }))));
+        // Opened without network from the cached shell: start again when it returns.
+        retryStart(boot);
         return;
     }
     registerServiceWorker();
@@ -379,7 +386,10 @@ async function boot() {
         try {
             await connect();
         } catch (error) {
-            if (!error.revoked) import("./ui/account.js").then(account => toast(account.signInMessage(error), "warn"));
+            if (!error.revoked) showSignInFailure(error);
+            // A restarting or busy server is retried in the background; the
+            // first session does not route by itself.
+            if (retryConnect(error)) app.addEventListener("session", () => onSignedIn(), { once: true });
         }
     }
     route();

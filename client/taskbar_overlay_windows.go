@@ -255,7 +255,8 @@ func (b *taskbarOverlayWindows) closeCOM() {
 	}
 	b.release()
 	if b.initialized {
-		taskbarOle32.NewProc("CoUninitialize").Call()
+		// CoUninitialize returns nothing; Call's error is only the last-error value.
+		_, _, _ = taskbarOle32.NewProc("CoUninitialize").Call()
 		b.initialized = false
 	}
 }

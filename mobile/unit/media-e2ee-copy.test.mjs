@@ -6,11 +6,18 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const FILES = ["peer-stats.js", "media-frame-envelope.js", "hardware-video.js", "hardware-probe-frame.js", "media-e2ee-core.js", "media-e2ee.js", "media-e2ee.worker.js", "media-keys.js", "media-replay.js", "media-session.js", "call-media-e2ee.js"];
+// Shared with the desktop outside the media modules, in src/core.
+const CORE_FILES = ["rich-paste.js", "safety-qr.js", "stream-resume.js"];
 const here = new URL("../src/core/media-e2ee/", import.meta.url);
+const core = new URL("../src/core/", import.meta.url);
 const desktop = new URL("../../client/frontend/src/", import.meta.url);
 
 test("PWA media E2EE modules are identical to the desktop's", () => {
     for (const file of FILES) assert.equal(readFileSync(new URL(file, here), "utf8"), readFileSync(new URL(file, desktop), "utf8"), file);
+});
+
+test("PWA copies of the desktop's shared modules are identical", () => {
+    for (const file of CORE_FILES) assert.equal(readFileSync(new URL(file, core), "utf8"), readFileSync(new URL(file, desktop), "utf8"), file);
 });
 
 test("both clients pin the same maintained LiveKit worker version", () => {
