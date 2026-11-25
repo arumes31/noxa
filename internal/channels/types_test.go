@@ -2,31 +2,6 @@ package channels
 
 import "testing"
 
-func TestChannelTypeValid(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name      string
-		typeValue ChannelType
-		want      bool
-	}{
-		{name: "temporary", typeValue: ChannelTypeTemporary, want: true},
-		{name: "semi-permanent", typeValue: ChannelTypeSemiPermanent, want: true},
-		{name: "permanent", typeValue: ChannelTypePermanent, want: true},
-		{name: "negative", typeValue: -1},
-		{name: "above range", typeValue: ChannelTypePermanent + 1},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			if got := test.typeValue.Valid(); got != test.want {
-				t.Errorf("ChannelType(%d).Valid() = %t, want %t", test.typeValue, got, test.want)
-			}
-		})
-	}
-}
-
 func TestParseChannelType(t *testing.T) {
 	t.Parallel()
 

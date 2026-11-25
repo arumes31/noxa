@@ -209,24 +209,6 @@ func TestClose_CancelsAllTimers(t *testing.T) {
 	}
 }
 
-// TestChannelTypeString verifies the String method.
-func TestChannelTypeString(t *testing.T) {
-	cases := []struct {
-		t    ChannelType
-		want string
-	}{
-		{ChannelTypeTemporary, "temporary"},
-		{ChannelTypeSemiPermanent, "semi-permanent"},
-		{ChannelTypePermanent, "permanent"},
-		{ChannelType(99), "unknown"},
-	}
-	for _, tc := range cases {
-		if got := tc.t.String(); got != tc.want {
-			t.Errorf("ChannelType(%d).String() = %q, want %q", tc.t, got, tc.want)
-		}
-	}
-}
-
 func insertChannelRow(t *testing.T, s *store.Store, name string, parentID int64, channelType ChannelType, maxClients int) int64 {
 	t.Helper()
 	var parent any

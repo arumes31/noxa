@@ -28,31 +28,6 @@ const (
 	ChannelTypePermanent = 2
 )
 
-// String returns a human-readable name for the channel type: "temporary",
-// "semi-permanent", or "permanent". Unknown values return "unknown".
-func (t ChannelType) String() string {
-	switch t {
-	case ChannelTypeTemporary:
-		return "temporary"
-	case ChannelTypeSemiPermanent:
-		return "semi-permanent"
-	case ChannelTypePermanent:
-		return "permanent"
-	default:
-		return "unknown"
-	}
-}
-
-// Valid reports whether t is one of the defined channel types.
-func (t ChannelType) Valid() bool {
-	switch t {
-	case ChannelTypeTemporary, ChannelTypeSemiPermanent, ChannelTypePermanent:
-		return true
-	default:
-		return false
-	}
-}
-
 // ParseChannelType validates an integer before converting it to ChannelType.
 // It is used at wire and database boundaries where narrowing first could turn
 // an out-of-range value such as 256 into a valid temporary-channel value.
