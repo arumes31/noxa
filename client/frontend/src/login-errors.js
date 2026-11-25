@@ -14,7 +14,8 @@ export function loginFailure(error, request = {}) {
     if (reason === "authentication failed") return { kind: "authentication", field: "login-accountpw" };
     if (reason === "banned") return { kind: "banned" };
     // The server appends the ban's reason; show it in its original case.
-    if (reason.startsWith("banned: ")) return { kind: "banned", reason: text.slice(text.length - reason.length + "banned: ".length) };
+    const ban = /^(?:TLS connection failed: )?banned: ([\s\S]+)$/i.exec(text);
+    if (ban) return { kind: "banned", reason: ban[1] };
     if (reason === "too many failed logins, try again later") return { kind: "rateLimit" };
     if (reason === "server is busy, try again in a moment") return { kind: "busy" };
     if (reason === "server address is required") return { kind: "addressRequired", field: "login-addr", invalid: true };
