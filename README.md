@@ -1421,7 +1421,7 @@ native-client tests in CI use `xvfb-run -a go test ./...`.
 | `go run ./cmd/version -check` | Check synchronized baseline versions and report the current source version |
 | `npm run quality` in `client/frontend` | Frontend lint, unit tests/coverage, accessibility scenarios, and production build |
 | `npm run test:e2e` in `client/frontend` | Full Playwright browser regression suite |
-| `go test -tags integration -run '^TestBrowserScreenSimulcast$' -count=1 ./internal/webrtc` | Real Chromium publishers/receiver through a local SFU; requires the frontend dependencies and installed Chromium |
+| `go test -tags integration -run '^TestBrowserSingleCodecSwitch$' -count=1 ./internal/webrtc` | Real Chromium publishers/receiver through a local SFU; requires the frontend dependencies and installed Chromium |
 | `go test ./...` in `client/third_party/go-webview2` | Standalone Windows WebView2 fork tests |
 | `buf lint` / `make proto` | Lint protobuf contracts / regenerate committed Go stubs; CI pins Buf 1.72.0 |
 

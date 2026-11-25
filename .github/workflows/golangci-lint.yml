@@ -1,9 +1,8 @@
 name: golangci-lint
 
 on:
+  # Pushes to main and release tags are linted through ci.yml (release-lint).
   workflow_call:
-  push:
-    branches: [main]
   pull_request:
 
 permissions:
