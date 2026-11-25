@@ -103,3 +103,13 @@ test("a restarting server is a retryable network condition with its delay (#52)"
     const shield = loginFailure("the server is under heavy load; update noXa to connect");
     assert.equal(shield.kind, "version");
 });
+
+test("a ban sent with its reason is still a ban and keeps the reason as written", async () => {
+    const failure = loginFailure("banned: Spam in #General");
+    assert.deepEqual(failure, { kind: "banned", reason: "Spam in #General" });
+    assert.equal(loginErrorsModule.connectFailureIsDefinitive(failure), true, "a ban is never retried automatically");
+    assert.deepEqual(loginFailure("banned"), { kind: "banned" });
+    assert.equal(loginFailure("banned for good").kind, "unknown");
+    const text = JSON.stringify(await import("../src/login-error-messages.js"));
+    assert.equal(text.split("login.failure.bannedReason").length - 1, 2, "en and de");
+});
