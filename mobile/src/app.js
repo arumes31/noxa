@@ -744,8 +744,14 @@ export async function connect({ guest = null, fence } = {}) {
         await updateMeta({ deviceID: session.deviceID || auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname, priorPrincipal: undefined }, fence);
         checkAttempt();
     } catch (error) {
-        if (app.session === session) disconnect();
-        else session.close();
+        if (app.session === session) {
+            disconnect();
+            // This attempt's own rollback, not a deliberate leave: it stays retryable.
+            if (error?.code !== "fenced") {
+                app.paused = false;
+                error.rollback = true;
+            }
+        } else session.close();
         conn.close();
         throw error;
     }
@@ -1014,7 +1020,7 @@ function scheduleReconnect(nextDelay) {
         const attempt = connectionGeneration + 1;
         connect().catch(error => {
             // A superseded attempt leaves retrying to the newer one.
-            if (attempt !== connectionGeneration || retryConnect(error) || error.revoked) return;
+            if ((attempt !== connectionGeneration && !error.rollback) || retryConnect(error) || error.revoked) return;
             disconnect();
             emit("refused", error);
         });
