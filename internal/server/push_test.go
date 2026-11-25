@@ -24,8 +24,15 @@ import (
 type fakePushes struct {
 	*fakeDevices
 	pmu     sync.Mutex
-	subs    map[string]store.PushSubscription // by device ID
-	records int                               // RecordPushResult calls
+	subs     map[string]store.PushSubscription // by device ID
+	records  int                               // RecordPushResult calls
+	accounts []store.PushAccount               // returned by PushAccounts
+}
+
+func (f *fakePushes) PushAccounts(context.Context) ([]store.PushAccount, error) {
+	f.pmu.Lock()
+	defer f.pmu.Unlock()
+	return f.accounts, nil
 }
 
 func (f *fakePushes) SavePushSubscription(_ context.Context, p store.PushSubscription) error {
@@ -501,4 +508,28 @@ func TestPushSkipsBannedAccount(t *testing.T) {
 		defer p.env.srv.push.mu.Unlock()
 		return len(p.env.srv.push.pending) == 0
 	})
+}
+
+// A mention reaches the phone of an account with a stored subscription even
+// when no phone asked for push settings since the server started.
+func TestMentionPushAfterRestartUsesStoredSubscriptions(t *testing.T) {
+	p := startPushTestEnv(t)
+	device, err := p.pushes.AddDevice(t.Context(), store.NewDevice{Principal: "user-uid", UserID: 2, Kind: store.DeviceKindWeb, Name: "Pixel", Ed25519Public: "ed", X25519Public: "x"}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.pushes.SavePushSubscription(t.Context(), store.PushSubscription{DeviceID: device.DeviceID, Principal: "user-uid", Endpoint: "https://push.example/stored", P256dh: []byte{4}, Auth: []byte("0123456789abcdef")}); err != nil {
+		t.Fatal(err)
+	}
+	p.pushes.accounts = []store.PushAccount{{Principal: "user-uid", Nickname: "Robin", UserID: 2}}
+	conn, senderID := dialAuthed(t, p.env.addr, "admin-uid")
+	defer func() { _ = conn.Close() }()
+	sender, _ := p.env.srv.clientByID(senderID)
+
+	p.env.srv.pushMentions(t.Context(), sender, 0, "ping @robin")
+	if got := p.sender.next(t); got.payload.To != "user-uid" || got.payload.Kind != pushKindMention {
+		t.Fatalf("push = %+v", got.payload)
+	}
+	p.env.srv.pushMentions(t.Context(), sender, 0, "ping @robinson")
+	p.sender.none(t, 200*time.Millisecond)
 }

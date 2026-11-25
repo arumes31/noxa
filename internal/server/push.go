@@ -37,6 +37,7 @@ type PushStore interface {
 	SetPushFilters(ctx context.Context, principal, deviceID string, filters []byte) error
 	PushSubscriptionForDevice(ctx context.Context, principal, deviceID string) (store.PushSubscription, error)
 	PushSubscriptions(ctx context.Context, principal string) ([]store.PushSubscription, error)
+	PushAccounts(ctx context.Context) ([]store.PushAccount, error)
 	DeletePushSubscription(ctx context.Context, principal, deviceID string) error
 	DeletePushEndpoint(ctx context.Context, endpoint string) error
 	RecordPushResult(ctx context.Context, endpoint string, ok bool, maxFailures int) error
@@ -116,9 +117,6 @@ type pushState struct {
 	// userSem holds each recipient account's slots while it has sends
 	// waiting or in flight.
 	userSem map[string]*userSlots
-	// reachable remembers accounts whose phones subscribed since start, so
-	// a mention can reach a phone whose app is closed.
-	reachable map[string]pushAccount
 }
 
 type userSlots struct {
@@ -130,18 +128,12 @@ type userSlots struct {
 // slot: nothing reached the push service, so it is not a delivery failure.
 var errPushNotSent = errors.New("push not sent: no send slot before the deadline")
 
-type pushAccount struct {
-	nickname string
-	userID   int64
-}
-
 func newPushState() *pushState {
 	return &pushState{
-		pending:   make(map[pushKey]*pendingPush),
-		shown:     make(map[pushKey]time.Time),
-		sem:       make(chan struct{}, pushConcurrency),
-		userSem:   make(map[string]*userSlots),
-		reachable: make(map[string]pushAccount),
+		pending: make(map[pushKey]*pendingPush),
+		shown:   make(map[pushKey]time.Time),
+		sem:     make(chan struct{}, pushConcurrency),
+		userSem: make(map[string]*userSlots),
 	}
 }
 
@@ -515,11 +507,6 @@ func (s *TCPServer) handlePushRequest(ctx context.Context, client *Client, r net
 	if !ok {
 		return s.writeMessage(client, netproto.MsgDeviceResult, netproto.DeviceResult{Action: r.Action, Preferences: &netproto.PushPreferences{}})
 	}
-	if nick := client.nickname(); nick != "" {
-		s.push.mu.Lock()
-		s.push.reachable[principal] = pushAccount{nickname: nick, userID: client.userID()}
-		s.push.mu.Unlock()
-	}
 	prefs := func() (*netproto.PushPreferences, error) {
 		sub, err := pushes.PushSubscriptionForDevice(ctx, principal, deviceID)
 		if errors.Is(err, store.ErrDeviceNotFound) {
@@ -598,9 +585,11 @@ const maxMentionPushes = 200
 
 // pushMentions notifies mentioned members' phones. mentioned holds members
 // resolved among online sessions; phones whose app is closed are matched by
-// nickname and must be allowed to view the channel themselves.
+// the stored name of each account with a push subscription, and the account
+// must be allowed to view the channel itself.
 func (s *TCPServer) pushMentions(ctx context.Context, client *Client, channelID int64, body string, mentioned ...[]string) {
-	if _, ok := s.pushStore(); !ok {
+	pushes, ok := s.pushStore()
+	if !ok {
 		return
 	}
 	targets := make(map[string]bool)
@@ -611,14 +600,16 @@ func (s *TCPServer) pushMentions(ctx context.Context, client *Client, channelID 
 	}
 	lower := strings.ToLower(body)
 	if strings.Contains(lower, "@") {
-		s.push.mu.Lock()
-		candidates := make(map[string]pushAccount)
-		for principal, account := range s.push.reachable {
-			if !targets[principal] && mentionsNickname(lower, account.nickname) {
-				candidates[principal] = account
+		accounts, err := pushes.PushAccounts(ctx)
+		if err != nil {
+			s.logger.Warn("loading push accounts failed", zap.Error(err))
+		}
+		candidates := make(map[string]store.PushAccount)
+		for _, account := range accounts {
+			if !targets[account.Principal] && mentionsNickname(lower, account.Nickname) {
+				candidates[account.Principal] = account
 			}
 		}
-		s.push.mu.Unlock()
 		if len(candidates) > 0 {
 			_ = s.withRolePolicy(ctx, func(ctx context.Context) error {
 				lease, ok := ctx.Value(roleLeaseKey{}).(roleLease)
@@ -626,7 +617,7 @@ func (s *TCPServer) pushMentions(ctx context.Context, client *Client, channelID 
 					return nil
 				}
 				for principal, account := range candidates {
-					if account.userID > 0 && lease.evaluator.Evaluate(account.userID, channelID, authorization.ViewChannel).Allowed {
+					if account.UserID > 0 && lease.evaluator.Evaluate(account.UserID, channelID, authorization.ViewChannel).Allowed {
 						targets[principal] = true
 					}
 				}

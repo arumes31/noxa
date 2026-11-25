@@ -126,6 +126,37 @@ func (s *Store) PushSubscriptions(ctx context.Context, principal string) ([]Push
 	return out, rows.Err()
 }
 
+// PushAccount is an account with a push subscription on an active device.
+// Nickname is the account's stored name (its identity display name, else its
+// registered nickname).
+type PushAccount struct {
+	Principal string
+	Nickname  string
+	UserID    int64
+}
+
+// PushAccounts lists the accounts that have a push subscription on an
+// active device.
+func (s *Store) PushAccounts(ctx context.Context) ([]PushAccount, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT u.unique_id, COALESCE(NULLIF(u.identity_display_name, ''), u.nickname, ''), u.id
+		FROM push_subscriptions p
+		JOIN user_devices d ON d.device_id=p.device_id AND d.revoked_at IS NULL
+		JOIN users u ON u.unique_id=p.principal`)
+	if err != nil {
+		return nil, fmt.Errorf("listing push accounts: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []PushAccount
+	for rows.Next() {
+		var a PushAccount
+		if err := rows.Scan(&a.Principal, &a.Nickname, &a.UserID); err != nil {
+			return nil, fmt.Errorf("listing push accounts: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // DeletePushSubscription removes a device's subscription.
 func (s *Store) DeletePushSubscription(ctx context.Context, principal, deviceID string) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM push_subscriptions WHERE principal=$1 AND device_id=$2`, principal, deviceID); err != nil {
