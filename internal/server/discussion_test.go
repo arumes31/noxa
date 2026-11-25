@@ -2,11 +2,13 @@ package server
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"noxa/internal/authorization"
 	"noxa/internal/netproto"
+	"noxa/internal/state"
 )
 
 type discussionTestStore struct {
@@ -14,6 +16,7 @@ type discussionTestStore struct {
 	writes atomic.Int32
 	reads  atomic.Int32
 	author string
+	fail   atomic.Bool // mutations fail like an archived thread
 }
 
 func (f *discussionTestStore) DiscussionFollowers(context.Context, int64, []string) (map[string]bool, error) {
@@ -24,6 +27,9 @@ func (f *discussionTestStore) Discussion(_ context.Context, r netproto.Discussio
 	if r.Action == "get" || r.Action == "history" || r.Action == "list" || r.Action == "state" {
 		f.reads.Add(1)
 	} else {
+		if f.fail.Load() {
+			return netproto.DiscussionResult{}, netproto.ErrDiscussionArchived
+		}
 		f.writes.Add(1)
 	}
 	return netproto.DiscussionResult{Action: r.Action, ChannelID: r.ChannelID, ThreadID: r.ThreadID, Threads: []netproto.DiscussionThread{{ID: r.ThreadID, ChannelID: r.ChannelID, Author: f.author}}}, nil
@@ -116,5 +122,72 @@ func TestDiscussionAuthorizationBeforeMutation(t *testing.T) {
 				t.Fatal("unauthorized read reached storage")
 			}
 		})
+	}
+}
+
+// A post the store refuses (an archived thread) does not start the channel's
+// slow-mode window, and a post refused for slow mode is not stored.
+func TestDiscussionRejectedPostKeepsSlowModeSlot(t *testing.T) {
+	policy := serverRoleFixture()
+	policy.policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel, authorization.ReadHistory, authorization.SendMessages}
+	authority, err := authorization.NewAuthority(t.Context(), policy, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &discussionTestStore{fakeChat: newFakeChat(), author: "other"}
+	env := startTestEnvDeps(t, nil, nil, func(d *Deps) { d.Authority = authority; d.Chat = backend })
+	defer env.stop()
+	env.state.AddChannel(testChannel(1))
+	slowMode := 60
+	if !env.state.UpdateChannel(1, state.ChannelUpdate{SlowModeSeconds: &slowMode}) {
+		t.Fatal("channel 1 missing")
+	}
+	conn, _ := dialAuthed(t, env.addr, "admin-uid")
+	defer func() { _ = conn.Close() }()
+	pub, _ := testX25519(t)
+	publishKey(t, conn, pub)
+	keyID, key, err := env.srv.chatKeys.EnsureScope(t.Context(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	post := func(text string) {
+		send(t, conn, netproto.MsgDiscussionRequest, netproto.DiscussionRequest{Action: "send", ChannelID: 1, ThreadID: 42, BodyEnc: sealScopeTest(t, key, text), KeyID: keyID, RequestID: text})
+	}
+	// reply reads the answer to a post: "" for a stored post, else the error.
+	reply := func() string {
+		for {
+			f := readFrame(t, conn)
+			switch netproto.MessageType(f.Type) {
+			case netproto.MsgDiscussionResult:
+				return ""
+			case netproto.MsgError:
+				var e netproto.Error
+				if err := netproto.Decode(f, &e); err != nil {
+					t.Fatal(err)
+				}
+				return e.Message
+			}
+		}
+	}
+	backend.fail.Store(true)
+	post("into an archived thread")
+	if got := reply(); got == "" {
+		t.Fatal("post into an archived thread succeeded")
+	}
+	backend.fail.Store(false)
+	post("first stored post")
+	if got := reply(); got != "" {
+		t.Fatalf("post after a refused one: %s", got)
+	}
+	writes := backend.writes.Load()
+	post("inside the window")
+	if got := reply(); !strings.Contains(got, "slow mode") {
+		t.Fatalf("error = %q, want slow mode", got)
+	}
+	// The next request is answered after the refused post finished.
+	send(t, conn, netproto.MsgDiscussionRequest, netproto.DiscussionRequest{Action: "list", ChannelID: 1})
+	readOfType(t, conn, netproto.MsgDiscussionResult)
+	if backend.writes.Load() != writes {
+		t.Fatal("a post refused for slow mode reached storage")
 	}
 }

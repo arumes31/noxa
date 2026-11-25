@@ -393,17 +393,6 @@ func (t *slowTracker) sendsLocked(uid string, now time.Time) map[int64]slowSend 
 	return m
 }
 
-// check returns the remaining wait, recording the send when allowed (0).
-func (t *slowTracker) check(uid string, channelID int64, seconds int, now time.Time) time.Duration {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if wait := t.waitLocked(uid, channelID, seconds, "", now); wait > 0 {
-		return wait
-	}
-	t.sendsLocked(uid, now)[channelID] = slowSend{at: now, until: now.Add(time.Duration(seconds) * time.Second)}
-	return 0
-}
-
 // ---------------------------------------------------------------------------
 // The moderation pipeline
 // ---------------------------------------------------------------------------

@@ -137,6 +137,7 @@ func (s *TCPServer) IncomingWebhookHandler() http.Handler {
 			s.roleMetadataMu.Lock()
 			defer s.roleMetadataMu.Unlock()
 			evaluator := ctx.Value(roleLeaseKey{}).(roleLease).evaluator
+			var finish func(stored bool)
 			hook, id, body, key, err := backend.DeliverWebhook(ctx, id, hash[:], func(hook store.WebhookIdentity) (string, uint32, error) {
 				for _, capability := range []authorization.Capability{authorization.ViewChannel, authorization.ReadHistory, authorization.ManageChannels, authorization.SendMessages} {
 					if !evaluator.Evaluate(hook.CreatorID, hook.ChannelID, capability).Allowed {
@@ -161,8 +162,7 @@ func (s *TCPServer) IncomingWebhookHandler() http.Handler {
 				if ch, ok := s.deps.State.GetChannel(hook.ChannelID); !ok {
 					return "", 0, store.ErrWebhookDenied
 				} else if ch.SlowModeSeconds > 0 && !evaluator.Evaluate(hook.CreatorID, hook.ChannelID, authorization.BypassSlowmode).Allowed {
-					if wait := s.chatSlow.check("webhook:"+strconv.FormatInt(hook.ID, 10), hook.ChannelID, ch.SlowModeSeconds, time.Now()); wait > 0 {
-						slowWait = wait
+					if slowWait, finish = s.chatSlow.reserve("webhook:"+strconv.FormatInt(hook.ID, 10), hook.ChannelID, ch.SlowModeSeconds, "", time.Now()); slowWait > 0 {
 						return "", 0, store.ErrWebhookRate
 					}
 				}
@@ -173,6 +173,9 @@ func (s *TCPServer) IncomingWebhookHandler() http.Handler {
 				return body, key, err
 			})
 			rate = hook
+			if finish != nil {
+				finish(err == nil) // only a stored message starts the slow-mode window
+			}
 			if err != nil {
 				return err
 			}
