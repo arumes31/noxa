@@ -42,14 +42,9 @@ type AuthBackend interface {
 
 // ChannelBackend is the subset of channels.ChannelManager the TCP server needs.
 type ChannelBackend interface {
-	CreateChannel(ctx context.Context, spec channels.ChannelSpec) (int64, error)
-	DeleteChannelSubtree(ctx context.Context, channelID int64) (channels.DeleteResult, error)
-	UpdateChannel(ctx context.Context, channelID int64, upd channels.ChannelUpdate) error
-	MoveClientWithLifecycle(clientID string, channelID int64, afterMove func(oldChannelID int64)) (oldChannelID int64, err error)
 	LeaveClient(clientID string) (oldChannelID int64, err error)
 	RemoveClient(clientID string) (*state.Client, error)
 	WithChannelLifecycle(channelID int64, operation func() error) error
-	OnClientLeftChannel(channelID int64)
 }
 
 // BanStore is the minimal store surface needed to record bans. It is

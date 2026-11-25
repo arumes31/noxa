@@ -115,36 +115,18 @@ func TestRoleChannelReconcilePreservesMembershipUntilCleanupSucceeds(t *testing.
 	}
 }
 
-func TestRoleModeRejectsLegacyWritersAndUnconfiguredCleanup(t *testing.T) {
+func TestCleanupWaitsForAuthority(t *testing.T) {
 	sm := state.New(zap.NewNop())
 	m := New(nil, sm, zap.NewNop())
 	t.Cleanup(m.Close)
 	sm.AddChannel(&state.Channel{ChannelID: 1, ChannelType: 0})
 	m.SetCleanupDelay(time.Hour)
 	m.StartCleanupWatcher(1)
-	m.mu.Lock()
-	old := m.timers[1]
-	m.mu.Unlock()
-	m.EnableRoleMode(nil)
-	m.cleanupCallback(1, old)
-	m.StartCleanupWatcher(1)
 	if m.CleanupTimersCount() != 0 {
-		t.Fatal("legacy cleanup rearmed")
+		t.Fatal("cleanup armed without an authority")
 	}
+	m.cleanupCallback(1, &cleanupTimer{})
 	if _, ok := sm.GetChannel(1); !ok {
-		t.Fatal("legacy timer deleted a role channel")
-	}
-	if _, err := m.CreateChannel(t.Context(), ChannelSpec{Name: "Blocked", Type: ChannelTypePermanent}); !errors.Is(err, ErrRoleLifecycleRequired) {
-		t.Fatal(err)
-	}
-	if _, err := m.DeleteChannelSubtree(t.Context(), 1); !errors.Is(err, ErrRoleLifecycleRequired) {
-		t.Fatal(err)
-	}
-	if err := m.SetChannelType(t.Context(), 1, ChannelTypePermanent); !errors.Is(err, ErrRoleLifecycleRequired) {
-		t.Fatal(err)
-	}
-	topic := "Blocked"
-	if err := m.UpdateChannel(t.Context(), 1, ChannelUpdate{Topic: &topic}); !errors.Is(err, ErrRoleLifecycleRequired) {
-		t.Fatal(err)
+		t.Fatal("timer without an authority deleted a channel")
 	}
 }

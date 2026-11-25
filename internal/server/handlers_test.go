@@ -203,93 +203,8 @@ type fakeChannels struct {
 	state *state.Manager
 
 	mu            sync.Mutex
-	nextID        int64
-	created       []channels.ChannelSpec
-	deleted       []int64
 	joinLog       []int64
 	leftLog       []int64
-	deleteAttempt chan struct{}
-}
-
-func (f *fakeChannels) CreateChannel(_ context.Context, spec channels.ChannelSpec) (int64, error) {
-	if err := spec.Validate(); err != nil {
-		return 0, err
-	}
-	var passwordHash string
-	if spec.Password != "" {
-		hash, err := auth.HashPassword(spec.Password)
-		if err != nil {
-			return 0, err
-		}
-		passwordHash = hash
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.nextID++
-	f.created = append(f.created, spec)
-	f.state.AddChannel(&state.Channel{
-		ChannelID:    f.nextID,
-		ParentID:     spec.ParentID,
-		Name:         spec.Name,
-		Topic:        spec.Topic,
-		ChannelType:  int(spec.Type),
-		MaxClients:   spec.MaxClients,
-		CreatedAt:    time.Now(),
-		PasswordHash: passwordHash,
-	})
-	return f.nextID, nil
-}
-
-func deleteFakeChannelSubtree(sm *state.Manager, channelID int64) (channels.DeleteResult, error) {
-	if _, ok := sm.GetChannel(channelID); !ok {
-		return channels.DeleteResult{}, channels.ErrChannelNotFound
-	}
-	children := make(map[int64][]int64)
-	for _, channel := range sm.ListChannels() {
-		children[channel.ParentID] = append(children[channel.ParentID], channel.ChannelID)
-	}
-	queue := []int64{channelID}
-	seen := make(map[int64]struct{})
-	var ids []int64
-	for len(queue) > 0 {
-		id := queue[0]
-		queue = queue[1:]
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		ids = append(ids, id)
-		queue = append(queue, children[id]...)
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	removed := sm.RemoveChannels(ids)
-	members := make([]channels.DeletedMember, 0, len(removed.Members))
-	for _, member := range removed.Members {
-		members = append(members, channels.DeletedMember{
-			ClientID:  member.ClientID,
-			ChannelID: member.ChannelID,
-		})
-	}
-	return channels.DeleteResult{
-		RootID:        channelID,
-		ChannelIDs:    ids,
-		SubscriberIDs: removed.SubscriberIDs,
-		Members:       members,
-	}, nil
-}
-
-func (f *fakeChannels) DeleteChannelSubtree(_ context.Context, channelID int64) (channels.DeleteResult, error) {
-	if f.deleteAttempt != nil {
-		f.deleteAttempt <- struct{}{}
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	result, err := deleteFakeChannelSubtree(f.state, channelID)
-	if err != nil {
-		return channels.DeleteResult{}, err
-	}
-	f.deleted = append(f.deleted, channelID)
-	return result, nil
 }
 
 func (f *fakeChannels) MoveClientWithLifecycle(clientID string, channelID int64, afterMove func(int64)) (int64, error) {
@@ -360,29 +275,6 @@ func (f *fakeChannels) WithChannelLifecycle(channelID int64, operation func() er
 		return channels.ErrChannelNotFound
 	}
 	return operation()
-}
-
-// UpdateChannel applies the non-nil fields of upd to the in-memory channel.
-func (f *fakeChannels) UpdateChannel(_ context.Context, channelID int64, upd channels.ChannelUpdate) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if !f.state.UpdateChannel(channelID, state.ChannelUpdate{
-		Topic:       upd.Topic,
-		MaxClients:  upd.MaxClients,
-		OpusBitrate: upd.OpusBitrate,
-		OpusFEC:     upd.OpusFEC,
-		OpusDTX:     upd.OpusDTX,
-		OpusStereo:  upd.OpusStereo,
-	}) {
-		return channels.ErrChannelNotFound
-	}
-	return nil
-}
-
-func (f *fakeChannels) OnClientLeftChannel(channelID int64) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.leftLog = append(f.leftLog, channelID)
 }
 
 // fakeChat implements ChatStore in memory.

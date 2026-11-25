@@ -475,9 +475,6 @@ func run() (retErr error) {
 	// the database and the in-memory state manager, including automatic cleanup
 	// of empty temporary channels.
 	channelMgr := channels.New(dbStore, stateManager, logger)
-	// Enter role mode before loading persisted channels so legacy cleanup timers
-	// and resource writers can never run during startup.
-	channelMgr.EnableRoleMode(nil)
 	// (165) operator-configurable temporary channel lifetime; <= 0 keeps the default.
 	channelMgr.SetCleanupDelay(time.Duration(cfg.ChannelTempLifetimeSeconds) * time.Second)
 	defer channelMgr.Close()

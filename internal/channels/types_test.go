@@ -1,11 +1,6 @@
 package channels
 
-import (
-	"math"
-	"strconv"
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestChannelTypeValid(t *testing.T) {
 	t.Parallel()
@@ -60,66 +55,6 @@ func TestParseChannelType(t *testing.T) {
 			}
 			if err != nil || got != test.expected {
 				t.Fatalf("ParseChannelType(%d) = (%d, %v), want (%d, nil)", test.value, got, err, test.expected)
-			}
-		})
-	}
-}
-
-func TestChannelSpecValidate(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name        string
-		spec        ChannelSpec
-		wantErrText string
-	}{
-		{
-			name: "valid temporary",
-			spec: ChannelSpec{Name: "Lobby", Type: ChannelTypeTemporary},
-		},
-		{
-			name: "valid permanent with optional fields",
-			spec: ChannelSpec{
-				Name: "Music", Type: ChannelTypePermanent, ParentID: 7,
-				MaxClients: -1, OpusBitrate: 64_000,
-			},
-		},
-		{
-			name:        "empty name",
-			spec:        ChannelSpec{Type: ChannelTypePermanent},
-			wantErrText: "channel name must not be empty",
-		},
-		{
-			name:        "invalid type",
-			spec:        ChannelSpec{Name: "Broken", Type: 99},
-			wantErrText: "invalid channel type 99",
-		},
-	}
-	if strconv.IntSize == 64 {
-		tests = append(tests, struct {
-			name        string
-			spec        ChannelSpec
-			wantErrText string
-		}{
-			name:        "max clients over database range",
-			spec:        ChannelSpec{Name: "Too large", Type: ChannelTypePermanent, MaxClients: int(int64(math.MaxInt32) + 1)},
-			wantErrText: "max clients is out of range",
-		})
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-
-			err := test.spec.Validate()
-			if test.wantErrText == "" {
-				if err != nil {
-					t.Fatalf("Validate() error = %v", err)
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), test.wantErrText) {
-				t.Fatalf("Validate() error = %v, want text %q", err, test.wantErrText)
 			}
 		})
 	}

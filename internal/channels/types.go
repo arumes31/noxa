@@ -1,6 +1,6 @@
-// Package channels implements noxa channel lifecycle management: creation,
-// deletion, type transitions, and automatic cleanup of temporary channels when
-// they become empty.
+// Package channels keeps the in-memory channel tree in step with the database
+// and schedules the automatic cleanup of temporary channels when they become
+// empty.
 //
 // A temporary channel (ChannelTypeTemporary) is deleted automatically after a
 // configurable grace period once it has zero members. Semi-permanent and
@@ -9,10 +9,6 @@ package channels
 
 import (
 	"fmt"
-	"noxa/internal/netproto"
-	"strings"
-
-	"noxa/internal/safecast"
 )
 
 // ChannelType distinguishes temporary, semi-permanent, and permanent channels.
@@ -71,70 +67,4 @@ func ParseChannelType(value int) (ChannelType, error) {
 	default:
 		return 0, fmt.Errorf("invalid channel type %d", value)
 	}
-}
-
-// ChannelSpec describes a channel to be created. It is the input to
-// ChannelManager.CreateChannel.
-type ChannelSpec struct {
-	// Name is the channel display name. Must be non-empty.
-	Name string
-	// Topic is an optional channel topic/description.
-	Topic string
-	// ParentID is the parent channel ID. 0 means the channel is a root channel.
-	ParentID int64
-	// OrderIndex controls the sort order among siblings.
-	OrderIndex int
-	// Type is the channel type (temporary, semi-permanent, permanent).
-	Type ChannelType
-	// MaxClients is the maximum number of clients allowed in the channel. 0 or
-	// negative means unlimited (stored as NULL).
-	MaxClients int
-	// Password is the plaintext channel password. If non-empty it is hashed
-	// with auth.HashPassword before being stored. If empty, no password is set.
-	Password string
-	// CreatedBy is the user ID of the channel creator. 0 means unknown.
-	CreatedBy int64
-
-	// Per-channel Opus audio quality (migration 005). OpusBitrate is the
-	// target bitrate in bits/s; 0 means the server default (32000).
-	OpusBitrate int
-	OpusFEC     bool
-	OpusDTX     bool
-	OpusStereo  bool
-}
-
-// ChannelUpdate describes the editable fields of a channel. Nil pointers
-// leave the corresponding column untouched. It is the input to
-// ChannelManager.UpdateChannel.
-type ChannelUpdate struct {
-	Topic           *string
-	MaxClients      *int
-	OpusBitrate     *int
-	OpusFEC         *bool
-	OpusDTX         *bool
-	OpusStereo      *bool
-	SlowModeSeconds *int
-	Description     *string
-	// OrderIndex and ParentID are editable after creation; ParentID 0 moves
-	// the channel to the root.
-	OrderIndex *int
-	ParentID   *int64
-}
-
-// Validate checks the spec for obvious errors and returns a descriptive error
-// if any are found. It does not verify the parent channel's existence (that is
-// done by the manager, which has access to the database).
-func (s ChannelSpec) Validate() error {
-	if strings.TrimSpace(s.Name) == "" || len(s.Name) > 255 || !netproto.ValidIdentifierText(s.Name) {
-		return fmt.Errorf("channel name must not be empty")
-	}
-	if !s.Type.Valid() {
-		return fmt.Errorf("invalid channel type %d", s.Type)
-	}
-	if s.MaxClients > 0 {
-		if _, err := safecast.IntToInt32(s.MaxClients); err != nil {
-			return fmt.Errorf("max clients is out of range: %w", err)
-		}
-	}
-	return nil
 }
