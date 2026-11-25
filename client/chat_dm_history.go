@@ -104,6 +104,10 @@ type dmLog struct {
 	// side (DisappearingAt orders concurrent changes by their send time).
 	Disappearing   int64   `json:"disappearing,omitempty"`
 	DisappearingAt float64 `json:"disappearing_at,omitempty"`
+	// ClearedAt is when the user deleted this conversation's history (unix
+	// seconds, 0 = never). The protected archive still holds the messages and
+	// is replayed into this log; records sent up to then stay out.
+	ClearedAt float64 `json:"cleared_at,omitempty"`
 }
 
 // dmBeforeRead is a test seam placed only around read-only public APIs. It
@@ -114,6 +118,9 @@ var dmBeforeRead func()
 // dmBeforeWrite lets tests pause an accepted operation after owner capture,
 // before it waits for the disk transaction lock.
 var dmBeforeWrite func()
+
+// dmStoreIO lets tests count whole-log reads (false) and writes (true).
+var dmStoreIO func(write bool)
 
 // dmHistoryDir returns the per-device log directory. An App with no settings
 // path (tests, with the default-path fallback disarmed) gets an error rather
@@ -190,6 +197,9 @@ func (s dmHistoryStore) path(peer string) string {
 // load opens a peer's log. A missing file is an empty log, not an error:
 // the first DM with someone is the normal case.
 func (s dmHistoryStore) load(peer string) (dmLog, error) {
+	if hook := dmStoreIO; hook != nil {
+		hook(false)
+	}
 	root, name, err := openParentRoot(s.path(peer))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -226,6 +236,9 @@ func (s dmHistoryStore) open(blob []byte) (dmLog, error) {
 // save seals and writes a peer's log, trimming it to the newest
 // dmHistoryMax messages.
 func (s dmHistoryStore) save(l dmLog) error {
+	if hook := dmStoreIO; hook != nil {
+		hook(true)
+	}
 	if identityDeleted(s.identityKey) {
 		return errIdentityDeleted
 	}
@@ -342,6 +355,7 @@ func (a *App) dmHistoryAppendWith(store dmHistoryStore, peer, nickname string, e
 }
 
 // DMHistoryClear deletes a peer's stored conversation (explicit user action).
+// The log file stays, emptied and marked with the time: see dmLog.ClearedAt.
 func (a *App) DMHistoryClear(peer string) string {
 	if peer == "" {
 		return "peer is required"
@@ -362,7 +376,9 @@ func (a *App) dmHistoryClearWith(store dmHistoryStore, peer string) string {
 	}
 	a.dmMu.Lock()
 	defer a.dmMu.Unlock()
-	if err := os.Remove(store.path(peer)); err != nil && !os.IsNotExist(err) {
+	l, _ := store.load(peer) // an unreadable log is replaced as well
+	cleared := dmLog{Peer: peer, Disappearing: l.Disappearing, DisappearingAt: l.DisappearingAt, ClearedAt: float64(time.Now().UnixMilli()) / 1000}
+	if err := store.save(cleared); err != nil {
 		return err.Error()
 	}
 	return ""
@@ -399,7 +415,8 @@ func (s dmHistoryStore) peers() []DMPeer {
 			continue
 		}
 		l, err := s.open(blob)
-		if err != nil || l.Peer == "" {
+		// A log with no messages is a deleted conversation's marker.
+		if err != nil || l.Peer == "" || len(l.Messages) == 0 {
 			continue
 		}
 		p := DMPeer{UniqueID: l.Peer, Nickname: l.Nickname, Messages: len(l.Messages)}
