@@ -27,10 +27,10 @@ func TestBuildSnapshot_Populated(t *testing.T) {
 	c2 := &state.Client{ClientID: "c2", UniqueID: "u2", Nickname: "Bob", ChannelID: 2, ConnectedAt: time.Now()}
 	sm.AddClient(c1)
 	sm.AddClient(c2)
-	if err := sm.JoinChannel("c1", 2); err != nil {
+	if err := sm.MoveClient("c1", 2); err != nil {
 		t.Fatalf("join c1: %v", err)
 	}
-	if err := sm.JoinChannel("c2", 2); err != nil {
+	if err := sm.MoveClient("c2", 2); err != nil {
 		t.Fatalf("join c2: %v", err)
 	}
 
@@ -150,7 +150,7 @@ func TestPresenceTokenSharedWithoutExposingMembershipEpoch(t *testing.T) {
 	sm := newTestManager()
 	sm.AddChannel(&state.Channel{ChannelID: 8, Name: "Public"})
 	sm.AddClient(&state.Client{ClientID: "member", UniqueID: "member-uid"})
-	if err := sm.JoinChannel("member", 8); err != nil {
+	if err := sm.MoveClient("member", 8); err != nil {
 		t.Fatal(err)
 	}
 	first := BuildSnapshot(sm, false, "observer-a").RootChannels[0].Clients[0]
@@ -168,7 +168,7 @@ func TestPresenceTokenSharedWithoutExposingMembershipEpoch(t *testing.T) {
 	if err := sm.LeaveChannel("member"); err != nil {
 		t.Fatal(err)
 	}
-	if err := sm.JoinChannel("member", 8); err != nil {
+	if err := sm.MoveClient("member", 8); err != nil {
 		t.Fatal(err)
 	}
 	again := BuildSnapshot(sm, false, "observer-a").RootChannels[0].Clients[0]

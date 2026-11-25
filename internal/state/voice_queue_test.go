@@ -12,7 +12,7 @@ func TestVoiceQueueFIFOAndMembership(t *testing.T) {
 	m.AddChannel(&Channel{ChannelID: 3, TextOnly: true})
 	for _, id := range []string{"a", "b", "c"} {
 		m.AddClient(&Client{ClientID: id})
-		if err := m.JoinChannel(id, 1); err != nil {
+		if err := m.MoveClient(id, 1); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -61,7 +61,7 @@ func TestVoiceQueueLeavingAndRejoiningLosesPosition(t *testing.T) {
 	m := newTestManager(t)
 	m.AddChannel(&Channel{ChannelID: 1})
 	m.AddClient(&Client{ClientID: "a"})
-	if err := m.JoinChannel("a", 1); err != nil {
+	if err := m.MoveClient("a", 1); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := m.UpdateVoiceQueue(1, "a", "raise"); err != nil {
@@ -70,7 +70,7 @@ func TestVoiceQueueLeavingAndRejoiningLosesPosition(t *testing.T) {
 	if err := m.LeaveChannel("a"); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.JoinChannel("a", 1); err != nil {
+	if err := m.MoveClient("a", 1); err != nil {
 		t.Fatal(err)
 	}
 	member, _ := m.GetClient("a")
