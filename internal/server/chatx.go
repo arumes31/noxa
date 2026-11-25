@@ -1493,8 +1493,8 @@ func (s *TCPServer) relaySessionTyping(ctx context.Context, client *Client, f *n
 		Direct:    msg.ToUniqueID != "",
 	}
 	if msg.ToUniqueID == "" {
-		// Gated on SendMessages in the scope: a client cannot show as typing
-		// where it may not post.
+		// SendMessages requires ViewChannel, so a client cannot fake "X is
+		// typing" into a channel it cannot post in or cannot see.
 		_ = s.withRoleAccess(ctx, client, msg.ChannelID, authorization.SendMessages, func(ctx context.Context) error {
 			s.broadcastScope(ctx, msg.ChannelID, eventTyping, data)
 			return nil

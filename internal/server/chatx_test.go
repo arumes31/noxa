@@ -5,6 +5,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1466,5 +1467,41 @@ func expectNoEvent(t *testing.T, conn net.Conn, want string) {
 		if evType, _ := decodeEvent(t, f); evType == want {
 			t.Fatalf("unexpected %s event", want)
 		}
+	}
+}
+
+// A member who may post in a channel but not see it cannot show as typing
+// there.
+func TestTypingNeedsChannelView(t *testing.T) {
+	backend := serverRoleFixture()
+	backend.policy.OwnerID = 1
+	backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel, authorization.SendMessages}
+	backend.policy.Channels[0].Overrides = []authorization.RoleOverride{{RoleID: 10, Capability: authorization.ViewChannel, Effect: authorization.Deny}}
+	authority, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := startTestEnvDeps(t, nil, nil, func(d *Deps) { d.Authority = authority })
+	defer env.stop()
+	alice, _ := dialAuthed(t, env.addr, "admin-uid")
+	defer func() { _ = alice.Close() }()
+	apub, _ := testX25519(t)
+	publishKey(t, alice, apub)
+	env.state.AddChannel(testChannel(1))
+	send(t, alice, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
+	readChannelKeyFor(t, alice, 1)
+	bob, _ := dialAuthed(t, env.addr, "user-uid")
+	defer func() { _ = bob.Close() }()
+
+	send(t, bob, netproto.MsgTyping, netproto.Typing{ChannelID: 1})
+	send(t, bob, netproto.MsgTyping, netproto.Typing{})
+	var ev struct {
+		ChannelID int64 `json:"channel_id"`
+	}
+	if err := json.Unmarshal(readEventOfType(t, alice, "typing"), &ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.ChannelID != 0 {
+		t.Fatalf("typing relayed into channel %d, which its sender cannot see", ev.ChannelID)
 	}
 }

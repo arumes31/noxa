@@ -348,7 +348,6 @@ func (s *Store) ChatPins(ctx context.Context, channelID int64) ([]PinnedMessage,
 	return out, nil
 }
 
-
 // Reaction limits keep a message's aggregated reaction map, which every
 // toggle and history page carries in full, far below the protocol frame limit.
 const (

@@ -23,7 +23,7 @@ import (
 // fakePushes adds an in-memory PushStore to fakeDevices.
 type fakePushes struct {
 	*fakeDevices
-	pmu     sync.Mutex
+	pmu      sync.Mutex
 	subs     map[string]store.PushSubscription // by device ID
 	records  int                               // RecordPushResult calls
 	accounts []store.PushAccount               // returned by PushAccounts
