@@ -19,7 +19,7 @@ UPDATE_LDFLAGS = \
 	-X noxa/internal/version.UpdateRepo=$(NOXA_UPDATE_REPO) \
 	-X noxa/internal/version.UpdatePublicKeys=$(NOXA_UPDATE_PUBLIC_KEYS)
 
-.PHONY: all build client-build run version version-check migrate proto tidy test cover fmt vet docker-build docker-run docker-stop compose-up compose-down compose-logs chaos chaos-webrtc profile-db query-load webrtc-load canary clean help
+.PHONY: all build client-build run version version-check migrate proto tidy test cover fmt vet docker-build compose-up compose-down compose-logs chaos chaos-webrtc profile-db query-load webrtc-load canary clean help
 
 all: build
 
@@ -94,14 +94,6 @@ docker-build:
 	$(DOCKER) build $$version_args \
 		--build-arg NOXA_UPDATE_REPO=$(NOXA_UPDATE_REPO) \
 		-t $(NOXA_IMAGE) .
-
-## docker-run: run the $(NOXA_IMAGE) image with default ports published
-docker-run:
-	$(DOCKER) run --rm -p 12333:12333 -p 12334:12334/udp -p 12335:12335 -p 12336:12336 -p 12337:12337 $(NOXA_IMAGE)
-
-## docker-stop: stop and remove any running noxa containers
-docker-stop:
-	-$(DOCKER) rm -f noxa 2>/dev/null || true
 
 ## compose-up: build and start the full stack (noxa + postgres + redis) detached
 compose-up:

@@ -22,7 +22,9 @@ func TestTaskbarOverlayHookOnlyObservesOwnedHiddenWindow(t *testing.T) {
 		return h
 	}
 	first, other := create(), create()
-	defer user32.NewProc("DestroyWindow").Call(other)
+	// Call always returns the thread's last-error value; the assertions below
+	// check what these messages and teardown calls did.
+	defer func() { _, _, _ = user32.NewProc("DestroyWindow").Call(other) }()
 	q := newTaskbarOverlayQueue()
 	q.publish(first, trayMicMuted)
 	b, err := newTaskbarOverlayWindows(q)
@@ -48,15 +50,15 @@ func TestTaskbarOverlayHookOnlyObservesOwnedHiddenWindow(t *testing.T) {
 	}
 	send := user32.NewProc("SendMessageW")
 	old := q.desired.Load()
-	send.Call(other, uintptr(b.createdMessage), 0, 0)
+	_, _, _ = send.Call(other, uintptr(b.createdMessage), 0, 0)
 	if q.desired.Load() != old {
 		t.Fatal("other window changed overlay")
 	}
-	send.Call(first, uintptr(b.createdMessage), 0, 0)
+	_, _, _ = send.Call(first, uintptr(b.createdMessage), 0, 0)
 	if q.desired.Load().generation != old.generation+1 {
 		t.Fatal("TaskbarButtonCreated was not observed")
 	}
-	user32.NewProc("DestroyWindow").Call(first)
+	_, _, _ = user32.NewProc("DestroyWindow").Call(first)
 	if q.desired.Load().hwnd != 0 {
 		t.Fatal("WM_NCDESTROY failed to invalidate target")
 	}
@@ -115,12 +117,12 @@ func TestTaskbarOverlayHookBoundedMessageCost(t *testing.T) {
 	if hwnd == 0 {
 		t.Fatal(err)
 	}
-	defer user32.NewProc("DestroyWindow").Call(hwnd)
+	defer func() { _, _, _ = user32.NewProc("DestroyWindow").Call(hwnd) }()
 	send := user32.NewProc("SendMessageW")
 	measure := func() time.Duration {
 		start := time.Now()
 		for i := 0; i < 10000; i++ {
-			send.Call(hwnd, 0, 0, 0)
+			_, _, _ = send.Call(hwnd, 0, 0, 0) // timing only
 		}
 		return time.Since(start)
 	}

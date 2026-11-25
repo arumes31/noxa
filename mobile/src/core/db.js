@@ -166,12 +166,6 @@ export function keys(storeName) {
     return withDB(db => run(db, storeName, "readonly", store => store.getAllKeys()));
 }
 
-export function clearStores(...names) {
-    return withDB(async db => {
-        for (const name of names) await run(db, name, "readwrite", store => store.clear());
-    });
-}
-
 export function deleteKey(storeName, key) {
     return withDB(db => run(db, storeName, "readwrite", store => store.delete(key)));
 }

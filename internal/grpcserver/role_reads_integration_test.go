@@ -89,7 +89,11 @@ func TestRoleGRPCChannelReadUsesCurrentNativeProjection(t *testing.T) {
 	b := &nativeMetadataGRPCBackend{nativeRoleGRPCBackend: &nativeRoleGRPCBackend{RoleIntegrationBackend: native, RoleManagementBackend: native}, RoleMetadataBackend: native, RoleBanInspectionBackend: native, RoleAuditBackend: native, RoleComplaintBackend: native, RoleRulesBackend: native, RoleConfigBackend: native}
 	b.RoleFilterBackend = native
 	b.RoleTextBackend = native
-	client := noxav1.NewControlClient(dialGRPC(t, startGRPC(t, b, nil)))
+	// The disabled-identity checks at the end are all failed logins; the
+	// default lockout would answer most of them before authentication.
+	limiter := query.New("", zap.NewNop(), b)
+	limiter.MaxLoginFailures = 100
+	client := noxav1.NewControlClient(dialGRPC(t, startGRPCWith(t, b, nil, func(s *Server) { s.limiter = limiter })))
 	ctx := func() context.Context { return roleAuthCtx(t, member.UniqueID(), password) }
 	response, err := client.ListChannels(ctx(), &noxav1.ListChannelsRequest{})
 	if err != nil || len(response.GetChannels()) != 1 {

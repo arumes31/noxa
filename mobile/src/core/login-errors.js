@@ -26,11 +26,16 @@ export function classifySignIn(error) {
     return { kind: "unknown" };
 }
 
+// Refusals that waiting cannot fix: the app stops reconnecting and shows
+// them. A full or busy server, a rate limit and network errors are retried.
+const DEFINITIVE = new Set(["banned", "serverPassword", "minimumVersion", "version", "guestDisabled", "serverOutdated", "revoked"]);
+
 /** An Error carrying the server's reason and its class. */
 export function signInError(reason) {
     const error = new Error(reason || "sign-in failed");
     const failure = classifySignIn(error);
     error.kind = failure.kind;
+    error.definitive = DEFINITIVE.has(failure.kind);
     if (failure.retryAfter) error.retryAfter = failure.retryAfter;
     return error;
 }

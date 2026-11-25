@@ -22,11 +22,6 @@ function inboxData(session) {
     });
 }
 
-/** Total unread conversations, for a badge on Home. */
-export function inboxCount(session = app.session) {
-    return session ? inboxData(session).items.length : 0;
-}
-
 export function renderInbox(root) {
     const session = app.session;
     const body = h("div", { class: "screen-body" });
