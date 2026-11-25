@@ -17,25 +17,6 @@ import (
 	"golang.org/x/crypto/nacl/secretbox"
 )
 
-func TestReactionCacheExpiresAndIsBounded(t *testing.T) {
-	s := &Store{}
-	s.cacheReactions(1, map[string]int{"👍": 1})
-	value, ok := s.reactionCache.Load(int64(1))
-	if !ok {
-		t.Fatal("reaction cache entry missing")
-	}
-	value.(*reactionCacheEntry).expiresAt.Store(time.Now().Add(-time.Second).UnixNano())
-	if _, ok := s.cachedReactions(1); ok {
-		t.Fatal("expired reaction cache entry returned")
-	}
-	for id := int64(1); id <= maxReactionCacheEntries+1; id++ {
-		s.cacheReactions(id, map[string]int{})
-	}
-	if s.reactionCacheSize > maxReactionCacheEntries {
-		t.Fatalf("reaction cache size = %d, max %d", s.reactionCacheSize, maxReactionCacheEntries)
-	}
-}
-
 func TestToggleReaction(t *testing.T) {
 	s := testMigratedStore(t)
 	if err := s.Migrate(); err != nil {
@@ -60,10 +41,6 @@ func TestToggleReaction(t *testing.T) {
 					t.Fatalf("seeding existing reaction: %v", err)
 				}
 			}
-			// Prime the cache so both operations must replace stale counts.
-			if _, err := s.Reactions(ctx, id); err != nil {
-				t.Fatalf("Reactions before toggle: %v", err)
-			}
 			counts, added, err := s.ToggleReaction(ctx, id, "reader", emoji)
 			if err != nil {
 				t.Fatalf("ToggleReaction: %v", err)
@@ -82,9 +59,9 @@ func TestToggleReaction(t *testing.T) {
 			if storedCount != wantCount {
 				t.Fatalf("stored count = %d, want %d", storedCount, wantCount)
 			}
-			cached, err := s.Reactions(ctx, id)
-			if err != nil || cached[emoji] != wantCount {
-				t.Fatalf("Reactions after toggle = %v, %v; want count %d", cached, err, wantCount)
+			page, err := s.ReactionsFor(ctx, []int64{id})
+			if err != nil || page[id][emoji] != wantCount {
+				t.Fatalf("ReactionsFor after toggle = %v, %v; want count %d", page, err, wantCount)
 			}
 		})
 	}

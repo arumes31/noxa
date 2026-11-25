@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -46,9 +45,6 @@ type appliedMigration struct {
 type Store struct {
 	db                *sql.DB
 	logger            *zap.Logger
-	reactionCache     sync.Map // message id -> *reactionCacheEntry
-	reactionCacheMu   sync.Mutex
-	reactionCacheSize int
 	pii               *PIICipher
 	// migrationLockWaitHook is a test seam invoked after an advisory-lock
 	// attempt observes the lock held by another session.

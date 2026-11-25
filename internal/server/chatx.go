@@ -1504,41 +1504,22 @@ func (s *TCPServer) relaySessionTyping(ctx context.Context, client *Client, f *n
 		Direct:    msg.ToUniqueID != "",
 	}
 	if msg.ToUniqueID == "" {
+		// Gated on SendMessages in the scope: a client cannot show as typing
+		// where it may not post.
 		_ = s.withRoleAccess(ctx, client, msg.ChannelID, authorization.SendMessages, func(ctx context.Context) error {
 			s.broadcastScope(ctx, msg.ChannelID, eventTyping, data)
 			return nil
 		})
 		return nil
 	}
-	switch {
-	case msg.ToUniqueID != "":
-		payload, err := eventEnvelope(eventTyping, data)
-		if err != nil {
-			return err
-		}
-		// Every session of the recipient: a desktop and its linked phones
-		// each show the indicator in their own copy of the conversation.
-		for _, tc := range s.sessionsOf(msg.ToUniqueID) {
-			_ = s.deps.Broadcast.BroadcastToClient(tc.ID, payload)
-		}
-	case msg.ChannelID != 0:
-		// Same gate as history: without it any client could fake "X is
-		// typing" into a channel it never joined, which is the metadata half
-		// of the leak scopeReadable closes for bodies.
-		if !s.scopeReadable(ctx, client, msg.ChannelID) {
-			return nil
-		}
-		payload, err := eventEnvelope(eventTyping, data)
-		if err != nil {
-			return err
-		}
-		s.broadcastChannelScoped(ctx, msg.ChannelID, payload)
-	default:
-		raw, err := json.Marshal(data)
-		if err != nil {
-			return err
-		}
-		s.deps.Broadcast.BroadcastEvent(eventTyping, raw)
+	payload, err := eventEnvelope(eventTyping, data)
+	if err != nil {
+		return err
+	}
+	// Every session of the recipient: a desktop and its linked phones
+	// each show the indicator in their own copy of the conversation.
+	for _, tc := range s.sessionsOf(msg.ToUniqueID) {
+		_ = s.deps.Broadcast.BroadcastToClient(tc.ID, payload)
 	}
 	return nil
 }

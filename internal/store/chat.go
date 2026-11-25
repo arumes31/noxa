@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"sync/atomic"
 	"time"
 
 	"github.com/lib/pq"
@@ -349,90 +348,6 @@ func (s *Store) ChatPins(ctx context.Context, channelID int64) ([]PinnedMessage,
 	return out, nil
 }
 
-// ToggleReaction adds the (message, user, emoji) reaction if absent, removes
-// it if present. It returns the full updated reaction map (emoji -> count)
-// and whether the reaction is now present for this user.
-type reactionCacheEntry struct {
-	counts    atomic.Pointer[map[string]int]
-	expiresAt atomic.Int64
-}
-
-const (
-	reactionCacheTTL        = 30 * time.Second
-	maxReactionCacheEntries = 10_000
-)
-
-func cloneReactionCounts(in map[string]int) map[string]int {
-	out := make(map[string]int, len(in))
-	for emoji, count := range in {
-		out[emoji] = count
-	}
-	return out
-}
-
-func (s *Store) cacheReactions(messageID int64, counts map[string]int) {
-	s.reactionCacheMu.Lock()
-	defer s.reactionCacheMu.Unlock()
-	value, loaded := s.reactionCache.LoadOrStore(messageID, &reactionCacheEntry{})
-	if !loaded {
-		s.reactionCacheSize++
-	}
-	entry := value.(*reactionCacheEntry)
-	snapshot := cloneReactionCounts(counts)
-	entry.counts.Store(&snapshot)
-	entry.expiresAt.Store(time.Now().Add(reactionCacheTTL).UnixNano())
-	s.pruneReactionCacheLocked(time.Now())
-}
-
-func (s *Store) cachedReactions(messageID int64) (map[string]int, bool) {
-	value, ok := s.reactionCache.Load(messageID)
-	if !ok {
-		return nil, false
-	}
-	entry := value.(*reactionCacheEntry)
-	if expiresAt := entry.expiresAt.Load(); expiresAt == 0 || time.Now().UnixNano() >= expiresAt {
-		s.invalidateReactionCache(messageID)
-		return nil, false
-	}
-	snapshot := entry.counts.Load()
-	if snapshot == nil {
-		return nil, false
-	}
-	return cloneReactionCounts(*snapshot), true
-}
-
-func (s *Store) invalidateReactionCache(messageID int64) {
-	s.reactionCacheMu.Lock()
-	defer s.reactionCacheMu.Unlock()
-	if _, loaded := s.reactionCache.LoadAndDelete(messageID); loaded {
-		s.reactionCacheSize--
-	}
-}
-
-func (s *Store) pruneReactionCacheLocked(now time.Time) {
-	if s.reactionCacheSize <= maxReactionCacheEntries {
-		return
-	}
-	nowNanos := now.UnixNano()
-	s.reactionCache.Range(func(key, value any) bool {
-		entry := value.(*reactionCacheEntry)
-		if entry.expiresAt.Load() <= nowNanos {
-			if _, loaded := s.reactionCache.LoadAndDelete(key); loaded {
-				s.reactionCacheSize--
-			}
-		}
-		return true
-	})
-	if s.reactionCacheSize <= maxReactionCacheEntries {
-		return
-	}
-	s.reactionCache.Range(func(key, _ any) bool {
-		if _, loaded := s.reactionCache.LoadAndDelete(key); loaded {
-			s.reactionCacheSize--
-		}
-		return s.reactionCacheSize > maxReactionCacheEntries
-	})
-}
 
 // Reaction limits keep a message's aggregated reaction map, which every
 // toggle and history page carries in full, far below the protocol frame limit.
@@ -445,6 +360,9 @@ const (
 // per-message reaction limits.
 var ErrReactionLimit = errors.New("too many reactions on this message")
 
+// ToggleReaction adds the (message, user, emoji) reaction if absent, removes
+// it if present. It returns the full updated reaction map (emoji -> count)
+// and whether the reaction is now present for this user.
 func (s *Store) ToggleReaction(ctx context.Context, messageID int64, uniqueID, emoji string) (map[string]int, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -497,21 +415,7 @@ func (s *Store) ToggleReaction(ctx context.Context, messageID int64, uniqueID, e
 	if err := tx.Commit(); err != nil {
 		return nil, false, fmt.Errorf("committing reaction toggle: %w", err)
 	}
-	s.invalidateReactionCache(messageID)
-	s.cacheReactions(messageID, counts)
 	return counts, added, nil
-}
-
-// Reactions returns the reaction counts (emoji -> count) for a message.
-func (s *Store) Reactions(ctx context.Context, messageID int64) (map[string]int, error) {
-	if counts, ok := s.cachedReactions(messageID); ok {
-		return counts, nil
-	}
-	counts, err := queryReactions(ctx, s.db, messageID)
-	if err == nil {
-		s.cacheReactions(messageID, counts)
-	}
-	return counts, err
 }
 
 type reactionQuerier interface {
@@ -541,21 +445,15 @@ func queryReactions(ctx context.Context, qx reactionQuerier, messageID int64) (m
 // (history pages).
 func (s *Store) ReactionsFor(ctx context.Context, ids []int64) (map[int64]map[string]int, error) {
 	out := make(map[int64]map[string]int, len(ids))
-	missing := make([]int64, 0, len(ids))
 	for _, id := range ids {
-		if counts, ok := s.cachedReactions(id); ok {
-			out[id] = counts
-		} else {
-			out[id] = map[string]int{}
-			missing = append(missing, id)
-		}
+		out[id] = map[string]int{}
 	}
-	if len(missing) == 0 {
+	if len(ids) == 0 {
 		return out, nil
 	}
 	const q = `SELECT message_id, emoji, COUNT(*) FROM chat_reactions
 	          WHERE message_id = ANY($1) GROUP BY message_id, emoji`
-	rows, err := s.db.QueryContext(ctx, q, pq.Array(missing))
+	rows, err := s.db.QueryContext(ctx, q, pq.Array(ids))
 	if err != nil {
 		return nil, fmt.Errorf("querying reactions page: %w", err)
 	}
@@ -571,9 +469,6 @@ func (s *Store) ReactionsFor(ctx context.Context, ids []int64) (map[int64]map[st
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
-	}
-	for _, id := range missing {
-		s.cacheReactions(id, out[id])
 	}
 	return out, nil
 }

@@ -42,8 +42,8 @@ func TestToggleReactionEnforcesLimits(t *testing.T) {
 		}
 		added++
 	}
-	counts, err := s.Reactions(ctx, id)
-	if err != nil || len(counts) != MaxReactionLabelsPerMessage {
+	page, err := s.ReactionsFor(ctx, []int64{id})
+	if counts := page[id]; err != nil || len(counts) != MaxReactionLabelsPerMessage {
 		t.Fatalf("distinct labels at cap = %d (%v), want %d", len(counts), err, MaxReactionLabelsPerMessage)
 	}
 	// An existing label can still be joined at the cap.
