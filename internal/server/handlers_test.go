@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -201,9 +202,9 @@ func (f *fakeAuth) LookupActiveBan(_ context.Context, uniqueID, ip string) (*aut
 type fakeChannels struct {
 	state *state.Manager
 
-	mu      sync.Mutex
-	joinLog []int64
-	leftLog []int64
+	mu            sync.Mutex
+	joinLog       []int64
+	leftLog       []int64
 }
 
 func (f *fakeChannels) MoveClientWithLifecycle(clientID string, channelID int64, afterMove func(int64)) (int64, error) {
