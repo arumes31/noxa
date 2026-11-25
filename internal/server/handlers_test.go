@@ -15,7 +15,6 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
