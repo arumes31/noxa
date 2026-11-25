@@ -59,41 +59,12 @@ func TestRegisterTwiceError(t *testing.T) {
 	}
 }
 
-func TestBroadcastSnapshotDeliversToAll(t *testing.T) {
-	b, sm := newTestBroadcaster(t)
-	defer b.Close()
-
-	// Populate state so the snapshot has content.
-	sm.AddChannel(&state.Channel{ChannelID: 1, Name: "root", CreatedAt: time.Now()})
-
-	ch1, _ := b.Register("c1")
-	ch2, _ := b.Register("c2")
-
-	b.BroadcastSnapshot(false, "")
-
-	for i, ch := range []<-chan []byte{ch1, ch2} {
-		select {
-		case msg := <-ch:
-			if !strings.Contains(string(msg), "root_channels") {
-				t.Fatalf("client %d got invalid snapshot JSON: %s", i, string(msg))
-			}
-		case <-time.After(time.Second):
-			t.Fatalf("client %d did not receive snapshot", i)
-		}
-	}
-}
-
 func TestTelemetryObserversRunAfterBroadcastLocks(t *testing.T) {
 	sm := state.New(zap.NewNop())
 	var broadcaster *Broadcaster
-	snapshotDuration := make(chan time.Duration, 1)
 	backlogDepth := make(chan int, 1)
 	var unregisterOnce sync.Once
 	broadcaster = New(zap.NewNop(), sm, Observers{
-		ObserveSnapshotDuration: func(duration time.Duration) {
-			_ = broadcaster.Stats()
-			snapshotDuration <- duration
-		},
 		ObserveClientBacklog: func(depth int) {
 			// Re-enter a write-locked operation. If telemetry ran under mu or
 			// sendMu this blocks the broadcast rather than completing below.
@@ -107,24 +78,13 @@ func TestTelemetryObserversRunAfterBroadcastLocks(t *testing.T) {
 	}
 	done := make(chan struct{})
 	go func() {
-		broadcaster.BroadcastSnapshot(false, "")
+		broadcaster.BroadcastEvent("probe", []byte("{}"))
 		close(done)
 	}()
 	select {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("broadcast blocked while invoking telemetry observer")
-	}
-	select {
-	case duration := <-snapshotDuration:
-		if duration < 0 {
-			t.Fatalf("snapshot duration = %s, want non-negative", duration)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("snapshot observer was not called")
-	}
-	if extra := len(snapshotDuration); extra != 0 {
-		t.Fatalf("snapshot observer calls = %d, want exactly 1", extra+1)
 	}
 	select {
 	case depth := <-backlogDepth:
@@ -168,29 +128,6 @@ func TestBacklogObserverReportsFullQueueDepth(t *testing.T) {
 	}
 }
 
-// TestBroadcastSnapshotHidesInvisible verifies the viewer/admin flags reach
-// BuildSnapshot: a fan-out must not leak invisible users (381).
-func TestBroadcastSnapshotHidesInvisible(t *testing.T) {
-	b, sm := newTestBroadcaster(t)
-	defer b.Close()
-
-	sm.AddChannel(&state.Channel{ChannelID: 1, Name: "root", CreatedAt: time.Now()})
-	sm.AddClient(&state.Client{ClientID: "g1", UniqueID: "ghost-uid", Nickname: "Ghost", Status: "invisible", ConnectedAt: time.Now()})
-	_ = sm.JoinChannel("g1", 1)
-
-	ch, _ := b.Register("c1")
-	b.BroadcastSnapshot(false, "")
-
-	select {
-	case msg := <-ch:
-		if strings.Contains(string(msg), "Ghost") {
-			t.Fatalf("invisible user leaked into the fan-out snapshot: %s", string(msg))
-		}
-	case <-time.After(time.Second):
-		t.Fatal("did not receive snapshot")
-	}
-}
-
 func TestBroadcastToChannelScoped(t *testing.T) {
 	b, sm := newTestBroadcaster(t)
 	defer b.Close()
@@ -202,8 +139,8 @@ func TestBroadcastToChannelScoped(t *testing.T) {
 	c2 := &state.Client{ClientID: "c2", ConnectedAt: time.Now()}
 	sm.AddClient(c1)
 	sm.AddClient(c2)
-	_ = sm.JoinChannel("c1", 10)
-	_ = sm.JoinChannel("c2", 20)
+	_ = sm.MoveClient("c1", 10)
+	_ = sm.MoveClient("c2", 20)
 
 	ch1, _ := b.Register("c1")
 	ch2, _ := b.Register("c2")
@@ -301,7 +238,7 @@ func TestBroadcastPayloadOwnership(t *testing.T) {
 	sm.AddChannel(&state.Channel{ChannelID: 10, Name: "shared", CreatedAt: time.Now()})
 	for _, id := range []string{"c1", "c2"} {
 		sm.AddClient(&state.Client{ClientID: id, ConnectedAt: time.Now()})
-		if err := sm.JoinChannel(id, 10); err != nil {
+		if err := sm.MoveClient(id, 10); err != nil {
 			t.Fatalf("JoinChannel(%s): %v", id, err)
 		}
 	}
@@ -324,7 +261,7 @@ func TestConcurrentBroadcastsHaveConsistentRecipientOrder(t *testing.T) {
 	sm.AddChannel(&state.Channel{ChannelID: 10, Name: "shared", CreatedAt: time.Now()})
 	for _, id := range []string{"c1", "c2"} {
 		sm.AddClient(&state.Client{ClientID: id, ConnectedAt: time.Now()})
-		if err := sm.JoinChannel(id, 10); err != nil {
+		if err := sm.MoveClient(id, 10); err != nil {
 			t.Fatal(err)
 		}
 	}

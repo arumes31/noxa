@@ -262,6 +262,8 @@ type Deps struct {
 	Authority *authorization.Authority
 	BanAdmin  BanAdminStore
 	Metrics   metrics.Sink
+	// ObserveSnapshot receives the time taken to build each viewer snapshot.
+	ObserveSnapshot func(time.Duration)
 	// LoginLimiter limits failed TCP control-channel passwords. Nil installs
 	// the production default; tests can inject a clock-controlled limiter.
 	LoginLimiter *auth.LoginFailureLimiter

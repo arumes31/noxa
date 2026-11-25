@@ -91,8 +91,8 @@ func (p *keyedMutexPool[K]) lock(key K) func() {
 }
 
 type channelManagerHooks struct {
-	beforeLeaveClient   func(string)
-	beforeRemoveClient  func(string)
+	beforeLeaveClient  func(string)
+	beforeRemoveClient func(string)
 }
 
 // ChannelManager coordinates the lifecycle of channels across the database

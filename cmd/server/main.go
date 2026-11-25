@@ -508,8 +508,7 @@ func run() (retErr error) {
 	// active users and delivers them to registered clients via per-client
 	// outbound channels.
 	broadcaster := broadcast.New(logger, stateManager, broadcast.Observers{
-		ObserveSnapshotDuration: m.ObserveBroadcastSnapshot,
-		ObserveClientBacklog:    m.ObserveBroadcastClientBacklog,
+		ObserveClientBacklog: m.ObserveBroadcastClientBacklog,
 	})
 	defer broadcaster.Close()
 	logger.Info("broadcaster ready")
@@ -853,6 +852,7 @@ func run() (retErr error) {
 		Roles:                   dbStore,
 		BanAdmin:                dbStore,
 		Metrics:                 m,
+		ObserveSnapshot:         m.ObserveBroadcastSnapshot,
 		LoginLimiter:            loginLimiter,
 		Rules:                   rulesSvc,
 		ScopeKeys:               dbStore,

@@ -8,14 +8,19 @@ import (
 	"time"
 )
 
-// buildRoleSnapshot omits inaccessible channels and their members. A visible
-// custom child of a hidden parent appears at the root, without its parent's ID.
-// Counts describe only the visible tree; invisible presence is separately gated.
-func buildRoleSnapshot(sm *state.Manager, evaluator *authorization.RoleEvaluator, actorID int64, uniqueID string) *broadcast.TreeSnapshot {
-	snapshot, _ := buildRoleSnapshotContext(context.Background(), sm, evaluator, actorID, uniqueID)
-	return snapshot
+// roleSnapshot builds one viewer's snapshot and reports how long that took.
+func (s *TCPServer) roleSnapshot(ctx context.Context, e *authorization.RoleEvaluator, actorID int64, uniqueID string) (*broadcast.TreeSnapshot, error) {
+	started := time.Now()
+	snapshot, err := buildRoleSnapshotContext(ctx, s.deps.State, e, actorID, uniqueID)
+	if s.deps.ObserveSnapshot != nil {
+		s.deps.ObserveSnapshot(time.Since(started))
+	}
+	return snapshot, err
 }
 
+// buildRoleSnapshotContext omits inaccessible channels and their members. A visible
+// custom child of a hidden parent appears at the root, without its parent's ID.
+// Counts describe only the visible tree; invisible presence is separately gated.
 func buildRoleSnapshotContext(ctx context.Context, sm *state.Manager, evaluator *authorization.RoleEvaluator, actorID int64, uniqueID string) (*broadcast.TreeSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

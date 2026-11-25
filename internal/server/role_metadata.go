@@ -111,7 +111,7 @@ func (s *TCPServer) buildRoleServerInfo(ctx context.Context, e *authorization.Ro
 				resp.EchoPrivate = true
 			}
 		}
-		snapshot, err := buildRoleSnapshotContext(ctx, s.deps.State, e, actorID, actorUID)
+		snapshot, err := s.roleSnapshot(ctx, e, actorID, actorUID)
 		if err != nil {
 			return netproto.ServerInfoResponse{}, err
 		}
