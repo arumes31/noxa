@@ -29,9 +29,6 @@ health_tls_enabled: false  # native HTTPS with control certificate; browsers mus
 download_public_origin: ""
 # Canonical CIDRs of immediate HTTPS proxies. They must overwrite forwarded-proto.
 health_trusted_proxies: []
-# Production refuses /events credentials and /hooks secrets over plaintext from
-# remote peers (loopback and X-Forwarded-Proto: https proxies pass); true accepts the risk.
-health_allow_plaintext_credentials: false
 metrics_allow_remote: false  # explicit opt-in; exposes operational metrics
 pprof_enabled: false         # explicit opt-in; exposes profiling only to direct loopback callers
 shutdown_timeout: 30s        # total grace period shared by every service during orderly shutdown
@@ -107,7 +104,6 @@ file_tls_enabled: true  # DEVELOPMENT ONLY false: production action: leave true
 chat_master_key_file: "./data/keys/chat_master.key"
 chat_legacy_history: encrypt       # encrypt | purge
 chat_key_rotate_min_seconds: 60
-chat_search_max_messages: 2000
 server_info_motd: false            # true exposes MOTD plaintext after authentication
 
 # Chat moderation & limits (wave 5a). max_length is in UTF-8 plaintext bytes

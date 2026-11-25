@@ -913,7 +913,6 @@ and validation, [`config.yaml`](config.yaml) for a development example, and
 | `NOXA_FILE_ADDR` | `:12336` | File transfer upload/download listener address |
 | `NOXA_HEALTH_ADDR` | `:12337` | Health/readiness HTTP listener, also serving `/events`, `/hooks/` and `/dl/` links; plaintext unless `NOXA_HEALTH_TLS_ENABLED=true`, so otherwise bind loopback or proxy it behind HTTPS |
 | `NOXA_HEALTH_TLS_ENABLED` | `false` | Serve the health listener over TLS with the control certificate (requires `NOXA_TLS_ENABLED`); download links then use `https://` |
-| `NOXA_HEALTH_ALLOW_PLAINTEXT_CREDENTIALS` | `false` | With `NOXA_DEV_MODE=false` and health TLS off, `/events` credentials and `/hooks/` secrets are refused over plaintext from remote peers (loopback and `X-Forwarded-Proto: https` proxies pass); `true` accepts that risk |
 | `NOXA_METRICS_ALLOW_REMOTE` | `false` | Permit remote `/metrics` requests; without this opt-in, only IPv4/IPv6 loopback is accepted |
 | `NOXA_PPROF_ENABLED` | `false` | Enable runtime `/debug/pprof/` diagnostics; every pprof endpoint remains GET-only and direct-loopback-only |
 | `NOXA_SHUTDOWN_TIMEOUT` | `30s` | Positive total grace period shared by all services during orderly shutdown |
@@ -946,7 +945,6 @@ and validation, [`config.yaml`](config.yaml) for a development example, and
 | `NOXA_CHAT_MASTER_KEY` | empty | Secret-injection override for the key file: one base64 32-byte key or a newline-separated `id:base64` key ring; never commit it |
 | `NOXA_CHAT_LEGACY_HISTORY` | `encrypt` | One-time handling for legacy plaintext rows: `encrypt` or `purge` |
 | `NOXA_CHAT_KEY_ROTATE_MIN_SECONDS` | `60` | Minimum interval used to coalesce scope-key rotations |
-| `NOXA_CHAT_SEARCH_MAX_MESSAGES` | `2000` | Maximum history messages scanned by client-side search |
 | `NOXA_CHAT_MAX_LENGTH` | `4096` | Maximum decrypted chat payload size in UTF-8 bytes |
 | `NOXA_ECHO_CHANNEL_ENABLED` / `NOXA_ECHO_CHANNEL_NAME` | `true` / `Echo Test` | Create the network echo channel and enable isolated loopback |
 | `NOXA_DEFAULT_OPUS_BITRATE` | `32000` | Default voice bitrate in bits/s |
