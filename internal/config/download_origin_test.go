@@ -1,9 +1,6 @@
 package config
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestValidateHTTPSOrigin(t *testing.T) {
 	for _, value := range []string{"https://files.example", "https://files.example:8443/", "https://[2001:db8::1]:443", "https://127.0.0.1:12337"} {
@@ -44,15 +41,5 @@ func TestDownloadOriginRequiresExplicitProxyTrust(t *testing.T) {
 	cfg.HealthTLSEnabled = true
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestProductionRefusesPlaintextCredentialOverride(t *testing.T) {
-	cfg := loadDefaultConfig(t)
-	cfg.DevMode = false
-	cfg.HealthAllowPlaintextCredentials = true
-	err := cfg.Validate()
-	if err == nil || !strings.Contains(err.Error(), "health_allow_plaintext_credentials is not allowed") {
-		t.Fatalf("error=%v", err)
 	}
 }

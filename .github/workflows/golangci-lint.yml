@@ -1,9 +1,8 @@
 name: golangci-lint
 
 on:
+  # Pushes to main and release tags are linted through ci.yml (release-lint).
   workflow_call:
-  push:
-    branches: [main]
   pull_request:
 
 permissions:
@@ -47,6 +46,17 @@ jobs:
 
       - name: golangci-lint (client)
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.14.0
+          install-mode: binary
+          working-directory: client
+
+      # Windows-only files are type-checked without cgo on this runner.
+      - name: golangci-lint (client, Windows files)
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        env:
+          GOOS: windows
+          CGO_ENABLED: "0"
         with:
           version: v2.14.0
           install-mode: binary

@@ -303,6 +303,15 @@ jobs:
           npm ci
           npm run build
 
+      # nativecapture reads memory owned by COM, WASAPI and GDI through uintptr
+      # values, which vet's unsafeptr check cannot tell from misuse.
+      - name: vet client
+        shell: bash
+        working-directory: client
+        run: |
+          go list ./... | grep -v '/internal/nativecapture$' | xargs go vet -tags=integration
+          go vet -tags=integration -unsafeptr=false ./internal/nativecapture
+
       - name: test client
         working-directory: client
         env:
@@ -311,7 +320,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     services:
       postgres:
         image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777 # 16.14-alpine3.24
@@ -379,7 +388,7 @@ jobs:
 
       - name: vet
         run: |
-          go vet ./...
+          go vet -tags integration ./...
           (cd client && go vet ./...)
 
       - name: build
@@ -424,6 +433,27 @@ jobs:
         run: go test -tags integration -count=1 ./internal/server -run '^TestIntegrationOlm(Directory|Admission)'
         env:
           NOXA_TEST_DATABASE_URL: postgres://noxa:noxa@localhost:5432/noxa?sslmode=disable
+
+      # Tests behind the integration build tag in the database-backed packages.
+      # internal/recorder's tagged tests need ffmpeg and are not run here.
+      - name: database integration tests
+        env:
+          PGHOST: localhost
+          PGUSER: noxa
+          PGPASSWORD: noxa
+          NOXA_TEST_DATABASE_URL: postgres://noxa:noxa@localhost:5432/noxa?sslmode=disable
+        run: |
+          # cmd/adduser claims its database as a fresh install, and the steps
+          # above have already migrated the shared one.
+          createdb noxa_adduser
+          NOXA_TEST_DATABASE_URL="postgres://noxa:noxa@localhost:5432/noxa_adduser?sslmode=disable" go test -tags integration -count=1 ./cmd/adduser
+          # cmd/role-setup allows five seconds to drop its scratch database, so
+          # it runs alone, before the other suites load the server.
+          go test -tags integration -count=1 ./cmd/role-setup
+          go test -tags integration -count=1 -timeout 30m ./internal/store ./internal/grpcserver ./internal/channels ./internal/auth ./cmd/e2e
+
+      - name: verify container entrypoint scripts
+        run: sh scripts/test-container-entrypoints.sh
 
       - name: upload coverage profiles
         if: always()
@@ -537,10 +567,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-
       - name: Set up QEMU
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
@@ -578,8 +604,10 @@ jobs:
           sbom: true
 
   # Branch and tag pushes publish the image; only this job may write packages.
+  # Same gates as release-build, so no image is published for a version that
+  # gets no release.
   docker-publish:
-    needs: [build-metadata, proto-contract, mobile-checks, test, frontend-e2e, security-gate]
+    needs: [build-metadata, proto-contract, mobile-checks, test, frontend-e2e, libopus, client-windows, webview2, security-gate, release-lint]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -597,10 +625,6 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
@@ -623,9 +647,7 @@ jobs:
           labels: |
             org.opencontainers.image.version=${{ env.NOXA_VERSION }}
           tags: |
-            type=schedule
             type=ref,event=branch
-            type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
