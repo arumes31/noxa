@@ -1227,7 +1227,10 @@ The server needs outbound HTTPS to the browsers' push services (Google,
 Mozilla, Apple). Pushes carry only the kind of event and, unless the phone
 turned on **Hide notification details**, the sender's nickname and channel
 name; message text never leaves the server in a push, and direct messages stay
-end-to-end encrypted. While the account's desktop has seen input in the last
+end-to-end encrypted. A mention reaches a phone whose app is closed when the
+message names the account's stored name (its registered nickname or identity
+display name); a display name chosen only for one session is matched while
+that session is online. While the account's desktop has seen input in the last
 two minutes, pushes for messages wait 60 seconds and are dropped if the
 conversation is read in that time; calls always push at once, and **Always
 notify this phone** turns the delay off. Reading a conversation on any device
