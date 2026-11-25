@@ -49,7 +49,7 @@ func TestSnapshotIncludesVisibleClientsBeforeTheyJoinAChannel(t *testing.T) {
 			}
 		})
 	}
-	if err := sm.JoinChannel("bravo", 1); err != nil {
+	if err := sm.MoveClient("bravo", 1); err != nil {
 		t.Fatal(err)
 	}
 	snap := BuildSnapshot(sm, false, "uid-alpha")

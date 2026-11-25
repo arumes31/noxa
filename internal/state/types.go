@@ -123,10 +123,6 @@ type SpeakingState struct {
 	StartedAt time.Time
 }
 
-// maxChannelDepth caps every parent walk. A cycle cannot be created through
-// the channel manager, but a hand-edited database must not hang the server.
-const maxChannelDepth = 64
-
 // ChannelTreeOrdered returns all channels in a total order: parent, then
 // order index, then channel id. The id tiebreak is what makes the order total
 // (163): two siblings sharing an order index would otherwise compare equal and
@@ -148,30 +144,5 @@ func (m *Manager) ChannelTreeOrdered() []*Channel {
 		}
 		return a.ChannelID < b.ChannelID
 	})
-	return out
-}
-
-// ChannelAncestors returns the parent chain of channelID, nearest parent
-// first, ignoring the inheritance flag. It is the cycle guard for channel
-// moves (168): a channel may not be re-parented under one of its own
-// descendants.
-func (m *Manager) ChannelAncestors(channelID int64) []int64 {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.ancestorsLocked(channelID)
-}
-
-// ancestorsLocked walks the parent chain with the read lock already held.
-func (m *Manager) ancestorsLocked(channelID int64) []int64 {
-	var out []int64
-	id := channelID
-	for i := 0; i < maxChannelDepth; i++ {
-		ch, ok := m.channels[id]
-		if !ok || ch.ParentID == 0 {
-			break
-		}
-		out = append(out, ch.ParentID)
-		id = ch.ParentID
-	}
 	return out
 }

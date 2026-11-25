@@ -88,7 +88,7 @@ func (s *TCPServer) integrationSnapshot(ctx context.Context, e *authorization.Ro
 	if s.deps.State == nil || s.deps.State.ChannelCount()+s.deps.State.ClientCount() > maxIntegrationSnapshotItems {
 		return nil, authorization.ErrAuthorizationUnavailable
 	}
-	snapshot, err := buildRoleSnapshotContext(ctx, s.deps.State, e, viewerID, viewerUID)
+	snapshot, err := s.roleSnapshot(ctx, e, viewerID, viewerUID)
 	if err != nil {
 		return nil, err
 	}

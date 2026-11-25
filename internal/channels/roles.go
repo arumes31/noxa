@@ -14,23 +14,17 @@ import (
 	"noxa/internal/store"
 )
 
-var ErrRoleLifecycleRequired = errors.New("channel changes require the role lifecycle barrier")
-
 func (m *ChannelManager) EditRoleChannel(ctx context.Context, actorID, channelID, revision int64, settings store.RoleChannelSettings) (authorization.RolePolicy, error) {
 	m.treeMu.Lock()
 	defer m.treeMu.Unlock()
-	if !m.roleMode {
-		return authorization.RolePolicy{}, ErrRoleLifecycleRequired
-	}
 	return m.store.EditRoleChannel(ctx, actorID, channelID, revision, settings)
 }
 
-// EnableRoleMode is one-way and must run before serving or loading timers.
-// Legacy writers and cleanup must never mutate resources behind Authority.
+// EnableRoleMode installs the authority that prunes empty temporary channels.
+// No cleanup timer is armed before it runs; call it before serving.
 func (m *ChannelManager) EnableRoleMode(authority *authorization.Authority) {
 	m.treeMu.Lock()
 	defer m.treeMu.Unlock()
-	m.roleMode = true
 	m.roleAuthority = authority
 	m.mu.Lock()
 	m.cancelAllCleanupLocked()
@@ -43,9 +37,6 @@ func (m *ChannelManager) EnableRoleMode(authority *authorization.Authority) {
 func (m *ChannelManager) ChangeRoleChannel(ctx context.Context, actorID int64, change authorization.ChannelTreeChange, create *store.RoleChannelCreate) (authorization.RolePolicy, int64, error) {
 	m.treeMu.Lock()
 	defer m.treeMu.Unlock()
-	if !m.roleMode {
-		return authorization.RolePolicy{}, 0, ErrRoleLifecycleRequired
-	}
 	return m.store.ChangeRoleChannel(ctx, actorID, change, create)
 }
 
@@ -57,7 +48,7 @@ func (m *ChannelManager) ChangeRoleChannel(ctx context.Context, actorID int64, c
 func (m *ChannelManager) ReconcileRoleChannels(ctx context.Context, policy authorization.RolePolicy, beforeRemove func(DeleteResult) error) error {
 	m.treeMu.Lock()
 	defer m.treeMu.Unlock()
-	if !m.roleMode || beforeRemove == nil {
+	if beforeRemove == nil {
 		return authorization.ErrAuthorizationUnavailable
 	}
 	if _, err := authorization.NewRoleEvaluator(policy); err != nil {

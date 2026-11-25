@@ -117,7 +117,7 @@ func (s *TCPServer) sendSnapshot(client *Client) error {
 		// recorded digest always matches the client's latest snapshot.
 		s.roleMetadataMu.Lock()
 		defer s.roleMetadataMu.Unlock()
-		snapshot := buildRoleSnapshot(s.deps.State, e, client.userID(), client.uniqueID())
+		snapshot, _ := s.roleSnapshot(context.Background(), e, client.userID(), client.uniqueID())
 		s.decorateConnecting(snapshot)
 		if err := s.writeMetadataReply(client, netproto.MsgSnapshot, snapshot); err != nil {
 			return err

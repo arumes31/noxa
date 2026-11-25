@@ -14,7 +14,6 @@ import (
 	"noxa/internal/auth"
 	"noxa/internal/authorization"
 	"noxa/internal/broadcast"
-	"noxa/internal/channels"
 	"noxa/internal/chatcrypto"
 	"noxa/internal/filetransfer"
 	"noxa/internal/metrics"
@@ -42,14 +41,9 @@ type AuthBackend interface {
 
 // ChannelBackend is the subset of channels.ChannelManager the TCP server needs.
 type ChannelBackend interface {
-	CreateChannel(ctx context.Context, spec channels.ChannelSpec) (int64, error)
-	DeleteChannelSubtree(ctx context.Context, channelID int64) (channels.DeleteResult, error)
-	UpdateChannel(ctx context.Context, channelID int64, upd channels.ChannelUpdate) error
-	MoveClientWithLifecycle(clientID string, channelID int64, afterMove func(oldChannelID int64)) (oldChannelID int64, err error)
 	LeaveClient(clientID string) (oldChannelID int64, err error)
 	RemoveClient(clientID string) (*state.Client, error)
 	WithChannelLifecycle(channelID int64, operation func() error) error
-	OnClientLeftChannel(channelID int64)
 }
 
 // BanStore is the minimal store surface needed to record bans. It is
@@ -268,6 +262,8 @@ type Deps struct {
 	Authority *authorization.Authority
 	BanAdmin  BanAdminStore
 	Metrics   metrics.Sink
+	// ObserveSnapshot receives the time taken to build each viewer snapshot.
+	ObserveSnapshot func(time.Duration)
 	// LoginLimiter limits failed TCP control-channel passwords. Nil installs
 	// the production default; tests can inject a clock-controlled limiter.
 	LoginLimiter *auth.LoginFailureLimiter

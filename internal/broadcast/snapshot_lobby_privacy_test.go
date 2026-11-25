@@ -27,7 +27,7 @@ func TestLobbyPrivacyTracksMembershipAndViewer(t *testing.T) {
 			t.Fatalf("lobby presence leaked or self/admin missing: %+v", snap)
 		}
 	}
-	if err := sm.JoinChannel("hidden", 2); err != nil {
+	if err := sm.MoveClient("hidden", 2); err != nil {
 		t.Fatal(err)
 	}
 	if snap := BuildSnapshot(sm, false, "other"); snap.TotalClients != 1 {

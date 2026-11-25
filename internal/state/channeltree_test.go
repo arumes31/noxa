@@ -58,28 +58,3 @@ func TestChannelTreeOrderedReturnsClones(t *testing.T) {
 		t.Fatalf("ChannelTreeOrdered exposed live channel: %+v", got)
 	}
 }
-
-// TestChannelAncestors verifies the parent walk used as the move cycle guard
-// (168), including a hand-corrupted cycle that must terminate.
-func TestChannelAncestors(t *testing.T) {
-	m := treeManager(
-		&Channel{ChannelID: 1},
-		&Channel{ChannelID: 2, ParentID: 1},
-		&Channel{ChannelID: 3, ParentID: 2},
-	)
-	got := m.ChannelAncestors(3)
-	if len(got) != 2 || got[0] != 2 || got[1] != 1 {
-		t.Fatalf("ancestors = %v, want [2 1]", got)
-	}
-	if got := m.ChannelAncestors(1); len(got) != 0 {
-		t.Fatalf("root ancestors = %v, want none", got)
-	}
-
-	cyclic := treeManager(
-		&Channel{ChannelID: 1, ParentID: 2},
-		&Channel{ChannelID: 2, ParentID: 1},
-	)
-	if got := cyclic.ChannelAncestors(1); len(got) != maxChannelDepth {
-		t.Fatalf("cyclic walk length = %d, want the depth cap %d", len(got), maxChannelDepth)
-	}
-}

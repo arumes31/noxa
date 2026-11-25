@@ -14,6 +14,24 @@ func newTestManager(t *testing.T) *Manager {
 	return New(zap.NewNop())
 }
 
+func isSpeaking(m *Manager, clientID string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, ok := m.speaking[clientID]
+	return ok
+}
+
+func speakingClients(m *Manager) []*SpeakingState {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]*SpeakingState, 0, len(m.speaking))
+	for _, ss := range m.speaking {
+		cloned := *ss
+		out = append(out, &cloned)
+	}
+	return out
+}
+
 func TestAddRemoveClient(t *testing.T) {
 	m := newTestManager(t)
 
@@ -103,7 +121,7 @@ func TestChannelSubscriptionsStayConsistentAcrossRemoval(t *testing.T) {
 	}
 
 	// Removing a channel drops both forward and reverse entries.
-	m.RemoveChannel(20)
+	m.RemoveChannels([]int64{20})
 	if got := m.Subscriptions("a"); len(got) != 0 {
 		t.Fatalf("Subscriptions(a) after channel removal = %v, want empty", got)
 	}
@@ -153,7 +171,7 @@ func TestAddRemoveChannel(t *testing.T) {
 		t.Fatalf("ListChannels len = %d, want 1", c)
 	}
 
-	m.RemoveChannel(1)
+	m.RemoveChannels([]int64{1})
 	if _, ok := m.GetChannel(1); ok {
 		t.Fatalf("channel 1 still present after RemoveChannel")
 	}
@@ -172,7 +190,7 @@ func TestManagerOwnsInputsAndReturnsIndependentSnapshots(t *testing.T) {
 	channelInput := &Channel{ChannelID: 41, Name: "original channel", Topic: "original topic"}
 	m.AddClient(clientInput)
 	m.AddChannel(channelInput)
-	if err := m.JoinChannel(clientInput.ClientID, channelInput.ChannelID); err != nil {
+	if err := m.MoveClient(clientInput.ClientID, channelInput.ChannelID); err != nil {
 		t.Fatalf("join channel: %v", err)
 	}
 	m.Subscribe(clientInput.ClientID, []int64{channelInput.ChannelID})
@@ -211,7 +229,7 @@ func TestManagerOwnsInputsAndReturnsIndependentSnapshots(t *testing.T) {
 	channelSnapshots := [][]*Channel{
 		{channel},
 		m.ListChannels(),
-		m.ChannelTree(),
+		m.ChannelTreeOrdered(),
 		m.ChannelTreeOrdered(),
 	}
 	for index, snapshots := range channelSnapshots {
@@ -225,12 +243,12 @@ func TestManagerOwnsInputsAndReturnsIndependentSnapshots(t *testing.T) {
 		}
 	}
 
-	speaking := m.SpeakingClients()
+	speaking := speakingClients(m)
 	if len(speaking) != 1 {
 		t.Fatalf("speaking snapshots = %d, want 1", len(speaking))
 	}
 	speaking[0].ChannelID = 999
-	if stored := m.SpeakingClients(); len(stored) != 1 || stored[0].ChannelID != channelInput.ChannelID {
+	if stored := speakingClients(m); len(stored) != 1 || stored[0].ChannelID != channelInput.ChannelID {
 		t.Fatalf("speaking snapshot aliases manager state: %+v", stored)
 	}
 }
@@ -264,14 +282,14 @@ func TestManagerInputAndSnapshotAliasesAreRaceIndependent(t *testing.T) {
 	channelInput := &Channel{ChannelID: 9, Name: "input"}
 	m.AddClient(clientInput)
 	m.AddChannel(channelInput)
-	if err := m.JoinChannel(clientInput.ClientID, channelInput.ChannelID); err != nil {
+	if err := m.MoveClient(clientInput.ClientID, channelInput.ChannelID); err != nil {
 		t.Fatal(err)
 	}
 	m.SetSpeaking(clientInput.ClientID, true)
 	clientSnapshot, _ := m.GetClient(clientInput.ClientID)
 	channelSnapshot, _ := m.GetChannel(channelInput.ChannelID)
 	members := m.ChannelMembers(channelInput.ChannelID)
-	speaking := m.SpeakingClients()
+	speaking := speakingClients(m)
 
 	const iterations = 2000
 	var wg sync.WaitGroup
@@ -302,7 +320,7 @@ func TestManagerInputAndSnapshotAliasesAreRaceIndependent(t *testing.T) {
 			_ = m.ListClients()
 			_ = m.ListChannels()
 			_ = m.ChannelMembers(channelInput.ChannelID)
-			_ = m.SpeakingClients()
+			_ = speakingClients(m)
 		}
 	})
 	wg.Wait()
@@ -315,14 +333,11 @@ func TestChannelHasIconAccessorsAreLocked(t *testing.T) {
 	if m.SetChannelHasIcon(99, true) {
 		t.Fatal("SetChannelHasIcon reported an unknown channel as updated")
 	}
-	if _, found := m.ChannelHasIcon(99); found {
-		t.Fatal("ChannelHasIcon reported an unknown channel as found")
-	}
 	if !m.SetChannelHasIcon(1, true) {
 		t.Fatal("SetChannelHasIcon did not update the existing channel")
 	}
-	if hasIcon, found := m.ChannelHasIcon(1); !found || !hasIcon {
-		t.Fatalf("ChannelHasIcon = %t, %t; want true, true", hasIcon, found)
+	if got, found := m.GetChannel(1); !found || !got.HasIcon {
+		t.Fatalf("GetChannel(1) = %+v, %t; want an icon", got, found)
 	}
 
 	const iterations = 2000
@@ -334,7 +349,7 @@ func TestChannelHasIconAccessorsAreLocked(t *testing.T) {
 	})
 	wg.Go(func() {
 		for index := 0; index < iterations; index++ {
-			if _, found := m.ChannelHasIcon(1); !found {
+			if _, found := m.GetChannel(1); !found {
 				t.Error("channel disappeared during icon snapshot")
 				return
 			}
@@ -350,7 +365,7 @@ func TestJoinChannelErrors(t *testing.T) {
 	m.AddChannel(ch)
 
 	// Unknown client.
-	if err := m.JoinChannel("ghost", 10); err != ErrClientNotFound {
+	if err := m.MoveClient("ghost", 10); err != ErrClientNotFound {
 		t.Fatalf("JoinChannel unknown client err = %v, want ErrClientNotFound", err)
 	}
 
@@ -358,12 +373,12 @@ func TestJoinChannelErrors(t *testing.T) {
 	m.AddClient(c)
 
 	// Unknown channel.
-	if err := m.JoinChannel("c1", 999); err != ErrChannelNotFound {
+	if err := m.MoveClient("c1", 999); err != ErrChannelNotFound {
 		t.Fatalf("JoinChannel unknown channel err = %v, want ErrChannelNotFound", err)
 	}
 
 	// Happy path.
-	if err := m.JoinChannel("c1", 10); err != nil {
+	if err := m.MoveClient("c1", 10); err != nil {
 		t.Fatalf("JoinChannel happy path err = %v", err)
 	}
 	if got, _ := m.GetClient("c1"); got.ChannelID != 10 {
@@ -377,7 +392,7 @@ func TestJoinChannelErrors(t *testing.T) {
 	}
 
 	// Idempotent join.
-	if err := m.JoinChannel("c1", 10); err != nil {
+	if err := m.MoveClient("c1", 10); err != nil {
 		t.Fatalf("idempotent JoinChannel err = %v", err)
 	}
 	if got, _ := m.GetChannel(10); got.ClientCount != 1 {
@@ -403,7 +418,7 @@ func TestLeaveChannelErrors(t *testing.T) {
 
 	ch := &Channel{ChannelID: 20, Name: "ch", CreatedAt: time.Now()}
 	m.AddChannel(ch)
-	if err := m.JoinChannel("c2", 20); err != nil {
+	if err := m.MoveClient("c2", 20); err != nil {
 		t.Fatalf("JoinChannel err = %v", err)
 	}
 	if err := m.LeaveChannel("c2"); err != nil {
@@ -431,7 +446,7 @@ func TestMoveClient(t *testing.T) {
 	c := &Client{ClientID: "mover", ConnectedAt: time.Now()}
 	m.AddClient(c)
 
-	if err := m.JoinChannel("mover", 1); err != nil {
+	if err := m.MoveClient("mover", 1); err != nil {
 		t.Fatalf("JoinChannel(1) err = %v", err)
 	}
 	if err := m.MoveClient("mover", 2); err != nil {
@@ -472,23 +487,23 @@ func TestSpeaking(t *testing.T) {
 	m.AddChannel(ch)
 	c := &Client{ClientID: "talker", ConnectedAt: time.Now()}
 	m.AddClient(c)
-	if err := m.JoinChannel("talker", 5); err != nil {
+	if err := m.MoveClient("talker", 5); err != nil {
 		t.Fatalf("JoinChannel err = %v", err)
 	}
 
-	if m.IsSpeaking("talker") {
+	if isSpeaking(m, "talker") {
 		t.Fatalf("IsSpeaking should be false initially")
 	}
 
 	m.SetSpeaking("talker", true)
-	if !m.IsSpeaking("talker") {
+	if !isSpeaking(m, "talker") {
 		t.Fatalf("IsSpeaking should be true after SetSpeaking(true)")
 	}
 	if got, _ := m.GetClient("talker"); !got.IsSpeaking {
 		t.Fatalf("client.IsSpeaking should be true")
 	}
 
-	speaking := m.SpeakingClients()
+	speaking := speakingClients(m)
 	if len(speaking) != 1 {
 		t.Fatalf("SpeakingClients len = %d, want 1", len(speaking))
 	}
@@ -500,19 +515,19 @@ func TestSpeaking(t *testing.T) {
 	}
 
 	m.SetSpeaking("talker", false)
-	if m.IsSpeaking("talker") {
+	if isSpeaking(m, "talker") {
 		t.Fatalf("IsSpeaking should be false after SetSpeaking(false)")
 	}
 	if got, _ := m.GetClient("talker"); got.IsSpeaking {
 		t.Fatalf("client.IsSpeaking should be false")
 	}
-	if len(m.SpeakingClients()) != 0 {
-		t.Fatalf("SpeakingClients len = %d, want 0", len(m.SpeakingClients()))
+	if len(speakingClients(m)) != 0 {
+		t.Fatalf("SpeakingClients len = %d, want 0", len(speakingClients(m)))
 	}
 
 	// SetSpeaking on unknown client is a no-op.
 	m.SetSpeaking("ghost", true)
-	if m.IsSpeaking("ghost") {
+	if isSpeaking(m, "ghost") {
 		t.Fatalf("ghost should not be speaking")
 	}
 }
@@ -527,7 +542,7 @@ func TestSpeakingStopRecordsVoiceIdleOnce(t *testing.T) {
 		{"self deafen", func(m *Manager) error { m.SetAudioState("talker", false, true); return nil }},
 		{"move", func(m *Manager) error { return m.MoveClient("talker", 2) }},
 		{"leave", func(m *Manager) error { return m.LeaveChannel("talker") }},
-		{"channel removal", func(m *Manager) error { m.RemoveChannel(1); return nil }},
+		{"channel removal", func(m *Manager) error { m.RemoveChannels([]int64{1}); return nil }},
 		{"moderator mute", func(m *Manager) error {
 			muted := true
 			_, err := m.SetServerVoiceState("talker", &muted, nil)
@@ -540,7 +555,7 @@ func TestSpeakingStopRecordsVoiceIdleOnce(t *testing.T) {
 			m.AddChannel(&Channel{ChannelID: 1})
 			m.AddChannel(&Channel{ChannelID: 2})
 			m.AddClient(&Client{ClientID: "talker", ConnectedAt: time.Now().Add(-time.Hour)})
-			if err := m.JoinChannel("talker", 1); err != nil {
+			if err := m.MoveClient("talker", 1); err != nil {
 				t.Fatal(err)
 			}
 			m.SetSpeaking("talker", false)
@@ -556,14 +571,14 @@ func TestSpeakingStopRecordsVoiceIdleOnce(t *testing.T) {
 			if stopped.IsSpeaking || stopped.LastSpokeAt.Before(before) || stopped.LastSpokeAt.After(time.Now()) {
 				t.Fatalf("speech stop timestamp missing or invalid: %+v", stopped)
 			}
-			if m.IsSpeaking("talker") {
+			if isSpeaking(m, "talker") {
 				t.Fatal("speaking map was not cleared")
 			}
 			m.SetSpeaking("talker", false)
 			m.SetStatus("talker", "away", "quiet")
 			if stopped.ServerMuted || stopped.SelfMuted {
 				m.SetSpeaking("talker", true)
-				if m.IsSpeaking("talker") {
+				if isSpeaking(m, "talker") {
 					t.Fatal("late speaking update reactivated a muted client")
 				}
 			}
@@ -572,11 +587,11 @@ func TestSpeakingStopRecordsVoiceIdleOnce(t *testing.T) {
 			}
 			if stopped.SelfMuted {
 				m.SetAudioState("talker", false, false)
-				if m.IsSpeaking("talker") {
+				if isSpeaking(m, "talker") {
 					t.Fatal("unmute restored stale speaking state")
 				}
 				m.SetSpeaking("talker", true)
-				if !m.IsSpeaking("talker") {
+				if !isSpeaking(m, "talker") {
 					t.Fatal("fresh speech after unmute was ignored")
 				}
 			}
@@ -593,7 +608,7 @@ func TestChannelTreeOrdering(t *testing.T) {
 	m.AddChannel(&Channel{ChannelID: 2, ParentID: 1, Name: "b", OrderIndex: 1, CreatedAt: time.Now()})
 	m.AddChannel(&Channel{ChannelID: 4, ParentID: 0, Name: "d", OrderIndex: 1, CreatedAt: time.Now()})
 
-	tree := m.ChannelTree()
+	tree := m.ChannelTreeOrdered()
 	wantIDs := []int64{1, 4, 2, 3}
 	if len(tree) != len(wantIDs) {
 		t.Fatalf("ChannelTree len = %d, want %d", len(tree), len(wantIDs))
@@ -617,9 +632,9 @@ func TestStats(t *testing.T) {
 		c := &Client{ClientID: string(rune('a' + i)), ConnectedAt: time.Now()}
 		m.AddClient(c)
 		if i < 2 {
-			_ = m.JoinChannel(c.ClientID, 1)
+			_ = m.MoveClient(c.ClientID, 1)
 		} else {
-			_ = m.JoinChannel(c.ClientID, 2)
+			_ = m.MoveClient(c.ClientID, 2)
 		}
 	}
 
@@ -651,15 +666,15 @@ func TestRemoveChannelClearsMembership(t *testing.T) {
 	m.AddChannel(ch)
 	c := &Client{ClientID: "x", ConnectedAt: time.Now()}
 	m.AddClient(c)
-	_ = m.JoinChannel("x", 7)
+	_ = m.MoveClient("x", 7)
 	m.SetSpeaking("x", true)
 
-	m.RemoveChannel(7)
+	m.RemoveChannels([]int64{7})
 
 	if got, _ := m.GetClient("x"); got.ChannelID != 0 {
 		t.Fatalf("client ChannelID = %d, want 0", got.ChannelID)
 	}
-	if m.IsSpeaking("x") {
+	if isSpeaking(m, "x") {
 		t.Fatalf("client should not be speaking after channel removed")
 	}
 	if got, _ := m.GetClient("x"); got.IsSpeaking {
@@ -683,7 +698,7 @@ func TestConcurrentAccess(t *testing.T) {
 			id := string(rune('A' + i%26))
 			c := &Client{ClientID: id, ConnectedAt: time.Now()}
 			m.AddClient(c)
-			_ = m.JoinChannel(id, 1)
+			_ = m.MoveClient(id, 1)
 			m.SetSpeaking(id, true)
 			m.SetSpeaking(id, false)
 			_ = m.LeaveChannel(id)
@@ -700,11 +715,11 @@ func TestConcurrentAccess(t *testing.T) {
 			_ = m.ChannelCount()
 			_ = m.ListClients()
 			_ = m.ListChannels()
-			_ = m.ChannelTree()
+			_ = m.ChannelTreeOrdered()
 			_ = m.ChannelMembers(1)
-			_ = m.SpeakingClients()
+			_ = speakingClients(m)
 			_ = m.Stats()
-			_ = m.IsSpeaking("A")
+			_ = isSpeaking(m, "A")
 		}()
 	}
 
@@ -716,10 +731,10 @@ func TestTextChannelRefusesVoiceMembership(t *testing.T) {
 	m.AddChannel(&Channel{ChannelID: 1, Name: "voice"})
 	m.AddChannel(&Channel{ChannelID: 2, Name: "general", TextOnly: true})
 	m.AddClient(&Client{ClientID: "a", UniqueID: "u-a"})
-	if err := m.JoinChannel("a", 2); !errors.Is(err, ErrTextChannel) {
+	if err := m.MoveClient("a", 2); !errors.Is(err, ErrTextChannel) {
 		t.Fatalf("join text channel = %v, want ErrTextChannel", err)
 	}
-	if err := m.JoinChannel("a", 1); err != nil {
+	if err := m.MoveClient("a", 1); err != nil {
 		t.Fatal(err)
 	}
 	for name, move := range map[string]func(string, int64) error{"move": m.MoveClient, "capacity move": m.MoveClientWithinCapacity} {
