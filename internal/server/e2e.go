@@ -24,15 +24,29 @@ import (
 // users. Afterwards the client receives the current global chat key plus the
 // key of its current channel, sealed to the fresh public key.
 func (s *TCPServer) handleKeyPublish(ctx context.Context, client *Client, f *netproto.Frame) error {
-	return s.rolePolicyRead(ctx, client, func(ctx context.Context) error {
-		return s.publishSessionKey(ctx, client, f)
+	published := false
+	err := s.rolePolicyRead(ctx, client, func(ctx context.Context) error {
+		var err error
+		published, err = s.publishSessionKey(ctx, client, f)
+		return err
 	})
+	// The new key can open more of the mailbox. The replay takes no policy
+	// lease (see deliverSpooled).
+	if err == nil && published && client.userID() > 0 {
+		s.deliverSpooled(ctx, client, client.userID())
+	}
+	return err
 }
 
-func (s *TCPServer) publishSessionKey(ctx context.Context, client *Client, f *netproto.Frame) error {
+// publishSessionKey reports whether the key was published; a refused request
+// is answered with an error frame and returns false.
+func (s *TCPServer) publishSessionKey(ctx context.Context, client *Client, f *netproto.Frame) (bool, error) {
+	refuse := func(code uint16, message string) (bool, error) {
+		return false, s.sendErrorFor(client, requestOrigin(ctx), code, message)
+	}
 	var msg netproto.KeyPublish
 	if err := netproto.Decode(f, &msg); err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed key_publish: "+err.Error())
+		return refuse(errCodeMalformed, "malformed key_publish: "+err.Error())
 	}
 	published := msg.PublicKey
 	signed := ""
@@ -42,17 +56,17 @@ func (s *TCPServer) publishSessionKey(ctx context.Context, client *Client, f *ne
 		client.mu.Unlock()
 		authenticated, err := auth.LoadPublicKey(signer)
 		if err != nil || !bytes.Equal(authenticated, record.SigningKey) {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "encryption identity does not match authenticated identity")
+			return refuse(errCodePermissionDenied, "encryption identity does not match authenticated identity")
 		}
 		signed = published
 		msg.PublicKey = base64.StdEncoding.EncodeToString(record.EncryptionKey)
 	}
 	raw, err := base64.StdEncoding.DecodeString(msg.PublicKey)
 	if err != nil || len(raw) != 32 {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid public key (want 32-byte base64 X25519)")
+		return refuse(errCodeMalformed, "invalid public key (want 32-byte base64 X25519)")
 	}
 	if s.deps == nil || s.deps.State == nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "state backend unavailable")
+		return refuse(errCodeUnavailable, "state backend unavailable")
 	}
 
 	// Publish the durable directory entry before exposing the session copy.
@@ -61,7 +75,7 @@ func (s *TCPServer) publishSessionKey(ctx context.Context, client *Client, f *ne
 	// key stays the first device's, and phones receive per-device copies.
 	if client.userID() != 0 && s.deps.Auth != nil && !client.isWebTransport() {
 		if err := s.deps.Auth.SetE2EPublicKey(ctx, client.userID(), published); err != nil {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "encryption directory unavailable")
+			return refuse(errCodeUnavailable, "encryption directory unavailable")
 		}
 	}
 	client.mu.Lock()
@@ -73,17 +87,14 @@ func (s *TCPServer) publishSessionKey(ctx context.Context, client *Client, f *ne
 	// Automatic scope delivery is optional; denied scopes send no key, while
 	// explicit key requests keep their normal authorization errors.
 	if err := s.deliverScopeKey(ctx, client, globalChatScope); err != nil && !errors.Is(err, authorization.ErrRoleForbidden) {
-		return fmt.Errorf("delivering global scope key: %w", err)
+		return false, fmt.Errorf("delivering global scope key: %w", err)
 	}
 	if sc, ok := s.deps.State.GetClient(client.ID); ok && sc.ChannelID != 0 {
 		if err := s.deliverScopeKey(ctx, client, sc.ChannelID); err != nil && !errors.Is(err, authorization.ErrRoleForbidden) {
-			return fmt.Errorf("delivering channel scope key: %w", err)
+			return false, fmt.Errorf("delivering channel scope key: %w", err)
 		}
 	}
-	if client.userID() > 0 {
-		s.deliverSpooled(ctx, client, client.userID())
-	}
-	return nil
+	return true, nil
 }
 
 // handleKeyRequest answers a public-key lookup: online clients resolve from

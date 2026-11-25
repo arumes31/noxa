@@ -393,17 +393,6 @@ func (t *slowTracker) sendsLocked(uid string, now time.Time) map[int64]slowSend 
 	return m
 }
 
-// check returns the remaining wait, recording the send when allowed (0).
-func (t *slowTracker) check(uid string, channelID int64, seconds int, now time.Time) time.Duration {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if wait := t.waitLocked(uid, channelID, seconds, "", now); wait > 0 {
-		return wait
-	}
-	t.sendsLocked(uid, now)[channelID] = slowSend{at: now, until: now.Add(time.Duration(seconds) * time.Second)}
-	return 0
-}
-
 // ---------------------------------------------------------------------------
 // The moderation pipeline
 // ---------------------------------------------------------------------------
@@ -1504,51 +1493,34 @@ func (s *TCPServer) relaySessionTyping(ctx context.Context, client *Client, f *n
 		Direct:    msg.ToUniqueID != "",
 	}
 	if msg.ToUniqueID == "" {
+		// SendMessages requires ViewChannel, so a client cannot fake "X is
+		// typing" into a channel it cannot post in or cannot see.
 		_ = s.withRoleAccess(ctx, client, msg.ChannelID, authorization.SendMessages, func(ctx context.Context) error {
 			s.broadcastScope(ctx, msg.ChannelID, eventTyping, data)
 			return nil
 		})
 		return nil
 	}
-	switch {
-	case msg.ToUniqueID != "":
-		payload, err := eventEnvelope(eventTyping, data)
-		if err != nil {
-			return err
-		}
-		// Every session of the recipient: a desktop and its linked phones
-		// each show the indicator in their own copy of the conversation.
-		for _, tc := range s.sessionsOf(msg.ToUniqueID) {
-			_ = s.deps.Broadcast.BroadcastToClient(tc.ID, payload)
-		}
-	case msg.ChannelID != 0:
-		// Same gate as history: without it any client could fake "X is
-		// typing" into a channel it never joined, which is the metadata half
-		// of the leak scopeReadable closes for bodies.
-		if !s.scopeReadable(ctx, client, msg.ChannelID) {
-			return nil
-		}
-		payload, err := eventEnvelope(eventTyping, data)
-		if err != nil {
-			return err
-		}
-		s.broadcastChannelScoped(ctx, msg.ChannelID, payload)
-	default:
-		raw, err := json.Marshal(data)
-		if err != nil {
-			return err
-		}
-		s.deps.Broadcast.BroadcastEvent(eventTyping, raw)
+	payload, err := eventEnvelope(eventTyping, data)
+	if err != nil {
+		return err
+	}
+	// Every session of the recipient: a desktop and its linked phones
+	// each show the indicator in their own copy of the conversation.
+	for _, tc := range s.sessionsOf(msg.ToUniqueID) {
+		_ = s.deps.Broadcast.BroadcastToClient(tc.ID, payload)
 	}
 	return nil
 }
 
-// handleChatDelivered relays a DM delivery ack to the original sender (124).
+// handleChatDelivered relays a DM delivery ack to the original sender (124)
+// and marks the spooled copy it acknowledges as delivered.
 func (s *TCPServer) handleChatDelivered(ctx context.Context, client *Client, f *netproto.Frame) error {
 	var msg netproto.ChatDelivered
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed chat_delivered: "+err.Error())
 	}
+	s.ackSpooled(ctx, client, msg.ToUniqueID, msg.ClientMsgID)
 	return s.relayReceipt(ctx, client, msg.ToUniqueID, eventDMDelivered, msg.ClientMsgID)
 }
 

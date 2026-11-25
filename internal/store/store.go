@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -44,12 +43,9 @@ type appliedMigration struct {
 // Store wraps a *sql.DB connection pool and a logger, providing access to the
 // noxa PostgreSQL database.
 type Store struct {
-	db                *sql.DB
-	logger            *zap.Logger
-	reactionCache     sync.Map // message id -> *reactionCacheEntry
-	reactionCacheMu   sync.Mutex
-	reactionCacheSize int
-	pii               *PIICipher
+	db     *sql.DB
+	logger *zap.Logger
+	pii    *PIICipher
 	// migrationLockWaitHook is a test seam invoked after an advisory-lock
 	// attempt observes the lock held by another session.
 	migrationLockWaitHook func()

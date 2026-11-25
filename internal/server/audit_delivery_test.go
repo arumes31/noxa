@@ -261,11 +261,13 @@ func TestChatTrackersForgetIdleUsers(t *testing.T) {
 	spam := newSpamTracker()
 	for i := 0; i <= trackerSoftLimit; i++ {
 		uid := fmt.Sprintf("guest:%d", i)
-		slow.check(uid, 1, 5, now)
+		_, finish := slow.reserve(uid, 1, 5, "", now)
+		finish(true)
 		spam.record(uid, [32]byte{1}, "", now)
 	}
 	later := now.Add(time.Minute)
-	slow.check("guest:new", 1, 5, later)
+	_, finish := slow.reserve("guest:new", 1, 5, "", later)
+	finish(true)
 	spam.record("guest:new", [32]byte{1}, "", later)
 	slow.mu.Lock()
 	slowKeys := len(slow.last)

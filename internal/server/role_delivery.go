@@ -75,10 +75,6 @@ func (s *TCPServer) writeRoleBroadcastInContext(ctx context.Context, client *Cli
 			}
 			presenceType = inner.Type
 		}
-		if event.Type == eventPrivateCallSignal {
-			s.privateCallsMu.Lock()
-			defer s.privateCallsMu.Unlock()
-		}
 		metadata := false
 		if isPresenceSignal(presenceType) || roleSnapshotEvent(event.Type) || event.Type == eventSpeakingChanged || event.Type == eventWhisper || event.Type == eventAvatarChanged || event.Type == eventPoke || event.Type == eventPrioritySpeakerChanged || event.Type == eventScreenshareChanged || event.Type == eventStreamWatchStarted || event.Type == eventStreamUploadChanged || event.Type == eventPosition {
 			// A queued activity write must finish before moderation can
@@ -89,7 +85,18 @@ func (s *TCPServer) writeRoleBroadcastInContext(ctx context.Context, client *Cli
 			metadata = true
 		}
 		e := ctx.Value(roleLeaseKey{}).(roleLease).evaluator
+		// A call signal is checked against the live call under its lock, which
+		// is released before the write: a peer that stopped reading must not
+		// stall every other call. A signal written just after its call ended
+		// is harmless.
+		signal := event.Type == eventPrivateCallSignal
+		if signal {
+			s.privateCallsMu.Lock()
+		}
 		frame, err := s.roleBroadcastFrame(client, payload, e)
+		if signal {
+			s.privateCallsMu.Unlock()
+		}
 		if err != nil || frame == nil {
 			return err
 		}

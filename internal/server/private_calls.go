@@ -105,85 +105,114 @@ func (s *TCPServer) handlePrivateCall(ctx context.Context, client *Client, frame
 			}
 			return s.roleAction(ctx, client, 0, authorization.Connect, func(ctx context.Context) error { return s.startPrivateCall(ctx, client, request, backend) })
 		}
-		s.privateCallsMu.Lock()
-		defer s.privateCallsMu.Unlock()
-		call, found := s.privateCalls[request.ID]
-		participant, member := call.Participant(client.UniqueID)
-		// A callee ringing on several devices is unbound: any of its sessions
-		// may read, accept or decline; the answering session binds.
-		unbound := participant.ClientID == "" && participant.State == "ringing"
-		if !found || !member || (participant.ClientID != client.ID && !unbound) {
-			if found && member && request.Action == "get" {
-				view := projectCall(call, client)
-				return s.writeCommittedReply(client, netproto.MsgCallResult, netproto.CallResult{Action: "get", Call: &view})
-			}
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, netproto.ErrCallDenied.Error())
+		return s.changePrivateCall(ctx, client, request, backend)()
+	})
+}
+
+// changePrivateCall checks and applies one action on a live call under
+// privateCallsMu and returns the reply, which the caller writes after the
+// lock is released: a session that stopped reading must not hold up every
+// other call action and disconnect cleanup for the write ceiling.
+//
+// A state change is computed, saved and published without releasing the
+// lock. SavePrivateCall ignores a revision that is not higher than the stored
+// one, so two changes computed from the same state would leave the store and
+// the live call disagreeing, and a change whose save failed must not be
+// published.
+func (s *TCPServer) changePrivateCall(ctx context.Context, client *Client, request netproto.CallRequest, backend privateCallStore) func() error {
+	refuse := func(code uint16, message string) func() error {
+		return func() error { return s.sendErrorFor(client, requestOrigin(ctx), code, message) }
+	}
+	answer := func(call netproto.CallSession) func() error {
+		view := projectCall(call, client)
+		return func() error {
+			return s.writeCommittedReply(client, netproto.MsgCallResult, netproto.CallResult{Action: request.Action, Call: &view})
 		}
-		if unbound && request.Action != "get" && request.Action != "accept" && request.Action != "decline" {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, netproto.ErrCallDenied.Error())
+	}
+	s.privateCallsMu.Lock()
+	defer s.privateCallsMu.Unlock()
+	call, found := s.privateCalls[request.ID]
+	participant, member := call.Participant(client.UniqueID)
+	// A callee ringing on several devices is unbound: any of its sessions
+	// may read, accept or decline; the answering session binds.
+	unbound := participant.ClientID == "" && participant.State == "ringing"
+	if !found || !member || (participant.ClientID != client.ID && !unbound) {
+		if found && member && request.Action == "get" {
+			return answer(call)
 		}
-		if request.Action == "signal" {
-			if s.callSignalRate != nil && !s.callSignalRate.allow(client.UniqueID, time.Now()) {
-				return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "call signal rate limit exceeded")
-			}
-			if call.EndedAt != 0 || participant.State != "accepted" {
-				return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, netproto.ErrCallDenied.Error())
-			}
-			target, found := call.Participant(request.Target)
-			if !found || target.State != "accepted" || target.UniqueID == client.UniqueID || len(request.Signal) > 96000 {
-				return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid call signal")
-			}
-			raw, err := base64.StdEncoding.Strict().DecodeString(request.Signal)
-			if err != nil || len(raw) < 40 || base64.StdEncoding.EncodeToString(raw) != request.Signal {
-				return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid encrypted call signal")
-			}
-			payload, err := eventEnvelope(eventPrivateCallSignal, netproto.CallSignal{CallID: call.ID, From: client.UniqueID, To: target.UniqueID, Body: request.Signal})
-			if err != nil {
-				return err
-			}
-			if s.deps.Broadcast == nil {
-				return errors.New("call broadcaster unavailable")
-			}
+		return refuse(errCodePermissionDenied, netproto.ErrCallDenied.Error())
+	}
+	if unbound && request.Action != "get" && request.Action != "accept" && request.Action != "decline" {
+		return refuse(errCodePermissionDenied, netproto.ErrCallDenied.Error())
+	}
+	switch request.Action {
+	case "get":
+	case "signal":
+		if s.callSignalRate != nil && !s.callSignalRate.allow(client.UniqueID, time.Now()) {
+			return refuse(errCodeMalformed, "call signal rate limit exceeded")
+		}
+		if call.EndedAt != 0 || participant.State != "accepted" {
+			return refuse(errCodePermissionDenied, netproto.ErrCallDenied.Error())
+		}
+		target, found := call.Participant(request.Target)
+		if !found || target.State != "accepted" || target.UniqueID == client.UniqueID || len(request.Signal) > 96000 {
+			return refuse(errCodeMalformed, "invalid call signal")
+		}
+		raw, err := base64.StdEncoding.Strict().DecodeString(request.Signal)
+		if err != nil || len(raw) < 40 || base64.StdEncoding.EncodeToString(raw) != request.Signal {
+			return refuse(errCodeMalformed, "invalid encrypted call signal")
+		}
+		payload, err := eventEnvelope(eventPrivateCallSignal, netproto.CallSignal{CallID: call.ID, From: client.UniqueID, To: target.UniqueID, Body: request.Signal})
+		if err != nil {
+			return func() error { return err }
+		}
+		if s.deps.Broadcast == nil {
+			return func() error { return errors.New("call broadcaster unavailable") }
+		}
+		reply := answer(call)
+		// The delivery checks the call again; a signal queued for a call
+		// that ended meanwhile is dropped there.
+		return func() error {
 			if err := s.deps.Broadcast.BroadcastToClient(target.ClientID, payload); err != nil {
 				return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "call peer unavailable")
 			}
-		} else if request.Action != "get" {
-			if request.Action == "accept" && !s.roleAllowed(ctx, client, 0, authorization.Connect) {
-				return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "calling is not permitted")
-			}
-			// A session belongs to at most one live call: binding it to a
-			// second would overwrite the first binding, leaving that call
-			// with an accepted participant disconnect cleanup never removes.
-			if request.Action == "accept" {
-				if bound := s.privateCallByClient[client.ID]; bound != "" && bound != call.ID {
-					return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "this session is already in another call")
-				}
-			}
-			next, err := call.Change(client.UniqueID, request.Action, time.Now().Unix())
-			if err != nil {
-				return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, err.Error())
-			}
-			if unbound && request.Action == "accept" {
-				key, published := s.senderDMKey(client)
-				if !published {
-					return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, errCallKeyUnavailable.Error())
-				}
-				for i := range next.Participants {
-					if next.Participants[i].UniqueID == client.UniqueID {
-						next.Participants[i].ClientID, next.Participants[i].PublicKey = client.ID, key
-						next.Participants[i].DeviceID = client.currentDeviceID()
-					}
-				}
-			}
-			if err := backend.SavePrivateCall(ctx, next); err != nil {
-				return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "call change could not be saved")
-			}
-			s.publishPrivateCallLocked(next)
-			call = next
+			return reply()
 		}
-		view := projectCall(call, client)
-		return s.writeCommittedReply(client, netproto.MsgCallResult, netproto.CallResult{Action: request.Action, Call: &view})
-	})
+	default:
+		if request.Action == "accept" && !s.roleAllowed(ctx, client, 0, authorization.Connect) {
+			return refuse(errCodePermissionDenied, "calling is not permitted")
+		}
+		// A session belongs to at most one live call: binding it to a
+		// second would overwrite the first binding, leaving that call
+		// with an accepted participant disconnect cleanup never removes.
+		if request.Action == "accept" {
+			if bound := s.privateCallByClient[client.ID]; bound != "" && bound != call.ID {
+				return refuse(errCodePermissionDenied, "this session is already in another call")
+			}
+		}
+		next, err := call.Change(client.UniqueID, request.Action, time.Now().Unix())
+		if err != nil {
+			return refuse(errCodeMalformed, err.Error())
+		}
+		if unbound && request.Action == "accept" {
+			key, published := s.senderDMKey(client)
+			if !published {
+				return refuse(errCodeUnavailable, errCallKeyUnavailable.Error())
+			}
+			for i := range next.Participants {
+				if next.Participants[i].UniqueID == client.UniqueID {
+					next.Participants[i].ClientID, next.Participants[i].PublicKey = client.ID, key
+					next.Participants[i].DeviceID = client.currentDeviceID()
+				}
+			}
+		}
+		if err := backend.SavePrivateCall(ctx, next); err != nil {
+			return refuse(errCodeUnavailable, "call change could not be saved")
+		}
+		s.publishPrivateCallLocked(next)
+		call = next
+	}
+	return answer(call)
 }
 
 // projectCall shows a session its account's participation: once another

@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 )
@@ -94,11 +95,30 @@ func TestPushSubscriptionsFollowTheirDevice(t *testing.T) {
 	if err := s.SavePushSubscription(ctx, sub); err != nil {
 		t.Fatal(err)
 	}
+	// The account is listed for mention pushes under its stored name while
+	// an active device is subscribed.
+	var userID int64
+	if err := s.DB().QueryRowContext(ctx, `INSERT INTO users(unique_id,nickname) VALUES($1,$2) RETURNING id`, principal, "nick-"+principal).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	listed := func() bool {
+		accounts, err := s.PushAccounts(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slices.Contains(accounts, PushAccount{Principal: principal, Nickname: "nick-" + principal, UserID: userID})
+	}
+	if !listed() {
+		t.Fatal("subscribed account missing from PushAccounts")
+	}
 	if _, err := s.RevokeDevice(ctx, principal, phone.DeviceID, DeviceRevokedByUser); err != nil {
 		t.Fatal(err)
 	}
 	if subs, _ := s.PushSubscriptions(ctx, principal); len(subs) != 0 {
 		t.Fatalf("revoked device still subscribed: %+v", subs)
+	}
+	if listed() {
+		t.Fatal("account without an active subscription listed in PushAccounts")
 	}
 	_ = first
 }

@@ -1224,7 +1224,10 @@ The server needs outbound HTTPS to the browsers' push services (Google,
 Mozilla, Apple). Pushes carry only the kind of event and, unless the phone
 turned on **Hide notification details**, the sender's nickname and channel
 name; message text never leaves the server in a push, and direct messages stay
-end-to-end encrypted. While the account's desktop has seen input in the last
+end-to-end encrypted. A mention reaches a phone whose app is closed when the
+message names the account's stored name (its registered nickname or identity
+display name); a display name chosen only for one session is matched while
+that session is online. While the account's desktop has seen input in the last
 two minutes, pushes for messages wait 60 seconds and are dropped if the
 conversation is read in that time; calls always push at once, and **Always
 notify this phone** turns the delay off. Reading a conversation on any device
@@ -1784,7 +1787,7 @@ libraries (LGPL and GPL with runtime exception; copyright files beside them in
 
 The server runs bounded housekeeping at startup and every five minutes:
 
-- Delivered offline DMs: 30 days after delivery. Undelivered messages are retained.
+- Delivered offline DMs: 30 days after delivery. Undelivered messages are retained. A message waiting for an offline recipient counts as delivered once the recipient's client acknowledges it; without an acknowledgement it is sent once more at the recipient's next sign-in (clients drop the duplicate) and counts as delivered then.
 - Server recordings: 30 days after the recording ends. Active recordings and processes still cleaning up are retained. Recognizable abandoned recording sets use their last manifest write time. Corrupt manifests and unrelated files are preserved for operator inspection.
 - Audit events: 180 days, including daily aggregates. Daily aggregates retain the cutoff calendar day in UTC.
 - Spoken name clips: 30 days after their last use (a fetch, or a session connecting or renaming with that name).

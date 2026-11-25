@@ -65,10 +65,15 @@ func (s *TCPServer) handleDiscussion(ctx context.Context, client *Client, frame 
 			}
 		}
 		return s.roleAction(ctx, client, r.ChannelID, capability, func(ctx context.Context) error {
+			// A post that is refused or not stored must not start the
+			// slow-mode window.
+			var finish func(stored bool)
 			if r.Action == "create" || r.Action == "send" {
-				if err := s.validateDiscussionBody(ctx, client, r); err != nil {
-					return err
+				reserved, reject := s.validateDiscussionBody(ctx, client, r)
+				if reject != "" {
+					return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, reject)
 				}
+				finish = reserved
 			}
 			if r.Action == "configure" || r.Action == "edit" {
 				if err := s.moderateBody(ctx, r.Title+"\n"+strings.Join(r.Tags, "\n")); err != nil {
@@ -76,6 +81,9 @@ func (s *TCPServer) handleDiscussion(ctx context.Context, client *Client, frame 
 				}
 			}
 			result, err := backend.Discussion(ctx, r, client.UniqueID, client.nickname())
+			if finish != nil {
+				finish(err == nil)
+			}
 			if err != nil {
 				switch {
 				case errors.Is(err, sql.ErrNoRows):
@@ -162,29 +170,36 @@ func (s *TCPServer) notifyDiscussionReaders(ctx context.Context, backend discuss
 	}
 }
 
-func (s *TCPServer) validateDiscussionBody(ctx context.Context, client *Client, r netproto.DiscussionRequest) error {
+// validateDiscussionBody checks a new post. It returns why the post is
+// refused, or the slow-mode reservation (nil without slow mode) that the
+// caller finishes once the post was stored or failed.
+func (s *TCPServer) validateDiscussionBody(ctx context.Context, client *Client, r netproto.DiscussionRequest) (finish func(stored bool), reject string) {
 	if s.chatKeys == nil || r.BodyEnc == "" || r.KeyID == 0 {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "encrypted discussion body required")
+		return nil, "encrypted discussion body required"
 	}
 	current, _, err := s.chatKeys.current(ctx, r.ChannelID)
 	if err != nil || current != r.KeyID {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "stale chat key — wait for re-key")
+		return nil, "stale chat key — wait for re-key"
 	}
 	plain, err := s.chatKeys.open(ctx, r.ChannelID, r.KeyID, r.BodyEnc)
 	if err != nil || strings.TrimSpace(plain) == "" || len(plain) > 12000 || (s.cfg != nil && s.cfg.ChatMaxLength > 0 && len(plain) > s.cfg.ChatMaxLength) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid discussion message")
+		return nil, "invalid discussion message"
 	}
 	moderated := r.Title + "\n" + strings.Join(r.Tags, "\n") + "\n" + stripAttachmentRefs(plain)
 	if err = s.moderateBody(ctx, moderated); err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, err.Error())
+		return nil, err.Error()
 	}
 	if ch, ok := s.deps.State.GetChannel(r.ChannelID); ok && ch.SlowModeSeconds > 0 && !s.roleAllowed(ctx, client, r.ChannelID, authorization.BypassSlowmode) {
-		if s.chatSlow.check(client.UniqueID, r.ChannelID, ch.SlowModeSeconds, time.Now()) > 0 {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "slow mode — wait before sending")
+		var wait time.Duration
+		if wait, finish = s.chatSlow.reserve(client.UniqueID, r.ChannelID, ch.SlowModeSeconds, "", time.Now()); wait > 0 {
+			return nil, "slow mode — wait before sending"
 		}
 	}
 	if s.chatSpam != nil && s.chatSpam.record(client.UniqueID, bodyDigest(moderated), "", time.Now()) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "possible spam detected")
+		if finish != nil {
+			finish(false)
+		}
+		return nil, "possible spam detected"
 	}
-	return nil
+	return finish, ""
 }

@@ -379,6 +379,8 @@ type TCPServer struct {
 	previewService        *linkpreview.Service
 	previewInFlight       sync.Map // unique ID -> struct{}: one preview fetch per user
 	spoolDelivery         [64]sync.Mutex
+	spoolAwaitMu          sync.Mutex
+	spoolAwait            map[int64]spoolWait // spooled row id -> session whose receipt it awaits
 	privateCallsMu        sync.Mutex
 	privateCalls          map[string]netproto.CallSession
 	privateCallByClient   map[string]string
