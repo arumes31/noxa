@@ -303,6 +303,15 @@ jobs:
           npm ci
           npm run build
 
+      # nativecapture reads memory owned by COM, WASAPI and GDI through uintptr
+      # values, which vet's unsafeptr check cannot tell from misuse.
+      - name: vet client
+        shell: bash
+        working-directory: client
+        run: |
+          go list ./... | grep -v '/internal/nativecapture$' | xargs go vet -tags=integration
+          go vet -tags=integration -unsafeptr=false ./internal/nativecapture
+
       - name: test client
         working-directory: client
         env:
@@ -574,6 +583,8 @@ jobs:
           sbom: true
 
   # Branch and tag pushes publish the image; only this job may write packages.
+  # Same gates as release-build, so no image is published for a version that
+  # gets no release.
   docker-publish:
     needs: [build-metadata, proto-contract, mobile-checks, test, frontend-e2e, libopus, client-windows, webview2, security-gate, release-lint]
     if: github.event_name != 'pull_request'
@@ -601,8 +612,6 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GitHub Container Registry
-  # Same gates as release-build, so no image is published for a version that
-  # gets no release.
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
