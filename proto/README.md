@@ -8,8 +8,6 @@ server. All files use `syntax = "proto3";` and retain the published package
 
 | File | Service(s) | Purpose |
 |------|------------|---------|
-| [`signaling.proto`](signaling.proto) | `Signaling` (deprecated) | Compatibility descriptors for the intentionally unserved WebRTC signaling RPCs. |
-| [`chat.proto`](chat.proto) | `Chat` (deprecated) | Compatibility descriptors for the intentionally unserved chat RPCs. |
 | [`events.proto`](events.proto) | `Events` | Server events broadcast to clients (user joined/left, speaking, channel created/deleted, user moved/kicked/banned). |
 | [`control.proto`](control.proto) | `Control` | Authentication, role-aware channel/member management and inspection; compatibility descriptors for retired operations. |
 
@@ -62,5 +60,3 @@ neither `protoc` nor local `protoc-gen-*` binaries are needed.
 |---------|--------|
 | `Events` | Served: `Subscribe` streams from the server-side event bus. |
 | `Control` | Served: auth, channel create/delete/list, permission query, role-aware moderation and configuration, `BulkDeleteMessages` (up to 100 messages of one channel) and `Get`/`SetIntegrationScopes`. Each integration RPC needs one scope from the account's optional scope ceiling (see the top-level README); scopes only narrow what the roles allow, and an account with a ceiling cannot sign in as a member on the control port or the web client. `Authenticate` needs no scope: it only checks credentials and returns the account ID. Authentication returns only `user_id`; it does not mint a session token. The file-transfer RPCs intentionally return `Unimplemented` — transfer tokens are minted by the control channel after a per-client permission check. |
-| `Chat` | Deprecated and intentionally unserved: chat is end-to-end/scope-key encrypted on the control channel. |
-| `Signaling` | Deprecated and intentionally unserved: WebRTC signaling stays on the control channel. |

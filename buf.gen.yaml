@@ -10,17 +10,13 @@ plugins:
     out: .
     opt:
       - module=noxa
-      - Mchat.proto=noxa/v1;noxav1
       - Mcontrol.proto=noxa/v1;noxav1
       - Mevents.proto=noxa/v1;noxav1
-      - Msignaling.proto=noxa/v1;noxav1
   - remote: buf.build/grpc/go:v1.5.1
     out: .
     opt:
       - module=noxa
-      - Mchat.proto=noxa/v1;noxav1
       - Mcontrol.proto=noxa/v1;noxav1
       - Mevents.proto=noxa/v1;noxav1
-      - Msignaling.proto=noxa/v1;noxav1
 inputs:
   - directory: proto

@@ -12,25 +12,15 @@ lint:
   disallow_comment_ignores: true
   ignore_only:
     PACKAGE_DIRECTORY_MATCH:
-      - proto/chat.proto
       - proto/control.proto
       - proto/events.proto
-      - proto/signaling.proto
     SERVICE_SUFFIX:
-      - proto/chat.proto
       - proto/control.proto
       - proto/events.proto
-      - proto/signaling.proto
-    RPC_REQUEST_RESPONSE_UNIQUE:
-      - proto/chat.proto
-      - proto/signaling.proto
     RPC_REQUEST_STANDARD_NAME:
       - proto/events.proto
-      - proto/signaling.proto
     RPC_RESPONSE_STANDARD_NAME:
-      - proto/chat.proto
       - proto/events.proto
-      - proto/signaling.proto
   enum_zero_value_suffix: _UNSPECIFIED
 breaking:
   use:

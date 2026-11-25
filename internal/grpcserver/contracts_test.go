@@ -9,7 +9,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/descriptorpb"
 
 	"noxa/internal/eventbus"
 	"noxa/internal/query"
@@ -17,24 +16,6 @@ import (
 )
 
 func TestGeneratedServiceContracts(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		file protoreflect.FileDescriptor
-	}{
-		{name: "Chat", file: noxav1.File_chat_proto},
-		{name: "Signaling", file: noxav1.File_signaling_proto},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			service := test.file.Services().ByName(protoreflect.Name(test.name))
-			if service == nil {
-				t.Fatalf("%s service descriptor is missing", test.name)
-			}
-			options, ok := service.Options().(*descriptorpb.ServiceOptions)
-			if !ok || !options.GetDeprecated() {
-				t.Fatalf("%s deprecated option = %v, want true", test.name, options)
-			}
-		})
-	}
 
 	bus := eventbus.New(zap.NewNop())
 	defer bus.Close()
