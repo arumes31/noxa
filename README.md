@@ -9,7 +9,6 @@
 *Go server, Windows desktop client, installable mobile/web PWA, and PostgreSQL persistence.*
 
 [![CI](https://github.com/arumes31/noxa/actions/workflows/ci.yml/badge.svg)](https://github.com/arumes31/noxa/actions/workflows/ci.yml)
-[![golangci-lint](https://github.com/arumes31/noxa/actions/workflows/golangci-lint.yml/badge.svg)](https://github.com/arumes31/noxa/actions/workflows/golangci-lint.yml)
 [![Security Analysis](https://github.com/arumes31/noxa/actions/workflows/security.yml/badge.svg)](https://github.com/arumes31/noxa/actions/workflows/security.yml)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/arumes31/noxa)](https://go.dev/)
 [![Container Image](https://img.shields.io/badge/container-ghcr.io-blue?logo=docker)](https://github.com/arumes31/noxa/pkgs/container/noxa)

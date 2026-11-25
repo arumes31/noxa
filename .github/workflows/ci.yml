@@ -446,8 +446,11 @@ jobs:
           # cmd/adduser claims its database as a fresh install, and the steps
           # above have already migrated the shared one.
           createdb noxa_adduser
-          NOXA_TEST_DATABASE_URL="postgres://noxa:noxa@localhost:5432/noxa_adduser?sslmode=disable"             go test -tags integration -count=1 ./cmd/adduser
-          go test -tags integration -count=1 -timeout 30m ./internal/store ./internal/grpcserver ./internal/channels ./internal/auth ./cmd/role-setup ./cmd/e2e
+          NOXA_TEST_DATABASE_URL="postgres://noxa:noxa@localhost:5432/noxa_adduser?sslmode=disable" go test -tags integration -count=1 ./cmd/adduser
+          # cmd/role-setup allows five seconds to drop its scratch database, so
+          # it runs alone, before the other suites load the server.
+          go test -tags integration -count=1 ./cmd/role-setup
+          go test -tags integration -count=1 -timeout 30m ./internal/store ./internal/grpcserver ./internal/channels ./internal/auth ./cmd/e2e
 
       - name: verify container entrypoint scripts
         run: sh scripts/test-container-entrypoints.sh
