@@ -190,7 +190,6 @@ const state = {
     tabConnects: new Map(), // (281) tab ID -> its own lastConnect record
     pendingBookmark: null, // (334) {name, addr} of the bookmark loaded into the login dialog
     reconnectAttempts: 0,
-    reconnectTimer: null,
     reconnectInFlight: false,
     vadMonitor: null,
     voiceMonitorCtx: null,
@@ -722,32 +721,13 @@ async function rememberTabConnect(c, expectedGeneration = null, tabID = "", curr
     return true;
 }
 
-let reconnectCountdownTimer = null;
 let reconnectRequestPending = false;
 let reconnectGeneration = 0;
-let reconnectHaltedGeneration = -1; // (314) generation whose series a rejected login ended
-let reconnectCueTimer = null;
-let reconnectTimerSourceTabID = "";
 
 function autoReconnectEnabled() {
     // Missing settings and pre-setting-version profiles inherit the safer
     // default: recover an unexpectedly lost connection unless explicitly off.
     return state.settings?.reconnect_on_loss !== false;
-}
-
-function clearReconnectTimer() {
-    if (state.reconnectTimer) {
-        clearTimeout(state.reconnectTimer);
-        state.reconnectTimer = null;
-    }
-    if (reconnectCountdownTimer) {
-        clearInterval(reconnectCountdownTimer);
-        reconnectCountdownTimer = null;
-    }
-    if (reconnectCueTimer) {
-        clearTimeout(reconnectCueTimer);
-        reconnectCueTimer = null;
-    }
 }
 
 async function completeReconnect(c, generation, tabID, current = () => true) {
@@ -817,7 +797,7 @@ async function retireReplacedTab(sourceTabID, replacementTabID, c, generation) {
     }
 }
 
-async function attemptReconnect(c = state.lastConnect, { announceFailure = true, sourceTabID = state.activeTabID } = {}) {
+async function attemptReconnect(c = state.lastConnect, { sourceTabID = state.activeTabID } = {}) {
     if (!c || state.reconnectInFlight) return false;
     const generation = reconnectGeneration;
     const sourceServerGeneration = state.serverGeneration;
@@ -852,9 +832,7 @@ async function attemptReconnect(c = state.lastConnect, { announceFailure = true,
     }
     if (err) {
         if (sourceTabID !== state.activeTabID || sourceServerGeneration !== state.serverGeneration) return false;
-        // (314) a rejected login must not feed the automatic retry series.
         if (connectFailureIsDefinitive(loginFailure(err))) {
-            reconnectHaltedGeneration = generation;
             connectionOverlay.terminal(sourceTabID, err, "authentication");
             const message = t("runtime.reconnectStoppedAuth", { error: err });
             sysMsg(message); toast(message, "warn", "conn");
@@ -864,7 +842,7 @@ async function attemptReconnect(c = state.lastConnect, { announceFailure = true,
         }
         connectionOverlay.attempt(sourceTabID, sourceServerGeneration, sourceSessionGeneration, false, err);
         sysMsg(t("runtime.reconnectFailed", { error: err }));
-        if (announceFailure) toast(t("runtime.reconnectToast", { error: err }), "warn", "conn");
+        toast(t("runtime.reconnectToast", { error: err }), "warn", "conn");
         return false;
     }
     const completed = await completeReconnect(c, generation, tabID);
@@ -875,73 +853,6 @@ async function attemptReconnect(c = state.lastConnect, { announceFailure = true,
     return completed;
 }
 
-function scheduleReconnect(
-    target = state.lastConnect,
-    generation = reconnectGeneration,
-    sourceTabID = state.activeTabID,
-    sourceServerGeneration = state.serverGeneration,
-) {
-    const ownsSource = () => generation === reconnectGeneration
-        && sourceServerGeneration === state.serverGeneration
-        && sourceTabID === state.activeTabID;
-    if (generation !== reconnectGeneration || !autoReconnectEnabled() || !target) {
-        chatUI.cancelReconnectAnnouncementBatch();
-        if (ownsSource()) showLogin();
-        return;
-    }
-    // Pin the retry series to the connection that dropped. A tab switch may
-    // replace state.lastConnect while the five-second countdown is running.
-    const reconnectTarget = { ...target };
-
-    if (state.reconnectAttempts === 0) {
-        // Let the loss contour complete before the recovery contour starts.
-        // The timer is cancelled by a manual disconnect or a newer connection.
-        reconnectCueTimer = setTimeout(() => {
-            reconnectCueTimer = null;
-            if (ownsSource() && state.lastConnect?.addr === reconnectTarget.addr) {
-                playEvent("connection_reconnecting");
-            }
-        }, 550);
-    }
-    state.reconnectAttempts++;
-    reconnectTimerSourceTabID = sourceTabID;
-    // Spread peers behind the same address without giving up during an outage.
-    const delay = reconnectDelay(state.reconnectAttempts);
-    const seconds = Math.ceil(delay / 1000);
-    if (ownsSource()) {
-        chatUI.beginReconnectAnnouncementBatch();
-        sysMsg(t("runtime.reconnectCountdown", { seconds, attempt: state.reconnectAttempts }));
-        $("conn-pill").textContent = t("runtime.retry", { seconds, attempt: state.reconnectAttempts });
-        connectionOverlay.progress(sourceTabID, { attempts: state.reconnectAttempts, remaining: seconds, inFlight: false });
-    }
-    let countdown = seconds - 1;
-    reconnectCountdownTimer = setInterval(() => {
-        if (countdown <= 0 || !state.reconnectTimer) {
-            clearInterval(reconnectCountdownTimer);
-            reconnectCountdownTimer = null;
-            return;
-        }
-        if (ownsSource()) { $("conn-pill").textContent = t("runtime.retry", { seconds: countdown, attempt: state.reconnectAttempts });
-            connectionOverlay.progress(sourceTabID, { attempts: state.reconnectAttempts, remaining: countdown, inFlight: false }); }
-        countdown--;
-    }, 1000);
-    state.reconnectTimer = setTimeout(async () => {
-        clearReconnectTimer();
-        if (generation !== reconnectGeneration) return;
-        const sessionGeneration = state.sessionGeneration;
-        const connected = await attemptReconnect(reconnectTarget, { announceFailure: false, sourceTabID });
-        if (connected) return;
-        if (generation !== reconnectGeneration) return;
-        // (314) the login was rejected: leave the manual retry to the user.
-        if (reconnectHaltedGeneration === generation) { chatUI.cancelReconnectAnnouncementBatch(); return; }
-        // A disconnect during finalization already scheduled its own recovery.
-        if (sessionGeneration !== state.sessionGeneration) return;
-        chatUI.cancelReconnectAnnouncementBatch();
-        scheduleReconnect(reconnectTarget, generation, sourceTabID, sourceServerGeneration);
-    }, delay);
-}
-
-const scopedReconnectAvailable = () => typeof window.go.main.App.ReconnectTab === "function";
 const reconnectNotices = new Map();
 let pendingIntentionalDisconnectCue = null;
 const restoredVoiceChannels = new Map();
@@ -1039,7 +950,6 @@ function cancelOverlayRetries() {
     const tabID = state.activeTabID;
     if (state.reconnectInFlight) return;
     tabReconnects.cancel(tabID);
-    if (reconnectTimerSourceTabID === tabID) { reconnectGeneration++; clearReconnectTimer(); }
     connectionOverlay.progress(tabID, null);
     chatUI.cancelReconnectAnnouncementBatch();
 }
@@ -1051,7 +961,7 @@ function overlayConnectionSettings() {
     cancelOverlayRetries(); showLogin(); void loginMemory.select(profile);
 }
 const connectionOverlay = createConnectionOverlay({ getState: () => state, translate: t,
-    retryNow: () => { const tabID = state.activeTabID, target = state.tabConnects.get(tabID); if (!target || state.reconnectInFlight) return; if (scopedReconnectAvailable()) tabReconnects.retryNow(tabID, target); else { clearReconnectTimer(); void attemptReconnect(target, { sourceTabID: tabID }); } },
+    retryNow: () => { const tabID = state.activeTabID, target = state.tabConnects.get(tabID); if (!target || state.reconnectInFlight) return; tabReconnects.retryNow(tabID, target); },
     canConfigure: () => { const target = state.tabConnects.get(state.activeTabID); return !!target?.addr && !!target.nick; },
     retry: overlayConnectionSettings, cancel: cancelOverlayRetries, closeMenus: () => { closeContextMenu(); closeServerDialogs("disconnected"); } });
 const reconnectCancel = document.createElement("button");
@@ -1071,7 +981,7 @@ function startTabReconnect(tabID) {
     // shutdown marker so it cannot carry into a later, unrelated loss.
     shutdownNotice.forget(String(tabID));
     connectionOverlay.lost(String(tabID));
-    if (scopedReconnectAvailable()) tabReconnects.start(String(tabID), state.tabConnects.get(String(tabID)));
+    tabReconnects.start(String(tabID), state.tabConnects.get(String(tabID)));
 }
 window.runtime.EventsOn("tab_disconnected", startTabReconnect);
 window.runtime.EventsOn("tab_closed", tabID => {
@@ -1099,7 +1009,7 @@ window.runtime.EventsOn("tab_reset", tabID => {
     }
     // tabs.js commits its view synchronously in the same native event batch.
     queueMicrotask(() => {
-        if (scopedReconnectAvailable() && state.activeTabID === tabID) tabReconnects.refresh(tabID);
+        if (state.activeTabID === tabID) tabReconnects.refresh(tabID);
         showReconnectNotice(tabID);
     });
 });
@@ -1130,7 +1040,6 @@ async function reconnectLastServerNow() {
         const active = tabs.find(tab => tab.active);
         if ((active?.id || "") !== (sourceTabID || "") || active?.connected) return;
 
-        clearReconnectTimer();
         tabReconnects.cancel(sourceTabID);
         const c = target;
         if (!c) {
@@ -1148,11 +1057,9 @@ async function reconnectLastServerNow() {
         if (connected) return;
         if (!current()) return;
         chatUI.cancelReconnectAnnouncementBatch();
-        // This is an explicit retry after a user disconnect or terminal error.
-        // A native client must not fall into the legacy unclassified retry loop.
-        if (scopedReconnectAvailable()) showLogin();
-        else if (autoReconnectEnabled()) scheduleReconnect();
-        else showLogin();
+        // This is an explicit retry after a user disconnect or terminal error:
+        // a failure returns to the login form, never to automatic retries.
+        showLogin();
     } finally {
         reconnectRequestPending = false;
     }
@@ -1172,7 +1079,6 @@ async function disconnect() {
     reconnectGeneration++;
     tabReconnects.cancel(sourceTabID);
     state.lastConnect = null; // intentional disconnect: no reconnect
-    clearReconnectTimer();
     chatUI.cancelReconnectAnnouncementBatch();
     stopVoiceForDisconnect();
     try {
@@ -1205,14 +1111,6 @@ window.addEventListener("pagehide", () => { pendingIntentionalDisconnectCue = nu
 
 window.runtime.EventsOn("disconnected", () => {
     endShareForReconnect();
-    // A selected server that drops takes over the one foreground retry
-    // timer. Otherwise the previous server's callback can cancel this new
-    // timer and keep spending its budget on the wrong connection.
-    if (state.reconnectTimer && reconnectTimerSourceTabID !== state.activeTabID) {
-        reconnectGeneration++;
-        clearReconnectTimer();
-        state.reconnectAttempts = 0;
-    }
     chatUI.rememberDisconnectedChannel();
     state.sessionGeneration++;
     connectionOverlay.lost(state.activeTabID);
@@ -1247,10 +1145,7 @@ window.runtime.EventsOn("disconnected", () => {
     $("conn-pill").textContent = t("runtime.offline");
     $("conn-pill").classList.remove("up");
     stopQualitySampler();
-
-    // Unexpected loss reconnects by default. An explicit false setting opts
-    // out; intentional disconnects clear lastConnect before this event.
-    if (!scopedReconnectAvailable()) scheduleReconnect();
+    // The retry series belongs to the tab: see "tab_disconnected".
 });
 
 // (241) a contact's signing key changed: the Go side keeps the contact
@@ -1967,7 +1862,6 @@ window.runtime.EventsOn("event", (json) => {
                 if (d.from_server || d.ban) {
                     state.lastConnect = null;
                     reconnectGeneration++;
-                    clearReconnectTimer();
                 }
                 playAlert(removal);
             }
