@@ -1784,7 +1784,7 @@ libraries (LGPL and GPL with runtime exception; copyright files beside them in
 
 The server runs bounded housekeeping at startup and every five minutes:
 
-- Delivered offline DMs: 30 days after delivery. Undelivered messages are retained.
+- Delivered offline DMs: 30 days after delivery. Undelivered messages are retained. A message waiting for an offline recipient counts as delivered once the recipient's client acknowledges it; without an acknowledgement it is sent once more at the recipient's next sign-in (clients drop the duplicate) and counts as delivered then.
 - Server recordings: 30 days after the recording ends. Active recordings and processes still cleaning up are retained. Recognizable abandoned recording sets use their last manifest write time. Corrupt manifests and unrelated files are preserved for operator inspection.
 - Audit events: 180 days, including daily aggregates. Daily aggregates retain the cutoff calendar day in UTC.
 - Spoken name clips: 30 days after their last use (a fetch, or a session connecting or renaming with that name).

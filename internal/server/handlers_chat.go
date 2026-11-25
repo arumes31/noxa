@@ -4,6 +4,7 @@ package server
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"time"
 
@@ -379,14 +380,23 @@ func (s *TCPServer) pushDirect(client *Client, toUniqueID string) {
 }
 
 // spoolPageSize and spoolDeliveryBudget bound the database and heap work of
-// one delivery pass; deliverSpooled runs up to spoolDeliveryPasses passes, so
-// messages arriving during replay cannot hold login completion forever. The
-// rest is delivered on the next login or key publish.
+// one delivery pass; deliverSpooled runs up to spoolDeliveryPasses passes
+// within spoolDeliveryTimeout, so messages arriving during replay cannot hold
+// login completion forever. The rest is delivered on the next login or key
+// publish.
 const (
-	spoolPageSize       = 256
-	spoolDeliveryBudget = 512
-	spoolDeliveryPasses = 8
+	spoolPageSize        = 256
+	spoolDeliveryBudget  = 512
+	spoolDeliveryPasses  = 8
+	spoolDeliveryTimeout = 10 * time.Second
 )
+
+// spoolWait is a spooled row written to a session whose delivery receipt
+// (chat_delivered) marks it delivered.
+type spoolWait struct {
+	client      *Client
+	from, msgID string
+}
 
 // sessionPendingSpool is implemented by spools that can select, in the
 // database, only the offline messages a given session can open.
@@ -396,15 +406,16 @@ type sessionPendingSpool interface {
 
 // pendingForSession loads the client's eligible offline messages in bounded
 // pages. Spools without session filtering fall back to the full mailbox.
-func (s *TCPServer) pendingForSession(ctx context.Context, client *Client, userID int64) ([]store.SpooledMessage, error) {
+func (s *TCPServer) pendingForSession(ctx context.Context, client *Client, userID, afterID int64) ([]store.SpooledMessage, error) {
 	spool, ok := s.deps.Spool.(sessionPendingSpool)
 	if !ok {
-		return s.deps.Spool.PendingMessages(ctx, userID)
+		all, err := s.deps.Spool.PendingMessages(ctx, userID)
+		return slices.DeleteFunc(all, func(m store.SpooledMessage) bool { return m.ID <= afterID }), err
 	}
 	// Spooled recipient keys are stored canonical (canonicalDMKey), as is the
 	// session key, so eligibility can be decided in SQL.
 	recipientKey, _ := s.senderDMKey(client)
-	filter := store.PendingFilter{DeviceID: client.currentDeviceID(), Web: client.isWebTransport(), RecipientKey: recipientKey, Limit: spoolPageSize}
+	filter := store.PendingFilter{DeviceID: client.currentDeviceID(), Web: client.isWebTransport(), RecipientKey: recipientKey, AfterID: afterID, Limit: spoolPageSize}
 	var out []store.SpooledMessage
 	for len(out) < spoolDeliveryBudget {
 		page, err := spool.PendingMessagesFor(ctx, userID, filter)
@@ -421,43 +432,115 @@ func (s *TCPServer) pendingForSession(ctx context.Context, client *Client, userI
 }
 
 // deliverSpooled sends any spooled offline messages for the user to the
-// client as offline chat events and marks them delivered. They are written
-// straight to the connection, not through its small broadcast queue (a
-// backlog would overflow it and close the client), in passes of at most
-// spoolDeliveryBudget rows until a pass delivers nothing more.
+// client as offline chat events. They are written straight to the connection,
+// not through its small broadcast queue (a backlog would overflow it and
+// close the client), in passes of at most spoolDeliveryBudget rows.
+//
+// A written message is marked delivered when the recipient's delivery receipt
+// arrives (ackSpooled): a write that succeeded proves nothing if the
+// connection dies before the client read it, and direct-message history
+// exists only on the clients. Without a receipt the message is written once
+// more to the recipient's next session and marked then, so a client that
+// sends no receipt (activity sharing off, or a copy it already has) cannot
+// keep its mailbox full. Rows no client acknowledges (no client_msg_id, edits
+// and deletions, copies of the account's own messages) are marked when
+// written.
+//
+// It must run outside the policy lease: a replay over a slow link would hold
+// the shared gate, and a waiting policy writer then blocks every new reader.
 func (s *TCPServer) deliverSpooled(ctx context.Context, client *Client, userID int64) {
 	if userID <= 0 || s.deps.Spool == nil {
 		return
 	}
-	for pass := 0; pass < spoolDeliveryPasses && ctx.Err() == nil && s.deliverSpooledPass(ctx, client, userID); pass++ {
+	ctx, cancel := context.WithTimeout(ctx, spoolDeliveryTimeout)
+	defer cancel()
+	var after int64
+	for pass := 0; pass < spoolDeliveryPasses && ctx.Err() == nil && !client.sessionRevoked(); pass++ {
+		next, more := s.deliverSpooledPass(ctx, client, userID, after)
+		if !more {
+			return
+		}
+		after = next
 	}
 }
 
-// deliverSpooledPass delivers one pass and reports whether another may find
-// more: a full pass whose rows were all written and marked delivered.
-func (s *TCPServer) deliverSpooledPass(ctx context.Context, client *Client, userID int64) bool {
+// ackSpooled marks delivered the spooled rows that were written to this
+// session and that its delivery receipt names.
+func (s *TCPServer) ackSpooled(ctx context.Context, client *Client, fromUniqueID, clientMsgID string) {
+	// shortcut: scans every awaited row per receipt, index them by session
+	// when mailboxes grow far beyond a few thousand rows.
+	var ids []int64
+	s.spoolAwaitMu.Lock()
+	for id, w := range s.spoolAwait {
+		if w.client == client && w.msgID == clientMsgID && w.from == fromUniqueID {
+			ids = append(ids, id)
+			delete(s.spoolAwait, id)
+		}
+	}
+	s.spoolAwaitMu.Unlock()
+	if len(ids) == 0 {
+		return
+	}
+	// A failed mark leaves the rows pending; they replay on the next login.
+	if err := s.deps.Spool.MarkMessagesDelivered(ctx, ids); err != nil {
+		s.logger.Warn("marking spooled messages delivered failed",
+			zap.String("client_id", client.ID),
+			zap.Error(err),
+		)
+	}
+}
+
+// awaitSpoolReceipt reports whether the row now waits for this session's
+// delivery receipt, or is skipped because this session was already written
+// it. A row another session got without acknowledging is not awaited again.
+func (s *TCPServer) awaitSpoolReceipt(client *Client, m store.SpooledMessage, userID int64) (await, skip bool) {
+	if m.ClientMsgID == "" || m.DMAction != "" || m.FromUserID == userID {
+		return false, false
+	}
+	s.spoolAwaitMu.Lock()
+	defer s.spoolAwaitMu.Unlock()
+	if prev, tried := s.spoolAwait[m.ID]; tried {
+		if prev.client == client {
+			return false, true
+		}
+		delete(s.spoolAwait, m.ID)
+		return false, false
+	}
+	if s.spoolAwait == nil {
+		s.spoolAwait = map[int64]spoolWait{}
+	}
+	s.spoolAwait[m.ID] = spoolWait{client: client, from: m.FromUniqueID, msgID: m.ClientMsgID}
+	return true, false
+}
+
+// deliverSpooledPass delivers one pass of rows after afterID. It returns the
+// last row it looked at and whether another pass may find more: a full pass
+// whose rows were all written.
+func (s *TCPServer) deliverSpooledPass(ctx context.Context, client *Client, userID, afterID int64) (int64, bool) {
 	// Concurrent sessions must not both read and deliver the same pending row.
 	// A fixed stripe set bounds memory while retaining single-recipient delivery.
 	lock := &s.spoolDelivery[userID%int64(len(s.spoolDelivery))]
 	lock.Lock()
 	defer lock.Unlock()
 	deviceKey, _ := s.senderDMKey(client)
-	msgs, err := s.pendingForSession(ctx, client, userID)
+	msgs, err := s.pendingForSession(ctx, client, userID, afterID)
 	if err != nil {
 		s.logger.Warn("loading spooled messages failed",
 			zap.String("client_id", client.ID),
 			zap.Error(err),
 		)
-		return false
+		return afterID, false
 	}
 	if len(msgs) == 0 {
-		return false
+		return afterID, false
 	}
 	more := len(msgs) >= spoolDeliveryBudget
 
 	device := client.currentDeviceID()
-	ids := make([]int64, 0, len(msgs))
+	ids := make([]int64, 0, len(msgs)) // marked delivered when written
+	written := 0
 	for _, m := range msgs {
+		afterID = m.ID
 		switch {
 		case m.RecipientDeviceID != "":
 			// A per-device copy opens only on its device.
@@ -498,12 +581,22 @@ func (s *TCPServer) deliverSpooledPass(ctx context.Context, client *Client, user
 		if err != nil {
 			continue
 		}
-		// Only rows written to the connection are marked; the rest stay
-		// pending for the next login or key publish.
+		// Registered before the write: the receipt can arrive at once.
+		await, skip := s.awaitSpoolReceipt(client, m, userID)
+		if skip {
+			continue
+		}
+		// Rows that were not written stay pending for the next login or key
+		// publish.
 		writeCtx, cancel := context.WithTimeout(ctx, roleWriteCeiling)
 		err = s.writeFrameInContext(writeCtx, client, &netproto.Frame{Type: uint16(netproto.MsgEvent), Payload: payload})
 		cancel()
 		if err != nil {
+			if await {
+				s.spoolAwaitMu.Lock()
+				delete(s.spoolAwait, m.ID)
+				s.spoolAwaitMu.Unlock()
+			}
 			s.logger.Warn("delivering spooled message failed",
 				zap.String("client_id", client.ID),
 				zap.Int64("message_id", m.ID),
@@ -512,21 +605,20 @@ func (s *TCPServer) deliverSpooledPass(ctx context.Context, client *Client, user
 			more = false
 			break
 		}
-		ids = append(ids, m.ID)
-		if len(ids) >= spoolDeliveryBudget { // the fallback PendingMessages is unpaged
+		if !await {
+			ids = append(ids, m.ID)
+		}
+		if written++; written >= spoolDeliveryBudget { // the fallback PendingMessages is unpaged
 			more = true
 			break
 		}
-	}
-	if len(ids) == 0 {
-		return false
 	}
 	if err := s.deps.Spool.MarkMessagesDelivered(ctx, ids); err != nil {
 		s.logger.Warn("marking spooled messages delivered failed",
 			zap.String("client_id", client.ID),
 			zap.Error(err),
 		)
-		return false
+		return afterID, false
 	}
-	return more
+	return afterID, more
 }

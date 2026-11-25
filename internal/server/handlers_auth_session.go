@@ -345,12 +345,11 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 	}
 
 	// Guests have no users row, so no offline spool (spool inserts require a
-	// users.id).
+	// users.id). The replay takes no policy lease (see deliverSpooled).
+	if !id.guest {
+		s.deliverSpooled(ctx, client, id.userID)
+	}
 	return s.withRoleSession(ctx, client, func(ctx context.Context) error {
-		if !id.guest {
-			s.deliverSpooled(ctx, client, id.userID)
-		}
-
 		// Arm the rules gate after identity and the tree reach the client.
 		s.sendPendingRules(ctx, client, id.guest)
 		if parked != nil {

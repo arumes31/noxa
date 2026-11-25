@@ -155,8 +155,8 @@ func TestBoundSpoolWaitsForMatchingDevicePublication(t *testing.T) {
 			}
 			continue
 		}
-		if len(pending) != 0 {
-			t.Fatalf("matching key did not consume pending row: %v", pending)
+		if len(pending) != 1 {
+			t.Fatalf("row marked delivered before its receipt: %v", pending)
 		}
 		if len(fence.echoes) == 0 {
 			// The broadcaster can enqueue the committed event behind the direct pong.
@@ -177,6 +177,13 @@ func TestBoundSpoolWaitsForMatchingDevicePublication(t *testing.T) {
 		}
 		if len(fence.echoes) != 1 || fence.echoes[0].RecipientPublicKey != binding.RecipientPublicKey || fence.echoes[0].SenderPublicKey != binding.SenderPublicKey || fence.echoes[0].ClientMsgID != binding.ClientMsgID || !fence.echoes[0].Offline {
 			t.Fatalf("spooled metadata lost: %+v", fence.echoes)
+		}
+		// The recipient's delivery receipt consumes the row.
+		send(t, receiver, netproto.MsgChatDelivered, netproto.ChatDelivered{ToUniqueID: "admin-uid", ClientMsgID: binding.ClientMsgID})
+		send(t, receiver, netproto.MsgPing, netproto.Ping{})
+		readOfType(t, receiver, netproto.MsgPong)
+		if pending, err := env.spool.PendingMessages(t.Context(), 2); err != nil || len(pending) != 0 {
+			t.Fatalf("receipt did not consume pending row: %v %v", pending, err)
 		}
 	}
 }

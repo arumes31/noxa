@@ -1513,12 +1513,14 @@ func (s *TCPServer) relaySessionTyping(ctx context.Context, client *Client, f *n
 	return nil
 }
 
-// handleChatDelivered relays a DM delivery ack to the original sender (124).
+// handleChatDelivered relays a DM delivery ack to the original sender (124)
+// and marks the spooled copy it acknowledges as delivered.
 func (s *TCPServer) handleChatDelivered(ctx context.Context, client *Client, f *netproto.Frame) error {
 	var msg netproto.ChatDelivered
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed chat_delivered: "+err.Error())
 	}
+	s.ackSpooled(ctx, client, msg.ToUniqueID, msg.ClientMsgID)
 	return s.relayReceipt(ctx, client, msg.ToUniqueID, eventDMDelivered, msg.ClientMsgID)
 }
 
