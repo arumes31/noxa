@@ -575,7 +575,7 @@ jobs:
 
   # Branch and tag pushes publish the image; only this job may write packages.
   docker-publish:
-    needs: [build-metadata, proto-contract, mobile-checks, test, frontend-e2e, security-gate]
+    needs: [build-metadata, proto-contract, mobile-checks, test, frontend-e2e, libopus, client-windows, webview2, security-gate, release-lint]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 45
