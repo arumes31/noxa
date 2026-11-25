@@ -1272,6 +1272,12 @@ Messages written while the phone is offline wait in an encrypted outbox and
 are sent when it reconnects, or by the service worker through Background
 Sync on Android. Unsent messages expire after 14 days.
 
+The web app reconnects by itself after a lost connection, a server restart, a
+full or busy server, and when it was opened without network. It stops and
+shows the reason when the server refuses the sign-in for good: a ban, a wrong
+server password, guest sign-in turned off, an app or server version that is
+too old, or a signed-out device.
+
 **What the phone stores.** The device's Ed25519 and X25519 keys live in the
 browser's IndexedDB, encrypted with a non-extractable WebCrypto key. Signing out
 or revocation deletes the local device keys. Normal sign-out preserves saved
