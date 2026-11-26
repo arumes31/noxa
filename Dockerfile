@@ -79,8 +79,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     -o /out/noxa ./cmd/server && \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -mod=readonly -trimpath -ldflags="-s -w" -o /out/migrate ./cmd/migrate && \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -mod=readonly -trimpath -ldflags="-s -w" -o /out/adduser ./cmd/adduser && \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -mod=readonly -trimpath -ldflags="-s -w" -o /out/role-setup ./cmd/role-setup && \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -mod=readonly -trimpath -ldflags="-s -w" -o /out/e2e ./cmd/e2e
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -mod=readonly -trimpath -ldflags="-s -w" -o /out/role-setup ./cmd/role-setup
 
 # -----------------------------------------------------------------------------
 # Speech engine stage: the sherpa-onnx TTS CLI and the Supertonic 3 int8 model
@@ -143,7 +142,7 @@ RUN mkdir -p /data/files /data/recordings \
 
 # Copy the compiled binary from the builder stage.
 COPY --from=builder --chown=10001:10001 /out/noxa /out/noxa
-COPY --from=builder --chown=10001:10001 /out/adduser /out/role-setup /out/migrate /out/e2e /out/
+COPY --from=builder --chown=10001:10001 /out/adduser /out/role-setup /out/migrate /out/
 # The mobile web app; web.app_dir defaults to ./web/app relative to /.
 COPY --from=mobile --chown=10001:10001 /out/web/app /web/app
 # Spoken names engine (read-only; clips are written under /data).

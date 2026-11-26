@@ -19,7 +19,7 @@ UPDATE_LDFLAGS = \
 	-X noxa/internal/version.UpdateRepo=$(NOXA_UPDATE_REPO) \
 	-X noxa/internal/version.UpdatePublicKeys=$(NOXA_UPDATE_PUBLIC_KEYS)
 
-.PHONY: all build client-build run version version-check migrate proto tidy test cover fmt vet docker-build compose-up compose-down compose-logs chaos chaos-webrtc profile-db query-load webrtc-load canary clean help
+.PHONY: all build client-build run version version-check migrate proto tidy test cover fmt vet docker-build compose-up compose-down compose-logs chaos chaos-webrtc profile-db webrtc-load canary clean help
 
 all: build
 
@@ -121,10 +121,6 @@ chaos-webrtc:
 ## profile-db: EXPLAIN ANALYZE the hot chat and permission queries (701)
 profile-db:
 	psql "$(DATABASE_URL)" -v ON_ERROR_STOP=1 -f scripts/profile-hot-queries.sql
-
-## query-load: drive the ServerQuery listener at 5,000 requests/sec (934)
-query-load:
-	$(GO) run ./cmd/queryload -rate 5000
 
 ## webrtc-load: simulate 100 authenticated Opus publishers against the SFU (916)
 webrtc-load:
