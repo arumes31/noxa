@@ -461,6 +461,9 @@ type ratchetConsumer struct {
 	sessions    map[durable.SessionContext]string
 	retired     map[string]bool
 	unretirable map[string]bool // obligations the core could not retire (not re-asked this session)
+
+	// receiveLogged: receive failures already written to the client log.
+	receiveLogged map[string]bool
 }
 
 func newRatchetConsumer(d ratchetDeps) (*ratchetConsumer, error) {
@@ -2156,7 +2159,21 @@ func (c *ratchetConsumer) drain() ([]RatchetQuarantine, error) {
 					committedElsewhere = s.Records[iref].Revision > 0
 				}
 			}
-			if ratchetReceiveDisposition(code, committedElsewhere) != "quarantine" {
+			disposition := ratchetReceiveDisposition(code, committedElsewhere)
+			// Once per distinct outcome and session: a copy that cannot be
+			// received stays pending on the server without any other trace.
+			if key := disposition + ":" + code; disposition != "skip" && !c.receiveLogged[key] {
+				if c.receiveLogged == nil {
+					c.receiveLogged = map[string]bool{}
+				}
+				c.receiveLogged[key] = true
+				purpose := "message"
+				if d.Manifest != nil && d.Manifest.Purpose == "control" {
+					purpose = "key control"
+				}
+				log.Printf("ratchet: a %s copy was not received (%s, %s)", purpose, logCode(code), disposition)
+			}
+			if disposition != "quarantine" {
 				continue
 			}
 			// Unreadable ciphertext stays pending on the server and is NEVER
@@ -2517,7 +2534,40 @@ func (c *ratchetConsumer) receive(d ratchetDelivery, a durable.AccountAuthority)
 	if err = c.handoff(a, netproto.OlmAdmissionRequest{Action: "receive_ack", DeliveryID: d.ID, Digest: d.Digest}, nil); err != nil {
 		return &ratchetError{Code: ratchetCode(err), AfterCommit: true, Err: err}
 	}
+	// An acknowledged control is never listed again and keeps nothing worth
+	// replaying: its record would only fill the store.
+	if record.Purpose == "control" {
+		if s, e := c.read(); e == nil {
+			_ = c.d.Store.ForgetReceived(s, d.ID)
+		}
+	}
 	return nil
+}
+
+// forgetRetiredControls frees the space of finished control attempts that
+// earlier versions kept, and logs the store's usage: a full store refuses
+// every send and receive, and voice keys stop without any other trace.
+func (c *ratchetConsumer) forgetRetiredControls() {
+	c.serial.Lock()
+	defer c.serial.Unlock()
+	freed := 0
+	for {
+		s, err := c.read()
+		if err != nil {
+			log.Printf("ratchet: secure store not readable: %s", ratchetCode(err))
+			return
+		}
+		n, err := c.d.Store.ForgetRetiredControls(s.Fence, 256)
+		if freed += n; err != nil || n == 0 {
+			break
+		}
+	}
+	count, size, err := c.d.Store.Usage()
+	if err != nil {
+		return
+	}
+	log.Printf("ratchet: secure store holds %d of %d records, %d of %d MiB; freed %d finished key records",
+		count, durable.MaxRecords, size>>20, durable.MaxNamespaceBytes>>20, freed)
 }
 
 // logicalState returns the committed state of a logical ID ("" when no

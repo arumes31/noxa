@@ -310,6 +310,7 @@ func (m *connManager) startRatchet(conn net.Conn) error {
 	}
 	go guardCrash("ratchet drain", func() {
 		defer close(s.done)
+		consumer.forgetRetiredControls()
 		// The protected archive is authoritative: restore the persisted views
 		// it holds (idempotent). Live views load the DM log/group history
 		// themselves, so the replay emits no per-record frontend events.

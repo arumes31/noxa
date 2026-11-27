@@ -45,6 +45,19 @@ let factory = null;
 // objects without encoded transforms). Production never sets it.
 export function useChannelMediaFactory(fn) { factory = fn || null; }
 
+// Voice key state for the client log, written when it changes: the state,
+// counts and failure codes only (never keys, account or device IDs).
+let loggedStatus = "";
+function logStatus(tabID, status, ignored = {}) {
+    const failed = {};
+    for (const f of status.failed || []) failed[f.reason] = (failed[f.reason] || 0) + 1;
+    const diag = { state: String(status.state || ""), recipients: status.recipients | 0, delivered: status.delivered | 0, waiting: status.waiting | 0, publishers: status.publishers | 0, failed, ignored: { ...ignored } };
+    const key = JSON.stringify(diag);
+    if (key === loggedStatus) return;
+    loggedStatus = key;
+    try { void window.go?.main?.App?.LogMediaKeyStatusForTab?.(tabID, diag)?.catch?.(() => {}); } catch { /* logging never breaks voice */ }
+}
+
 export async function startChannelMedia({ tabID, channelID, roster = [], adapter, hardwareVideoRequired = true, onError = () => {} }) {
     stopChannelMedia();
     const session = factory ? factory({ tabID, channelID }) : new MediaSession({
@@ -52,7 +65,7 @@ export async function startChannelMedia({ tabID, channelID, roster = [], adapter
         owner: tabID, // native capture mirrors this session's screen keys into this tab
         hardwareVideoRequired,
         onHardwareUnavailable: error => window.__noxa?.toast?.(t(error?.message === "hardware_unverified" ? "e2ee.reason.hardware_unverified" : "e2ee.reason.hardware_encoder"), "warn"),
-        onStatus: status => { if (current === session || status.state === "off") publish(status); },
+        onStatus: status => { if (current === session || status.state === "off") { publish(status); logStatus(tabID, status, session.engine?.counters?.ignored); } },
         onError: error => { if (current === session) onError(error); },
         // Encoded-streams receivers ask the SFU for a keyframe after their
         // first authenticated frame (best effort; the server checks the

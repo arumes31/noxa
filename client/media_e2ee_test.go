@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -135,5 +138,32 @@ func TestDoorbellDrainWaitOnlyEnforcesTheSpacing(t *testing.T) {
 		if got := doorbellDrainWait(tc.since); got != tc.want {
 			t.Fatalf("doorbellDrainWait(%v) = %v, want %v", tc.since, got, tc.want)
 		}
+	}
+}
+
+// Key diagnostics in the client log carry codes and counts only: no key
+// message data, no free text from the frontend or a server.
+func TestMediaKeyLogLinesCarryNoKeyMaterial(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	secret := "c2VjcmV0LW1lZGlhLWtleS1ieXRlcw"
+	cm := &connManager{}
+	_, err := cm.sendMediaKey(MediaKeyRequest{LogicalID: "l1", Principal: "peer", Device: "device-" + secret, Kind: mediaKeyControlKind,
+		Data: json.RawMessage(`{"keys":{"audio":"` + secret + `"}}`)})
+	if err == nil {
+		t.Fatal("a send without a session succeeded")
+	}
+	cm.logMediaKeyFailure("exhausted")
+	cm.logMediaKeyFailure("exhausted") // the same failure again is not repeated
+	cm.logMediaKeyFailure(secret + " with spaces\nand a new line")
+	log.Print(mediaKeyStatusLine(MediaKeyDiag{State: "partial\n" + secret, Recipients: 3, Delivered: 1, Waiting: 1, Publishers: 2,
+		Failed: map[string]int{"exhausted": 2, secret + "=": 1}, Ignored: map[string]int{"stale": 4}}))
+	out := buf.String()
+	if strings.Contains(out, secret) || strings.Count(out, "\n") != strings.Count(out, "media key: ") {
+		t.Fatalf("log leaks or splits lines:\n%s", out)
+	}
+	if strings.Count(out, "send failed: exhausted") != 1 || !strings.Contains(out, "recipients=3 delivered=1 waiting=1 publishers=2") || !strings.Contains(out, "exhausted:2") || !strings.Contains(out, "ignored=[stale:4]") {
+		t.Fatalf("missing diagnostics:\n%s", out)
 	}
 }

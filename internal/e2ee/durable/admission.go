@@ -274,19 +274,145 @@ func (s *Store) NoteRetired(snap Snapshot, id string) error {
 		if c.Retired != nil && c.Retired.Epoch == c.AccountEpoch {
 			mark = RetiredMark{Epoch: c.Retired.Epoch, Through: c.Retired.Through, Above: append([]int64{}, c.Retired.Above...)}
 		}
-		if mark.Has(seq) {
-			return nil
+		if !mark.Has(seq) {
+			mark.Above = append(mark.Above, seq)
+			sort.Slice(mark.Above, func(i, j int) bool { return mark.Above[i] < mark.Above[j] })
+			for len(mark.Above) > 0 && mark.Above[0] == mark.Through+1 {
+				mark.Through++
+				mark.Above = mark.Above[1:]
+			}
+			if len(mark.Above) > 1024 {
+				return ErrExhausted
+			}
+			c.Retired = &mark
 		}
-		mark.Above = append(mark.Above, seq)
-		sort.Slice(mark.Above, func(i, j int) bool { return mark.Above[i] < mark.Above[j] })
-		for len(mark.Above) > 0 && mark.Above[0] == mark.Through+1 {
-			mark.Through++
-			mark.Above = mark.Above[1:]
+		// A retired control is finished for good: nothing reads its record
+		// again, and kept ones would fill the namespace (a voice session
+		// sends one per recipient every few minutes).
+		if b.Attempt.Manifest.Purpose == "control" {
+			if e = s.dropControl(tx, &c, id, b); e != nil {
+				return e
+			}
 		}
-		if len(mark.Above) > 1024 {
-			return ErrExhausted
-		}
-		c.Retired = &mark
 		return s.changes(tx, c, snap, map[Ref][]byte{})
 	})
+}
+
+// drop deletes one record and returns its space to the namespace budget.
+func (s *Store) drop(tx *bolt.Tx, c *control, r Ref) error {
+	old, e := s.get(tx, r)
+	if e != nil || old.Revision == 0 {
+		return e
+	}
+	c.Count--
+	c.Bytes -= len(old.Data)
+	return tx.Bucket(bucket).Delete(keyOf(r))
+}
+
+// dropControl deletes a retired control attempt and the logical record that
+// still names it.
+func (s *Store) dropControl(tx *bolt.Tx, c *control, id string, b sentBatch) error {
+	lr := Ref{Logical, b.Attempt.Manifest.LogicalID}
+	v, e := s.get(tx, lr)
+	if e != nil {
+		return e
+	}
+	var l logicalRecord
+	if v.Revision > 0 && json.Unmarshal(v.Data, &l) == nil && l.AttemptID == id {
+		if e = s.drop(tx, c, lr); e != nil {
+			return e
+		}
+	}
+	return s.drop(tx, c, Ref{Outbox, id})
+}
+
+func (s *Store) putControl(tx *bolt.Tx, c control) error {
+	old, e := s.get(tx, controlRef)
+	if e != nil {
+		return e
+	}
+	return s.put(tx, controlRef, Record{old.Revision + 1, encode(c)})
+}
+
+// ForgetRetiredControls deletes up to limit retired control attempts of the
+// current account epoch and reports how many it deleted. Versions before
+// NoteRetired dropped them kept every one, so a long-used namespace can be
+// full of them; this is a delete-only path that works on a full namespace.
+func (s *Store) ForgetRetiredControls(fence uint64, limit int) (int, error) {
+	n := 0
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		c, e := s.fence(tx, Snapshot{Namespace: s.ns, Fence: fence})
+		if e != nil {
+			return e
+		}
+		if c.Retired == nil || c.Retired.Epoch != c.AccountEpoch {
+			return nil
+		}
+		type found struct {
+			id string
+			b  sentBatch
+		}
+		var list []found
+		prefix := []byte(`{"Kind":"` + Outbox + `","ID":`)
+		cursor := tx.Bucket(bucket).Cursor()
+		for k, _ := cursor.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix) && len(list) < limit; k, _ = cursor.Next() {
+			var r Ref
+			if json.Unmarshal(k, &r) != nil {
+				return ErrCorrupt
+			}
+			v, e := s.get(tx, r)
+			if e != nil {
+				return e
+			}
+			var b sentBatch
+			if json.Unmarshal(v.Data, &b) != nil || b.Attempt == nil || b.Receipt == nil {
+				continue
+			}
+			m := b.Attempt.Manifest
+			seq, e := admission.AttemptSequence(m.AttemptID)
+			if e != nil || m.Purpose != "control" || m.AccountEpoch != c.AccountEpoch || AttemptID(m) != r.ID || !c.Retired.Has(seq) {
+				continue
+			}
+			list = append(list, found{r.ID, b})
+		}
+		for _, f := range list {
+			if e = s.dropControl(tx, &c, f.id, f.b); e != nil {
+				return e
+			}
+		}
+		if n = len(list); n == 0 {
+			return nil
+		}
+		return s.putControl(tx, c)
+	})
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// ForgetReceived deletes the record of a received control. The caller has the
+// server's receive_ack for it, so that delivery is never listed again.
+func (s *Store) ForgetReceived(snap Snapshot, id string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		c, e := s.fence(tx, snap)
+		if e != nil {
+			return e
+		}
+		if e = s.drop(tx, &c, Ref{Inbox, id}); e != nil {
+			return e
+		}
+		return s.putControl(tx, c)
+	})
+}
+
+// Usage reports the namespace's record count and stored bytes (see
+// MaxRecords and MaxNamespaceBytes).
+func (s *Store) Usage() (count, size int, err error) {
+	err = s.db.View(func(tx *bolt.Tx) error {
+		c, e := s.control(tx)
+		count, size = c.Count, c.Bytes
+		return e
+	})
+	return
 }

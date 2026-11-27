@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"noxa/internal/e2ee/admission"
 	"noxa/internal/e2ee/ratchet"
+
+	bolt "go.etcd.io/bbolt"
 	"strings"
 	"testing"
 )
@@ -299,5 +301,122 @@ func TestAttemptBindingAndPendingReplacement(t *testing.T) {
 	}
 	if old, next := read("olm:s1"), read("olm:s2"); !old.Retired || next.Retired || next.Pending == nil || *next.Pending != *c2 {
 		t.Fatal("replacement did not retire the old session and pend the new claim", old, next)
+	}
+}
+
+// Finished key controls leave nothing behind: a retired control attempt is
+// deleted with its logical record, and a namespace already full of the ones
+// earlier versions kept accepts sends again after ForgetRetiredControls.
+func TestRetiredControlsAreForgotten(t *testing.T) {
+	server := "tls-sha256:" + strings.Repeat("a", 64)
+	s, e := Open(t.TempDir(), Namespace{server, "alice", "local-device"}, IdentityProtection(bytes.Repeat([]byte{7}, 32)), 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer func() { _ = s.Close() }()
+	trusted(t, s, "bob")
+	big := strings.Repeat("c", 1900<<10) // the archive stands in for thousands of real records
+	// send commits control attempt n with an accepted receipt and reports the
+	// commit error; retire also notes it retired (which deletes it).
+	send := func(n int, archive string, retire bool) error {
+		logical := fmt.Sprintf("ctl-%d", n)
+		m := admission.Manifest{Version: admission.Version, Server: server, Sender: "alice", Device: "local-device", AccountEpoch: 1, AttemptID: fmt.Sprint(n), LogicalID: logical, Purpose: "control", Scope: "direct", Peer: "bob", Deadline: 1900000000, Rosters: []admission.Roster{{Principal: "alice", Version: 1}, {Principal: "bob", Version: 1}}, Targets: []admission.Target{{Principal: "alice", Device: "local-device", AccountEpoch: 1, Identity: "alice-key", Local: true}, {Principal: "bob", Device: "bob-device", AccountEpoch: 1, Identity: "bob-olm"}}}
+		env, _ := json.Marshal(ratchet.Envelope{Version: ratchet.Version, SessionID: "session", Binding: admission.ExpectedBinding(m, m.Targets[1]), Message: json.RawMessage(fmt.Sprintf(`{"type":%d,"body":"cipher"}`, min(n-1, 1)))})
+		// Only the first send opens the session (first contact, with a claim).
+		claimID, claim := "", (*SessionClaim)(nil)
+		if n == 1 {
+			claimID, claim = "c1", &SessionClaim{ClaimID: "c1", ClaimUntil: 1900000000}
+		}
+		parts, e := admission.Freeze(&m, []admission.Copy{{Principal: "bob", Device: "bob-device", AccountEpoch: 1, SessionID: "session", ClaimID: claimID, Envelope: env}})
+		if e != nil {
+			t.Fatal(e)
+		}
+		id := AttemptID(m)
+		snap := readTest(t, s, Ref{Trust, "bob"}, Ref{Session, "olm:session"}, Ref{Logical, logical})
+		if _, e = s.CommitAttempt(snap, m, parts, []SendCandidate{{SessionID: "olm:session", TrustID: "bob", State: []byte("state"), Envelope: env, Context: contextFor("bob"), Claim: claim}}, []byte(archive)); e != nil {
+			return e
+		}
+		mbytes, _ := m.Bytes()
+		r := admission.Receipt{State: "accepted", AttemptID: m.AttemptID, Digest: admission.Digest(mbytes), Server: server, AccountEpoch: 1, LogicalID: logical, MessageID: "message-" + logical}
+		if e = s.ApplyAttemptResult(readTest(t, s, Ref{Outbox, id}, Ref{Logical, logical}), id, r); e != nil {
+			t.Fatal(e)
+		}
+		if retire {
+			if e = s.NoteRetired(readTest(t, s, Ref{Outbox, id}), id); e != nil {
+				t.Fatal(e)
+			}
+		}
+		return nil
+	}
+	usage := func() (int, int) {
+		count, size, e := s.Usage()
+		if e != nil {
+			t.Fatal(e)
+		}
+		return count, size
+	}
+	if e = send(1, "x", true); e != nil {
+		t.Fatal(e)
+	}
+	count, size := usage()
+	if e = send(2, "x", true); e != nil {
+		t.Fatal(e)
+	}
+	if c, b := usage(); c != count || b != size {
+		t.Fatalf("a retired control left records behind: %d records %d bytes, was %d and %d", c, b, count, size)
+	}
+	if v := readTest(t, s, Ref{Outbox, "1:2"}, Ref{Logical, "ctl-2"}); v.Records[Ref{Outbox, "1:2"}].Revision != 0 || v.Records[Ref{Logical, "ctl-2"}].Revision != 0 {
+		t.Fatal("retired control still stored")
+	}
+	// Fill the namespace the way earlier versions did: retired, but kept.
+	n := 3
+	for ; ; n++ {
+		if e = send(n, big, false); errors.Is(e, ErrExhausted) {
+			break
+		} else if e != nil {
+			t.Fatal(e)
+		}
+	}
+	if n < 10 {
+		t.Fatalf("namespace full after %d sends", n)
+	}
+	if e = s.db.Update(func(tx *bolt.Tx) error {
+		c, e := s.control(tx)
+		if e != nil {
+			return e
+		}
+		c.Retired = &RetiredMark{Epoch: 1, Through: int64(n - 2), Above: []int64{}}
+		return s.putControl(tx, c)
+	}); e != nil {
+		t.Fatal(e)
+	}
+	freed := 0
+	for {
+		k, e := s.ForgetRetiredControls(readTest(t, s).Fence, 16)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if freed += k; k == 0 {
+			break
+		}
+	}
+	// Attempt n-1 is not retired yet and stays; everything before it goes.
+	if c, _ := usage(); freed != n-4 || c != count+2 {
+		t.Fatalf("freed %d of %d kept attempts, %d records left (baseline %d)", freed, n-3, c, count)
+	}
+	if e = send(n, big, true); e != nil {
+		t.Fatal("still full after the sweep:", e)
+	}
+	// A received control's record goes once the caller has its acknowledgment.
+	snap := readTest(t, s, Ref{Trust, "bob"}, Ref{Session, "olm:session"})
+	if _, e = s.CommitReceive(snap, "delivery", ReceiveCandidate{SessionID: "olm:session", TrustID: "bob", Session: []byte("state"), Envelope: []byte("envelope"), Archive: []byte("disposition"), Context: contextFor("bob")}); e != nil {
+		t.Fatal(e)
+	}
+	before, _ := usage()
+	if e = s.ForgetReceived(readTest(t, s), "delivery"); e != nil {
+		t.Fatal(e)
+	}
+	if c, _ := usage(); c != before-1 {
+		t.Fatalf("received control kept: %d records, was %d", c, before)
 	}
 }
