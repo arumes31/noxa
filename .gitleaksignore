@@ -50,3 +50,5 @@ e73af7b0af468464abe08bfec06b55b632d7a26d:client/frontend/tests/encryption-toolti
 6dcbc66b69fd55089c1d69a0ecd8e9ca62da86c0:client/native_toast_test.go:generic-api-key:12
 # Device link key fields: an assignment of public key fields, not a credential.
 2359f33892932bc1563a9275fb87e39d9357b1de:client/devices.go:generic-api-key:118
+# A made-up value the log test must never print, not a credential.
+f9d0a3538f2e500a39dacc5c97171c68c784aa77:client/media_e2ee_test.go:generic-api-key:150

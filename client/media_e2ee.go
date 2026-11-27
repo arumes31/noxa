@@ -20,7 +20,10 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -94,12 +97,84 @@ func (m *connManager) sendMediaKey(req MediaKeyRequest) (MediaKeyResult, error) 
 		if code == "" {
 			code = "unavailable"
 		}
+		m.logMediaKeyFailure(code)
 		return MediaKeyResult{Code: code}, errors.New(code)
 	}
 	if out.Receipt == nil {
+		m.logMediaKeyFailure("unavailable")
 		return MediaKeyResult{Code: "unavailable"}, errors.New("unavailable")
 	}
 	return MediaKeyResult{State: out.Receipt.State}, nil
+}
+
+// logMediaKeyFailure writes a failed key send to the client log: the code
+// only, at most once a minute per code (a failing send is retried often).
+func (m *connManager) logMediaKeyFailure(code string) {
+	code = logCode(code)
+	m.mu.Lock()
+	if m.mediaKeyFailures == nil {
+		m.mediaKeyFailures = map[string]time.Time{}
+	}
+	repeated := time.Since(m.mediaKeyFailures[code]) < time.Minute
+	if !repeated {
+		m.mediaKeyFailures[code] = time.Now()
+	}
+	m.mu.Unlock()
+	if !repeated {
+		log.Printf("media key: send failed: %s", code)
+	}
+}
+
+// logCode passes only a short plain failure code to the client log; anything
+// else (free text from a server or the frontend) becomes "unknown". At 24
+// characters of this alphabet a value is too short to hold a key.
+func logCode(code string) string {
+	if len(code) == 0 || len(code) > 24 {
+		return "unknown"
+	}
+	for i := 0; i < len(code); i++ {
+		if c := code[i]; (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' && c != '-' {
+			return "unknown"
+		}
+	}
+	return code
+}
+
+// MediaKeyDiag is the voice key state the frontend reports for the client
+// log: a state, counts and failure codes, never keys, key messages or names.
+type MediaKeyDiag struct {
+	State      string         `json:"state"`
+	Recipients int            `json:"recipients"`
+	Delivered  int            `json:"delivered"`
+	Waiting    int            `json:"waiting"`
+	Publishers int            `json:"publishers"`
+	Failed     map[string]int `json:"failed"`
+	Ignored    map[string]int `json:"ignored"`
+}
+
+// LogMediaKeyStatusForTab writes one voice key status line to the client log.
+func (a *App) LogMediaKeyStatusForTab(tabID string, d MediaKeyDiag) {
+	if _, err := a.requireTabCM(tabID); err != nil {
+		return
+	}
+	log.Print(mediaKeyStatusLine(d))
+}
+
+func mediaKeyStatusLine(d MediaKeyDiag) string {
+	return fmt.Sprintf("media key: state=%s recipients=%d delivered=%d waiting=%d publishers=%d failed=[%s] ignored=[%s]",
+		logCode(d.State), d.Recipients, d.Delivered, d.Waiting, d.Publishers, logCounts(d.Failed), logCounts(d.Ignored))
+}
+
+func logCounts(counts map[string]int) string {
+	parts := make([]string, 0, len(counts))
+	for code, n := range counts {
+		parts = append(parts, fmt.Sprintf("%s:%d", logCode(code), n))
+	}
+	sort.Strings(parts)
+	if len(parts) > 12 {
+		parts = parts[:12]
+	}
+	return strings.Join(parts, " ")
 }
 
 // MediaE2EEStatus tells the frontend whether and as whom it can publish

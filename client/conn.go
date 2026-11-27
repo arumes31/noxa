@@ -132,6 +132,8 @@ type connManager struct {
 	nativeAudioKeyring      *framecrypt.Encryptor
 	nativeCallKeys          *nativeCallKeys // the private call's "self|screen" keys
 	detachedNative          []*nativeShare  // detached with their connection, closed by finishDetach
+	// mediaKeyFailures: when each key send failure code was last logged.
+	mediaKeyFailures map[string]time.Time
 	// ratchetWake: the server's olm_pending doorbell wakes the drain loop.
 	ratchetWake        chan struct{}
 	authorizationModel string

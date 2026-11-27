@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"strings"
 	"testing"
 	"time"
@@ -135,5 +137,50 @@ func TestDoorbellDrainWaitOnlyEnforcesTheSpacing(t *testing.T) {
 		if got := doorbellDrainWait(tc.since); got != tc.want {
 			t.Fatalf("doorbellDrainWait(%v) = %v, want %v", tc.since, got, tc.want)
 		}
+	}
+}
+
+// Key diagnostics in the client log carry codes and counts only: no key
+// message data, no free text from the frontend or a server.
+func TestMediaKeyLogLinesCarryNoKeyMaterial(t *testing.T) {
+	var buf bytes.Buffer
+	defer log.SetOutput(log.Writer())
+	log.SetOutput(&buf)
+	secret := strings.Repeat("Qk", 15) // stands in for key bytes; must never be logged
+	cm := &connManager{}
+	_, err := cm.sendMediaKey(MediaKeyRequest{LogicalID: "l1", Principal: "peer", Device: "device-" + secret, Kind: mediaKeyControlKind,
+		Data: json.RawMessage(`{"keys":{"audio":"` + secret + `"}}`)})
+	if err == nil {
+		t.Fatal("a send without a session succeeded")
+	}
+	hexKey := strings.Repeat("0123456789abcdef", 2) // a key that looks like a code
+	cm.logMediaKeyFailure("exhausted")
+	cm.logMediaKeyFailure("exhausted") // the same failure again is not repeated
+	cm.logMediaKeyFailure(secret + " with spaces\nand a new line")
+	cm.logMediaKeyFailure(hexKey)
+	log.Print(mediaKeyStatusLine(MediaKeyDiag{State: "partial\n" + secret, Recipients: 3, Delivered: 1, Waiting: 1, Publishers: 2,
+		Failed: map[string]int{"exhausted": 2, secret + "=": 1, hexKey: 1}, Ignored: map[string]int{"stale": 4}}))
+	out := buf.String()
+	if strings.Contains(out, secret) || strings.Contains(out, hexKey) || strings.Contains(out, "new line") {
+		t.Fatalf("log leaks:\n%s", out)
+	}
+	if strings.Count(out, "send failed: exhausted") != 1 || !strings.Contains(out, "recipients=3 delivered=1 waiting=1 publishers=2") || !strings.Contains(out, "exhausted:2") || !strings.Contains(out, "ignored=[stale:4]") {
+		t.Fatalf("missing diagnostics:\n%s", out)
+	}
+}
+
+// A session start frees finished key records and logs the store's usage,
+// also on a store that has none.
+func TestRatchetStartLogsStoreUsage(t *testing.T) {
+	c, err := newTestRatchetConsumer(t, func(netproto.OlmAdmissionRequest) (json.RawMessage, error) { return nil, nil }, 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	defer log.SetOutput(log.Writer())
+	log.SetOutput(&buf)
+	c.forgetRetiredControls()
+	if out := buf.String(); !strings.Contains(out, "ratchet: secure store holds ") || !strings.Contains(out, "of 128 MiB; freed 0 finished key records") {
+		t.Fatalf("usage line missing: %s", out)
 	}
 }
