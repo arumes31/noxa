@@ -146,7 +146,7 @@ func TestMediaKeyLogLinesCarryNoKeyMaterial(t *testing.T) {
 	var buf bytes.Buffer
 	defer log.SetOutput(log.Writer())
 	log.SetOutput(&buf)
-	secret := "c2VjcmV0LW1lZGlhLWtleS1ieXRlcw"
+	secret := strings.Repeat("Qk", 15) // stands in for key bytes; must never be logged
 	cm := &connManager{}
 	_, err := cm.sendMediaKey(MediaKeyRequest{LogicalID: "l1", Principal: "peer", Device: "device-" + secret, Kind: mediaKeyControlKind,
 		Data: json.RawMessage(`{"keys":{"audio":"` + secret + `"}}`)})
