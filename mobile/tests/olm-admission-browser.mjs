@@ -151,8 +151,52 @@ test(
         ]);
         await s.applyAttemptResult(snap, "1:1", receipt);
         const ack = await s.attemptRetirementRequest(await s.read(), "1:1");
-        return { retry, metadata, ack, reused: result.reused };
+        // Finished key controls leave nothing behind. A chat attempt stays.
+        await s.noteRetired(await s.read(), "1:1");
+        const control = async (n) => {
+          const cm = { ...m, attempt_id: String(n), logical_id: "ctl-" + n, purpose: "control" },
+            ce = { ...envelope, binding: wire.expectedBinding(cm, cm.targets[1]), message: { type: 1, body: "cipher" } },
+            cf = await wire.freezeAttempt(cm, [{ principal: "bob", device: "b", account_epoch: 1, session_id: "session", envelope: ce }]),
+            refs = [["outbox", "1:" + n], ["logical", cm.logical_id]];
+          await s.commitAttempt(await s.read([["trust", "bob"], ["session", "olm:session"], refs[1]]), cf.manifest, cf.parts,
+            [{ ...p, claim: null, envelope: wire.jsonBytes(ce) }], enc.encode("archive"));
+          await s.applyAttemptResult(await s.read(refs), "1:" + n, { ...receipt, attempt_id: String(n), logical_id: cm.logical_id,
+            message_id: "m" + n, digest: await wire.digestBytes(wire.validateManifest(cf.manifest)) });
+          return refs;
+        };
+        const base = await s.usage(await s.read());
+        await control(2);
+        await s.noteRetired(await s.read(), "1:2");
+        const afterRetire = await s.usage(await s.read());
+        // An earlier version retired a control but kept its records: put the
+        // raw records back after the retirement deleted them.
+        const refs = await control(3),
+          { openDB } = await import("/src/core/db.js"),
+          db = await openDB(),
+          raw = await Promise.all(refs.map((ref) => new Promise((resolve, reject) => {
+            const r = db.transaction("ratchet").objectStore("ratchet").get(s.dbkey(ref));
+            r.onsuccess = () => resolve(r.result);
+            r.onerror = () => reject(r.error);
+          })));
+        await s.noteRetired(await s.read(), "1:3");
+        await new Promise((resolve, reject) => {
+          const tx = db.transaction("ratchet", "readwrite");
+          refs.forEach((ref, i) => tx.objectStore("ratchet").put(raw[i], s.dbkey(ref)));
+          tx.oncomplete = resolve;
+          tx.onerror = () => reject(tx.error);
+        });
+        const kept = (await s.pendingRefs("outbox")).map((r) => r[1]),
+          freed = await s.forgetRetiredControls(await s.read()),
+          left = (await s.pendingRefs("outbox")).map((r) => r[1]),
+          logicalLeft = (await s.pendingRefs("logical")).map((r) => r[1]);
+        await s.forgetReceived(await s.read(), "never-received");
+        return { retry, metadata, ack, reused: result.reused, base, afterRetire, kept, freed, left, logicalLeft };
       });
+      assert.deepEqual(outcome.afterRetire, outcome.base, "a retired control left records behind");
+      assert.deepEqual(outcome.kept, ["1:1", "1:3"]);
+      assert.equal(outcome.freed, 1);
+      assert.deepEqual(outcome.left, ["1:1"]);
+      assert.deepEqual(outcome.logicalLeft, ["logical"]);
       assert.equal(outcome.retry, "conflict");
       assert.equal(outcome.reused, false);
       assert.equal(outcome.ack.attempt_id, "1");
