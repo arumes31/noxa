@@ -178,21 +178,32 @@ test(
             r.onsuccess = () => resolve(r.result);
             r.onerror = () => reject(r.error);
           })));
+        const plain = await s.read(refs);
         await s.noteRetired(await s.read(), "1:3");
+        // The kept records were also still counted in the budget.
+        const ctlRef = ["control", "identity"],
+          now = (await s.read()).records[JSON.stringify(ctlRef)],
+          c = JSON.parse(new TextDecoder().decode(now.data));
+        c.count += refs.length;
+        for (const ref of refs) c.bytes += plain.records[JSON.stringify(ref)].data.length;
+        const budget = await s.encode(db, ctlRef, now.revision, enc.encode(JSON.stringify(c)));
         await new Promise((resolve, reject) => {
           const tx = db.transaction("ratchet", "readwrite");
           refs.forEach((ref, i) => tx.objectStore("ratchet").put(raw[i], s.dbkey(ref)));
+          tx.objectStore("ratchet").put(budget, s.dbkey(ctlRef));
           tx.oncomplete = resolve;
           tx.onerror = () => reject(tx.error);
         });
         const kept = (await s.pendingRefs("outbox")).map((r) => r[1]),
           freed = await s.forgetRetiredControls(await s.read()),
           left = (await s.pendingRefs("outbox")).map((r) => r[1]),
-          logicalLeft = (await s.pendingRefs("logical")).map((r) => r[1]);
+          logicalLeft = (await s.pendingRefs("logical")).map((r) => r[1]),
+          afterSweep = await s.usage(await s.read());
         await s.forgetReceived(await s.read(), "never-received");
-        return { retry, metadata, ack, reused: result.reused, base, afterRetire, kept, freed, left, logicalLeft };
+        return { retry, metadata, ack, reused: result.reused, base, afterRetire, afterSweep, kept, freed, left, logicalLeft };
       });
       assert.deepEqual(outcome.afterRetire, outcome.base, "a retired control left records behind");
+      assert.deepEqual(outcome.afterSweep, outcome.base, "the sweep left budget behind");
       assert.deepEqual(outcome.kept, ["1:1", "1:3"]);
       assert.equal(outcome.freed, 1);
       assert.deepEqual(outcome.left, ["1:1"]);

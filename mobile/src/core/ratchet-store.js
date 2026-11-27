@@ -944,8 +944,8 @@ class RatchetStore {
     const epoch = Number(epochText),
       seq = attemptSequence(seqText);
     let fresh = await this.extended(s, [["outbox", id]]);
-    const c = json(this.require(fresh, ctl).data),
-      old = this.require(fresh, ["outbox", id]);
+    let c = json(this.require(fresh, ctl).data);
+    const old = this.require(fresh, ["outbox", id]);
     if (!old.revision || !json(old.data).receipt || epoch !== c.accountEpoch)
       throw fail("invalid");
     // A retired control is finished for good: nothing reads its record
@@ -956,6 +956,11 @@ class RatchetStore {
     if (m?.purpose === "control") {
       const lr = ["logical", m.logical_id];
       fresh = await this.extended(fresh, [lr]);
+      // The commit writes this snapshot's control record: take the mark from
+      // it, or a retirement another tab finished in between would be undone.
+      c = json(this.require(fresh, ctl).data);
+      if (this.require(fresh, ["outbox", id]).revision !== old.revision || epoch !== c.accountEpoch)
+        throw fail("conflict");
       const logical = this.require(fresh, lr);
       if (logical.revision && json(logical.data).attemptID === id)
         drops.push(lr);
