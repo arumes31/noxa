@@ -104,37 +104,40 @@ func (m *connManager) sendMediaKey(req MediaKeyRequest) (MediaKeyResult, error) 
 		m.logMediaKeyFailure("unavailable")
 		return MediaKeyResult{Code: "unavailable"}, errors.New("unavailable")
 	}
-	m.mu.Lock()
-	m.mediaKeyFailure = ""
-	m.mu.Unlock()
 	return MediaKeyResult{State: out.Receipt.State}, nil
 }
 
 // logMediaKeyFailure writes a failed key send to the client log: the code
-// only, once per run of the same failure (a failing send is retried often).
+// only, at most once a minute per code (a failing send is retried often).
 func (m *connManager) logMediaKeyFailure(code string) {
+	code = logCode(code)
 	m.mu.Lock()
-	repeated := m.mediaKeyFailure == code
-	m.mediaKeyFailure = code
+	if m.mediaKeyFailures == nil {
+		m.mediaKeyFailures = map[string]time.Time{}
+	}
+	repeated := time.Since(m.mediaKeyFailures[code]) < time.Minute
+	if !repeated {
+		m.mediaKeyFailures[code] = time.Now()
+	}
 	m.mu.Unlock()
 	if !repeated {
-		log.Printf("media key: send failed: %s", logCode(code))
+		log.Printf("media key: send failed: %s", code)
 	}
 }
 
-// logCode limits a failure code to a short plain token, so no free text from
-// a server or the frontend reaches the client log.
+// logCode passes only a short plain failure code to the client log; anything
+// else (free text from a server or the frontend) becomes "unknown". At 24
+// characters of this alphabet a value is too short to hold a key.
 func logCode(code string) string {
-	out := make([]byte, 0, 32)
-	for i := 0; i < len(code) && len(out) < 32; i++ {
-		if c := code[i]; c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_' || c == '-' {
-			out = append(out, c)
-		}
-	}
-	if len(out) == 0 {
+	if len(code) == 0 || len(code) > 24 {
 		return "unknown"
 	}
-	return string(out)
+	for i := 0; i < len(code); i++ {
+		if c := code[i]; (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' && c != '-' {
+			return "unknown"
+		}
+	}
+	return code
 }
 
 // MediaKeyDiag is the voice key state the frontend reports for the client

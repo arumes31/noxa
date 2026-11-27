@@ -52,7 +52,8 @@ function logStatus(tabID, status, ignored = {}) {
     const failed = {};
     for (const f of status.failed || []) failed[f.reason] = (failed[f.reason] || 0) + 1;
     const diag = { state: String(status.state || ""), recipients: status.recipients | 0, delivered: status.delivered | 0, waiting: status.waiting | 0, publishers: status.publishers | 0, failed, ignored: { ...ignored } };
-    const key = JSON.stringify(diag);
+    // Counts change with every rekey: only a new state or failure code is news.
+    const key = JSON.stringify([diag.state, Object.keys(failed).sort(), Object.keys(ignored).sort()]);
     if (key === loggedStatus) return;
     loggedStatus = key;
     try { void window.go?.main?.App?.LogMediaKeyStatusForTab?.(tabID, diag)?.catch?.(() => {}); } catch { /* logging never breaks voice */ }

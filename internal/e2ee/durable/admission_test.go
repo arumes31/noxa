@@ -315,7 +315,9 @@ func TestRetiredControlsAreForgotten(t *testing.T) {
 	}
 	defer func() { _ = s.Close() }()
 	trusted(t, s, "bob")
-	big := strings.Repeat("c", 1900<<10) // the archive stands in for thousands of real records
+	big := strings.Repeat("c", 256<<10) // the archive stands in for thousands of real records
+	namespaceBytes = 8 << 20
+	defer func() { namespaceBytes = MaxNamespaceBytes }()
 	// send commits control attempt n with an accepted receipt and reports the
 	// commit error; retire also notes it retired (which deletes it).
 	send := func(n int, archive string, retire bool) error {

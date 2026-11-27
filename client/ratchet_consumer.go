@@ -2554,10 +2554,13 @@ func (c *ratchetConsumer) forgetRetiredControls() {
 	for {
 		s, err := c.read()
 		if err != nil {
-			log.Printf("ratchet: secure store not readable: %s", ratchetCode(err))
+			log.Printf("ratchet: secure store not readable: %s", logCode(ratchetCode(err)))
 			return
 		}
 		n, err := c.d.Store.ForgetRetiredControls(s.Fence, 256)
+		if err != nil {
+			log.Printf("ratchet: finished key records not freed: %s", logCode(ratchetCode(err)))
+		}
 		if freed += n; err != nil || n == 0 {
 			break
 		}

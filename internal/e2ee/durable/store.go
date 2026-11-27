@@ -91,6 +91,9 @@ type control struct {
 	Retired *RetiredMark `json:",omitempty"`
 }
 
+// namespaceBytes is MaxNamespaceBytes; tests lower it to fill a namespace quickly.
+var namespaceBytes = MaxNamespaceBytes
+
 var bucket = []byte("protected-v1")
 var keyBucket = []byte("key-v1")
 var controlRef = Ref{"control", "identity"}
@@ -430,7 +433,7 @@ func (s *Store) changes(tx *bolt.Tx, c control, snap Snapshot, changes map[Ref][
 			return e
 		}
 	}
-	if total > MaxBatchBytes || c.Count > MaxRecords || c.Bytes > MaxNamespaceBytes || c.Outstanding > 100 {
+	if total > MaxBatchBytes || c.Count > MaxRecords || c.Bytes > namespaceBytes || c.Outstanding > 100 {
 		return ErrExhausted
 	}
 	old, e := s.get(tx, controlRef)
