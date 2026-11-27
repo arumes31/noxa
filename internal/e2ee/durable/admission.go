@@ -338,9 +338,10 @@ func (s *Store) putControl(tx *bolt.Tx, c control) error {
 // current account epoch and reports how many it deleted. Versions before
 // NoteRetired dropped them kept every one, so a long-used namespace can be
 // full of them; this is a delete-only path that works on a full namespace.
-func (s *Store) ForgetRetiredControls(fence uint64, limit int) (int, error) {
-	n := 0
-	err := s.db.Update(func(tx *bolt.Tx) error {
+// The scan starts behind attempt after ("" for the first call) and next is
+// where the following call continues; next is "" once the scan is complete.
+func (s *Store) ForgetRetiredControls(fence uint64, after string, limit int) (n int, next string, err error) {
+	err = s.db.Update(func(tx *bolt.Tx) error {
 		c, e := s.fence(tx, Snapshot{Namespace: s.ns, Fence: fence})
 		if e != nil {
 			return e
@@ -355,7 +356,18 @@ func (s *Store) ForgetRetiredControls(fence uint64, limit int) (int, error) {
 		var list []found
 		prefix := []byte(`{"Kind":"` + Outbox + `","ID":`)
 		cursor := tx.Bucket(bucket).Cursor()
-		for k, _ := cursor.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix) && len(list) < limit; k, _ = cursor.Next() {
+		start := prefix
+		if after != "" {
+			start = keyOf(Ref{Outbox, after})
+		}
+		for k, _ := cursor.Seek(start); k != nil && bytes.HasPrefix(k, prefix); k, _ = cursor.Next() {
+			if after != "" && bytes.Equal(k, start) {
+				continue
+			}
+			if len(list) == limit {
+				next = list[limit-1].id
+				break
+			}
 			var r Ref
 			if json.Unmarshal(k, &r) != nil {
 				return ErrCorrupt
@@ -386,9 +398,9 @@ func (s *Store) ForgetRetiredControls(fence uint64, limit int) (int, error) {
 		return s.putControl(tx, c)
 	})
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
-	return n, nil
+	return n, next, nil
 }
 
 // ForgetReceived deletes the record of a received control. The caller has the

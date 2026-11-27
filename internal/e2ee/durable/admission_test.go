@@ -393,12 +393,12 @@ func TestRetiredControlsAreForgotten(t *testing.T) {
 		t.Fatal(e)
 	}
 	freed := 0
-	for {
-		k, e := s.ForgetRetiredControls(readTest(t, s).Fence, 16)
+	for after := ""; ; {
+		k, next, e := s.ForgetRetiredControls(readTest(t, s).Fence, after, 16)
 		if e != nil {
 			t.Fatal(e)
 		}
-		if freed += k; k == 0 {
+		if freed, after = freed+k, next; next == "" {
 			break
 		}
 	}

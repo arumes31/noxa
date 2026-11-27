@@ -2537,8 +2537,16 @@ func (c *ratchetConsumer) receive(d ratchetDelivery, a durable.AccountAuthority)
 	// An acknowledged control is never listed again and keeps nothing worth
 	// replaying: its record would only fill the store.
 	if record.Purpose == "control" {
-		if s, e := c.read(); e == nil {
-			_ = c.d.Store.ForgetReceived(s, d.ID)
+		s, e := c.read()
+		if e == nil {
+			e = c.d.Store.ForgetReceived(s, d.ID)
+		}
+		if key := "forget:" + ratchetCode(e); e != nil && !c.receiveLogged[key] {
+			if c.receiveLogged == nil {
+				c.receiveLogged = map[string]bool{}
+			}
+			c.receiveLogged[key] = true
+			log.Printf("ratchet: a received key record was not freed: %s", logCode(ratchetCode(e)))
 		}
 	}
 	return nil
@@ -2551,17 +2559,17 @@ func (c *ratchetConsumer) forgetRetiredControls() {
 	c.serial.Lock()
 	defer c.serial.Unlock()
 	freed := 0
-	for {
+	for after := ""; ; {
 		s, err := c.read()
 		if err != nil {
 			log.Printf("ratchet: secure store not readable: %s", logCode(ratchetCode(err)))
 			return
 		}
-		n, err := c.d.Store.ForgetRetiredControls(s.Fence, 256)
+		n, next, err := c.d.Store.ForgetRetiredControls(s.Fence, after, 256)
 		if err != nil {
 			log.Printf("ratchet: finished key records not freed: %s", logCode(ratchetCode(err)))
 		}
-		if freed += n; err != nil || n == 0 {
+		if freed, after = freed+n, next; err != nil || next == "" {
 			break
 		}
 	}
