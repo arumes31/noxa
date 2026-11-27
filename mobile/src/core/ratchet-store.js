@@ -251,11 +251,17 @@ class RatchetStore {
     if (t.revoked) throw fail("revoked");
     return r.revision;
   }
-  async #commit(s, changes, authorityUpdate = null) {
+  // drops: refs of the snapshot to delete; their space returns to the budget.
+  async #commit(s, changes, authorityUpdate = null, drops = []) {
     this.validate(s);
     return withDB(async (db) => {
       const c = json(s.records[key(ctl)].data);
       if (authorityUpdate) Object.assign(c, authorityUpdate);
+      const dropped = drops.filter((ref) => this.require(s, ref).revision);
+      for (const ref of dropped) {
+        c.count--;
+        c.bytes -= s.records[key(ref)].data.length;
+      }
       let total = 0;
       for (const [k, data] of Object.entries(changes)) {
         const ref = JSON.parse(k);
@@ -290,7 +296,7 @@ class RatchetStore {
         throw fail("exhausted");
       const prepared = {};
       for (const [k, data] of Object.entries(
-        Object.keys(changes).length || authorityUpdate
+        Object.keys(changes).length || authorityUpdate || dropped.length
           ? { ...changes, [key(ctl)]: bytes(c) }
           : {},
       )) {
@@ -316,9 +322,11 @@ class RatchetStore {
           tx.abort();
         };
         const ready = () => {
-          if (--remaining === 0)
+          if (--remaining === 0) {
             for (const [k, record] of Object.entries(prepared))
               st.put(record, this.dbkey(JSON.parse(k)));
+            for (const ref of dropped) st.delete(this.dbkey(ref));
+          }
         };
         const fr = tx.objectStore(Stores.device).get("identity-fence");
         fr.onsuccess = () => {
@@ -935,15 +943,33 @@ class RatchetStore {
     const [epochText, seqText] = String(id).split(":");
     const epoch = Number(epochText),
       seq = attemptSequence(seqText);
-    const fresh = await this.extended(s, [["outbox", id]]),
-      c = json(this.require(fresh, ctl).data),
-      old = this.require(fresh, ["outbox", id]);
+    let fresh = await this.extended(s, [["outbox", id]]);
+    let c = json(this.require(fresh, ctl).data);
+    const old = this.require(fresh, ["outbox", id]);
     if (!old.revision || !json(old.data).receipt || epoch !== c.accountEpoch)
       throw fail("invalid");
+    // A retired control is finished for good: nothing reads its record
+    // again, and kept ones would fill the namespace (a voice session sends
+    // one per recipient every few minutes).
+    const drops = [],
+      m = json(old.data).attempt?.manifest;
+    if (m?.purpose === "control") {
+      const lr = ["logical", m.logical_id];
+      fresh = await this.extended(fresh, [lr]);
+      // The commit writes this snapshot's control record: take the mark from
+      // it, or a retirement another tab finished in between would be undone.
+      c = json(this.require(fresh, ctl).data);
+      if (this.require(fresh, ["outbox", id]).revision !== old.revision || epoch !== c.accountEpoch)
+        throw fail("conflict");
+      const logical = this.require(fresh, lr);
+      if (logical.revision && json(logical.data).attemptID === id)
+        drops.push(lr);
+      drops.push(["outbox", id]);
+    }
     const r =
       c.retired?.epoch === epoch ? c.retired : { epoch, through: 0, above: [] };
     if (seq <= r.through || r.above.includes(seq)) {
-      await this.#commit(fresh, {});
+      await this.#commit(fresh, {}, null, drops);
       return;
     }
     const above = [...r.above, seq].sort((a, b) => a - b);
@@ -953,7 +979,54 @@ class RatchetStore {
       above.shift();
     }
     if (above.length > 1024) throw fail("exhausted");
-    await this.#commit(fresh, {}, { retired: { epoch, through, above } });
+    await this.#commit(fresh, {}, { retired: { epoch, through, above } }, drops);
+  }
+  // Deletes the retired control attempts of the current account epoch that
+  // earlier versions kept, and returns how many. It only deletes, so it also
+  // works on a namespace that is already full.
+  async forgetRetiredControls(s) {
+    let freed = 0;
+    for (let after = ""; ; ) {
+      const refs = await this.pendingRefs("outbox", after, 100);
+      if (!refs.length) return freed;
+      after = refs.at(-1)[1];
+      const seen = await this.extended(s, refs),
+        c = json(this.require(seen, ctl).data),
+        retired = c.retired?.epoch === c.accountEpoch ? c.retired : null,
+        found = [];
+      for (const ref of refs) {
+        const v = seen.records[key(ref)],
+          b = v.revision ? json(v.data) : null,
+          m = b?.attempt?.manifest;
+        if (!retired || !m || !b.receipt || m.purpose !== "control") continue;
+        if (m.account_epoch !== c.accountEpoch || m.account_epoch + ":" + m.attempt_id !== ref[1]) continue;
+        const seq = attemptSequence(m.attempt_id);
+        if (seq <= retired.through || retired.above.includes(seq))
+          found.push([ref, ["logical", m.logical_id]]);
+      }
+      if (!found.length) continue;
+      const fresh = await this.extended(s, found.flat()),
+        drops = [];
+      for (const [ref, lr] of found) {
+        const logical = this.require(fresh, lr);
+        if (logical.revision && json(logical.data).attemptID === ref[1])
+          drops.push(lr);
+        drops.push(ref);
+      }
+      await this.#commit(fresh, {}, null, drops);
+      freed += found.length;
+    }
+  }
+  // Deletes the record of a received control. The caller has the server's
+  // receive_ack for it, so that delivery is never listed again.
+  async forgetReceived(s, id) {
+    const fresh = await this.extended(s, [["inbox", id]]);
+    await this.#commit(fresh, {}, null, [["inbox", id]]);
+  }
+  // The namespace's record count and stored bytes (see Limits).
+  async usage(s) {
+    const c = json(this.require(await this.extended(s, []), ctl).data);
+    return { count: c.count, bytes: c.bytes };
   }
   async checkAccountAuthority(s, token) {
     const c = await this.accountAuthority(s);

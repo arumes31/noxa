@@ -255,6 +255,16 @@ export class RatchetConsumer {
     }
     async #ready() {
         const a = await this.#authority();
+        // Once per session, before anything is written: free the finished key
+        // records earlier versions kept. A full store refuses every send and
+        // receive, and voice keys stop without any other trace.
+        if (!this.swept) {
+            this.swept = true;
+            try {
+                const freed = await this.store.forgetRetiredControls(await this.store.read());
+                if (freed) console.info("ratchet: freed " + freed + " finished key records");
+            } catch (e) { console.warn("ratchet: finished key records not freed: " + (e.code || "failed")); }
+        }
         let s = await this.store.read([["account", a.accountID]]);
         if (!rec(s, "account", a.accountID).revision) {
             // Only a fresh epoch-1 namespace may create an account. The server
@@ -1227,6 +1237,11 @@ export class RatchetConsumer {
         await this.#emit(record, isNew);
         try { await this.#handoff(a, { action: "receive_ack", delivery_id: d.id, digest: d.digest }); }
         catch (e) { throw Object.assign(e, { afterCommit: true }); }
+        // An acknowledged control is never listed again and keeps nothing
+        // worth replaying: its record would only fill the store.
+        if (record.purpose === "control") {
+            try { await this.store.forgetReceived(await this.store.read(), d.id); } catch { /* best effort; the record is small */ }
+        }
     }
 }
 
