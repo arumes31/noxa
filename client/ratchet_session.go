@@ -21,6 +21,7 @@ import (
 	"net"
 	"noxa/internal/e2ee"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -718,12 +719,63 @@ func (a *App) projectRatchetRecords(m *connManager, records []RatchetRecord, isN
 	if err != nil {
 		return
 	}
+	dropped := map[string]bool{}
 	for _, peer := range peers {
-		a.projectRatchetPeer(m, store, peer, byPeer[peer], isNew)
+		a.projectRatchetPeer(m, store, peer, byPeer[peer], isNew, dropped)
+	}
+	if len(dropped) > 0 {
+		dmClearRedact(m, dropped)
 	}
 }
 
-func (a *App) projectRatchetPeer(m *connManager, store dmHistoryStore, peer string, records []RatchetRecord, isNew bool) {
+// dmClearRedact erases from the protected archive the text of messages whose
+// conversation history the user deleted (a variable so tests can observe it).
+// A record that cannot be erased yet is found again by the next replay.
+// It runs on its own goroutine: a projection can run inside a consumer
+// operation, and erasing waits for that operation to finish.
+var dmClearRedact = func(m *connManager, keys map[string]bool) {
+	c, err := m.ratchetConsumerOn(nil)
+	if err != nil {
+		return
+	}
+	go func() {
+		if _, _, err := c.redact(keys); err != nil {
+			log.Printf("deleted history: archive not erased: %s", logCode(ratchetCode(err)))
+		}
+	}()
+}
+
+// eraseClearedArchive replays peer's archive records of every connected
+// session, so the ones a deleted history keeps out lose their text now.
+func (a *App) eraseClearedArchive(peer string) {
+	a.tabsMu.Lock()
+	managers := make([]*connManager, 0, len(a.tabs))
+	for _, ts := range a.tabs {
+		if ts != nil && ts.cm != nil {
+			managers = append(managers, ts.cm)
+		}
+	}
+	a.tabsMu.Unlock()
+	for _, m := range managers {
+		c, err := m.ratchetConsumerOn(nil)
+		if err != nil {
+			continue // erased by the replay of its next session start
+		}
+		records, err := c.history()
+		if err != nil {
+			continue
+		}
+		var mine []RatchetRecord
+		for _, r := range records {
+			if r.Protocol == ratchetProtocol && r.Scope == "direct" && r.Peer == peer {
+				mine = append(mine, r)
+			}
+		}
+		a.projectRatchetRecords(m, mine, false)
+	}
+}
+
+func (a *App) projectRatchetPeer(m *connManager, store dmHistoryStore, peer string, records []RatchetRecord, isNew bool, dropped map[string]bool) {
 	a.dmMu.Lock()
 	defer a.dmMu.Unlock()
 	l, err := store.load(peer)
@@ -734,7 +786,7 @@ func (a *App) projectRatchetPeer(m *connManager, store dmHistoryStore, peer stri
 	l.Peer = peer
 	changed := false
 	for _, r := range records {
-		if a.applyRatchetRecord(m, store, &l, r, isNew) {
+		if a.applyRatchetRecord(m, store, &l, r, isNew, dropped) {
 			changed = true
 		}
 	}
@@ -747,8 +799,9 @@ func (a *App) projectRatchetPeer(m *connManager, store dmHistoryStore, peer stri
 }
 
 // applyRatchetRecord merges one direct record into its loaded log and reports
-// whether the log changed. The caller holds dmMu and saves.
-func (a *App) applyRatchetRecord(m *connManager, store dmHistoryStore, l *dmLog, r RatchetRecord, isNew bool) bool {
+// whether the log changed. The caller holds dmMu and saves. dropped collects
+// the messages a deleted history keeps out whose archive still has text.
+func (a *App) applyRatchetRecord(m *connManager, store dmHistoryStore, l *dmLog, r RatchetRecord, isNew bool, dropped map[string]bool) bool {
 	find := func(sender, logical string) *DMEntry {
 		for i := range l.Messages {
 			e := &l.Messages[i]
@@ -764,10 +817,15 @@ func (a *App) applyRatchetRecord(m *connManager, store dmHistoryStore, l *dmLog,
 		target = r.Reference
 	}
 	e := find(r.Sender, target)
-	// "Delete history" keeps the archive, so a replayed record from before
-	// the clear stays out. A new delivery is kept whatever its send time (it
-	// may have waited on the server, or come from a slow clock).
-	if e == nil && !isNew && l.ClearedAt > 0 && r.SentAt <= l.ClearedAt {
+	// "Delete history": a replayed record from before the clear stays out and
+	// loses its text in the archive. A new delivery is kept whatever its send
+	// time (it may have waited on the server, or come from a slow clock).
+	key := ratchetSemanticKey(r.Sender, target)
+	if e == nil && !isNew && l.ClearedAt > 0 && (r.SentAt <= l.ClearedAt || slices.Contains(l.ClearedKeys, key)) {
+		// A delete record has no text and is never redacted: not collected.
+		if _, _, erased := ratchetBodyDisappearing(r.Body); !erased && r.Purpose != netproto.DMActionDelete {
+			dropped[key] = true
+		}
 		return false
 	}
 	if change {
