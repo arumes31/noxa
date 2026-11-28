@@ -787,7 +787,8 @@ export class DirectMessages extends EventTarget {
         const ahead = (old?.messages || []).filter(m => m.protocol === RATCHET_PROTOCOL && m.sentAt > clearedAt).map(m => disappearKey(m.from, m.id));
         this.conversations.set(peer, {
             peer, nickname: old?.nickname || "", messages: [], clearedAt, clearedKeys: [...(old?.clearedKeys || []), ...ahead],
-            ...(old?.disappearing ? { disappearing: old.disappearing, disappearingAt: old.disappearingAt } : {}),
+            // The timer setting is not history: it stays, with its order time.
+            ...(old?.disappearingAt ? { disappearing: old.disappearing || 0, disappearingAt: old.disappearingAt } : {}),
         });
         await this.#put(Stores.dm, peer, this.conversations.get(peer));
         await this.#assertActive();
