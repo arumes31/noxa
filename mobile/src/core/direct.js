@@ -4,7 +4,7 @@
 // this account (dm_devices_v1, internal/netproto/dm_devices.go). Copies for
 // this device arrive live or from the server's per-device spool. History
 // is kept in IndexedDB, encrypted with the database key.
-import { Stores, currentFence, deleteKeyIn, getSealed, keys, putSealedIn } from "./db.js";
+import { Stores, currentFence, getSealed, keys, putSealedIn } from "./db.js";
 import { fromBase64, keyFingerprint, openDM, sealDM, toBase64 } from "./crypto.js";
 import { MAX_LISTED_REVOCATIONS, ed25519FromPEM, keyCertifiesUID, mergeRevocationPins, parseKeyRecord, trustedDevices, verifyRevocations, withoutRevokedApprovers, withoutRevokedPins } from "./dm-trust.js";
 import { Msg } from "./frame.js";
@@ -193,6 +193,8 @@ export class DirectMessages extends EventTarget {
     #closed = false;
     #disappearTimer = null;
     #redactMisses = new Map();
+    #erase = new Set();
+    #eraseTimer = 0;
     #writes = new Map();
 
     #enqueue(store, key, work) {
@@ -769,22 +771,50 @@ export class DirectMessages extends EventTarget {
         this.#emit("messages", { peer, message: null, isNew: false });
     }
 
-    /** Deletes the history with peer on this device only. */
+    /**
+     * Deletes the history with peer on this device only. The emptied
+     * conversation stays stored with the time of the deletion: the protected
+     * archive is replayed at every start, and its records from before then
+     * stay out and lose their text there.
+     */
     async deleteHistory(peer) {
         this.#assertOpen();
         clearTimeout(this.#saveTimers.get(peer));
         this.#saveTimers.delete(peer);
-        this.conversations.delete(peer);
-        // Serialize after already-started cache writes; later messages may
-        // create a new conversation, ordered after this deletion.
-        await this.#enqueue(Stores.dm, peer, async () => {
-            const expected = await this.#fence;
-            if (!expected) throw new Error("identity storage unavailable");
-            await deleteKeyIn(expected, Stores.dm, peer);
+        const old = this.conversations.get(peer), clearedAt = Math.max(Date.now() / 1000, old?.clearedAt || 0); // never moves back
+        // Deleted messages dated after now (a sender's clock ran ahead) are
+        // remembered by key, so they stay out as well.
+        const ahead = (old?.messages || []).filter(m => m.protocol === RATCHET_PROTOCOL && m.sentAt > clearedAt).map(m => disappearKey(m.from, m.id));
+        this.conversations.set(peer, {
+            peer, nickname: old?.nickname || "", messages: [], clearedAt, clearedKeys: [...(old?.clearedKeys || []), ...ahead],
+            // The timer setting is not history: it stays, with its order time.
+            ...(old?.disappearingAt ? { disappearing: old.disappearing || 0, disappearingAt: old.disappearingAt } : {}),
         });
+        await this.#put(Stores.dm, peer, this.conversations.get(peer));
         await this.#assertActive();
         this.#emit("messages", { peer, message: null, isNew: false });
         this.#emit("conversations");
+        // Erase now when connected; otherwise the next start's replay does it.
+        const consumer = this.ratchet;
+        if (!consumer || consumer.closed) return;
+        try {
+            for (const record of await consumer.history()) {
+                if (record.scope === "direct" && record.peer === peer) await this.#project(record, false, () => !this.#closed && this.ratchet === consumer);
+            }
+        } catch { /* erased by the next replay */ }
+    }
+
+    // Erases the archive text of records a deleted history keeps out. Never
+    // awaited: a projection can run inside a consumer operation, and the
+    // erase waits for that operation to finish.
+    #eraseCleared(key) {
+        this.#erase.add(key);
+        this.#eraseTimer ||= setTimeout(() => {
+            this.#eraseTimer = 0;
+            const keys = this.#erase, consumer = this.ratchet;
+            this.#erase = new Set();
+            if (!this.#closed && consumer && !consumer.closed) consumer.redact(keys).catch(() => {});
+        }, 50);
     }
 
     /** Edits one of this account's messages on every device. */
@@ -863,7 +893,38 @@ export class DirectMessages extends EventTarget {
         if (!owned()) return;
         const body = record.body && typeof record.body === "object" ? record.body : {};
         const text = typeof body.text === "string" ? body.text : "";
-        if (record.purpose === "edit" || record.purpose === "delete") {
+        const change = record.purpose === "edit" || record.purpose === "delete";
+        // "Delete history": a replayed record from before the deletion stays
+        // out and loses its text in the archive. A new delivery is kept
+        // whatever its send time (it may have waited on the server).
+        const cleared = this.conversations.get(record.peer);
+        if (cleared?.clearedAt > 0) {
+            const target = change ? record.reference : record.logicalID, key = disappearKey(record.sender, target);
+            const old = record.sentAt <= cleared.clearedAt || !!cleared.clearedKeys?.includes(key);
+            const shown = cleared.messages.some(m => m.id === target && m.from === record.sender && m.protocol === RATCHET_PROTOCOL);
+            if (isNew && old && !change) {
+                // Kept by key: the cached list is bounded, and a later replay
+                // must not take this message for deleted history.
+                if (!cleared.keptKeys?.includes(key)) cleared.keptKeys = [...(cleared.keptKeys || []), key];
+                this.#erase.delete(key);
+            } else if (!shown && !cleared.keptKeys?.includes(key)) {
+                // A change from before the deletion can only be of a deleted message.
+                if (isNew && old && change) return;
+                if (!isNew && old) {
+                    // A delete record has no text and is never redacted.
+                    if (body.expired !== true && record.purpose !== "delete") this.#eraseCleared(key);
+                    return;
+                }
+                // A later change of a deleted message: its text does not stay
+                // stored waiting for it (the archive copy goes with the message's).
+                if (!isNew && change) {
+                    const waiting = cleared.pendingChanges?.filter(c => !(c.ref === target && c.from === record.sender));
+                    if (waiting && waiting.length !== cleared.pendingChanges.length) { cleared.pendingChanges = waiting; this.#save(record.peer); }
+                    return;
+                }
+            }
+        }
+        if (change) {
             // An own change shows only once accepted (linked copies carry no status).
             if (record.sender === this.ownUID && record.status && record.status !== "accepted") return;
             this.#applyChange(record.peer, { action: record.purpose, ref: record.reference, from: record.sender, text, protocol: RATCHET_PROTOCOL });

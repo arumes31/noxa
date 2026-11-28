@@ -89,7 +89,8 @@ test("real two-page IndexedDB fences retired DM sends, trust, imports and delete
         assert.deepEqual(await old.evaluate(() => actions), ["history_get"]);
         await unchanged();
 
-        // Same-account deletion must order behind an already encrypting save.
+        // Same-account deletion must order behind an already encrypting save
+        // (the emptied conversation stays stored, marked as deleted).
         await old.evaluate(async () => {
             await createDM();
             window.releaseSave = pauseCrypto(crypto.subtle, "encrypt", () => { window.saving = true; });
@@ -97,7 +98,7 @@ test("real two-page IndexedDB fences retired DM sends, trust, imports and delete
         });
         await old.waitForFunction(() => window.saving, undefined, { polling: 25, timeout: 10000 });
         await old.evaluate(() => { window.deleting = dm.deleteHistory("delete-peer"); });
-        assert.equal(await old.evaluate(async () => { releaseSave(); await deleting; return await dbmod.getSealed(dbmod.Stores.dm, "delete-peer"); }), undefined);
+        assert.equal(await old.evaluate(async () => { releaseSave(); await deleting; const c = await dbmod.getSealed(dbmod.Stores.dm, "delete-peer"); return c.messages.length === 0 && c.clearedAt > 0; }), true);
         await old.evaluate(() => { dm.showQueued("flush-peer", { id: "last", text: "keep me", sentAt: 2 }); dm.close(); });
         await old.waitForFunction(async () => (await dbmod.getSealed(dbmod.Stores.dm, "flush-peer"))?.messages[0]?.body === "keep me", undefined, { polling: 25, timeout: 10000 });
     } finally { await cleanup(); }

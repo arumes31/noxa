@@ -150,3 +150,48 @@ test("a late edit of an expired message is redacted again (audit #11)", async ()
     assert.equal(find().redacted, true);
     dm.close();
 });
+
+test("a deleted history stays deleted and loses its text in the archive", async () => {
+    const { dm, consumer, project } = await setup();
+    const now = Date.now() / 1000, wait = () => new Promise(r => setTimeout(r, 80));
+    const archive = [record({ peer: "erin", sender: "erin", logicalID: "e1", sentAt: now - 20 }), record({ peer: "erin", sender: "erin", logicalID: "fast", sentAt: now + 600 }),
+        record({ peer: "erin", sender: "erin", logicalID: "e2", purpose: "edit", reference: "e1", sentAt: now - 10 }), record({ peer: "fay", sender: "fay", logicalID: "f1", sentAt: now - 20 })];
+    for (const r of archive) await project(r);
+    consumer.history = async () => archive;
+    await dm.deleteHistory("erin");
+    await wait();
+    assert.deepEqual([...new Set(consumer.redactions.flat())].sort(), [disappearKey("erin", "e1"), disappearKey("erin", "fast")]);
+    let asked = consumer.redactions.length;
+    // Sent before the deletion, delivered after it: kept, also over a replay.
+    const late = record({ peer: "erin", sender: "erin", logicalID: "late", sentAt: now - 5 });
+    await project(late);
+    archive.push(late);
+    for (const r of archive) await project(r, false); // the next start replays the archive
+    await wait();
+    assert.deepEqual(dm.conversations.get("erin").messages.map(m => m.id), ["late"]);
+    // An edit made after the deletion of a deleted message is not kept waiting:
+    // a live one from before the deletion not at all, a later one until the next replay.
+    await project(record({ peer: "erin", sender: "erin", logicalID: "e4", purpose: "edit", reference: "e1", body: { text: "changed-text", sentAt: now - 8 }, sentAt: now - 8 }));
+    assert.equal(JSON.stringify(dm.conversations.get("erin")).includes("changed-text"), false);
+    await project(record({ peer: "erin", sender: "erin", logicalID: "e3", purpose: "edit", reference: "e1", body: { text: "changed-text", sentAt: now + 5 }, sentAt: now + 5 }));
+    await project(record({ peer: "erin", sender: "erin", logicalID: "e3", purpose: "edit", reference: "e1", body: { text: "changed-text", sentAt: now + 5 }, sentAt: now + 5 }), false);
+    assert.equal(JSON.stringify(dm.conversations.get("erin")).includes("changed-text"), false);
+    // The kept message survives being dropped from the bounded cached list.
+    dm.conversations.get("erin").messages = [];
+    await project(late, false);
+    assert.deepEqual(dm.conversations.get("erin").messages.map(m => m.id), ["late"]);
+    assert.equal(dm.conversations.get("fay").messages[0].body, "hi");
+    assert.ok(consumer.redactions.length > asked, "a failed erase is retried by the next replay");
+    asked = consumer.redactions.length;
+    assert.ok(!consumer.redactions.flat().includes(disappearKey("erin", "late")) && !consumer.redactions.flat().includes(disappearKey("fay", "f1")));
+    // Erased records are not asked for again.
+    for (const r of archive) await project(r.peer === "erin" && r.logicalID !== "late" ? { ...r, body: { expired: true } } : r, false);
+    await wait();
+    assert.equal(consumer.redactions.length, asked);
+    // The marker is stored: a new instance still knows the deletion.
+    dm.close();
+    const again = new DirectMessages(session(), {}, { fence: await currentFence() });
+    await again.ready;
+    assert.ok(again.conversations.get("erin").clearedAt > 0);
+    again.close();
+});
