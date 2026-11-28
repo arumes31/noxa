@@ -898,13 +898,24 @@ export class DirectMessages extends EventTarget {
         // out and loses its text in the archive. A new delivery is kept
         // whatever its send time (it may have waited on the server).
         const cleared = this.conversations.get(record.peer);
-        if (!isNew && cleared?.clearedAt > 0) {
+        if (cleared?.clearedAt > 0) {
             const target = change ? record.reference : record.logicalID, key = disappearKey(record.sender, target);
+            const old = record.sentAt <= cleared.clearedAt || !!cleared.clearedKeys?.includes(key);
             const shown = cleared.messages.some(m => m.id === target && m.from === record.sender && m.protocol === RATCHET_PROTOCOL);
-            if (!shown && (record.sentAt <= cleared.clearedAt || cleared.clearedKeys?.includes(key))) {
-                // A delete record has no text and is never redacted.
-                if (body.expired !== true && record.purpose !== "delete") this.#eraseCleared(key);
-                return;
+            if (isNew && old && !change) {
+                // Kept by key: the cached list is bounded, and a later replay
+                // must not take this message for deleted history.
+                if (!cleared.keptKeys?.includes(key)) cleared.keptKeys = [...(cleared.keptKeys || []), key];
+                this.#erase.delete(key);
+            } else if (!isNew && !shown && !cleared.keptKeys?.includes(key)) {
+                if (old) {
+                    // A delete record has no text and is never redacted.
+                    if (body.expired !== true && record.purpose !== "delete") this.#eraseCleared(key);
+                    return;
+                }
+                // A later change of a deleted message: its text is not stored
+                // to wait for it (the archive copy goes with the message's).
+                if (change) return;
             }
         }
         if (change) {

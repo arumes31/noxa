@@ -169,6 +169,13 @@ test("a deleted history stays deleted and loses its text in the archive", async 
     for (const r of archive) await project(r, false); // the next start replays the archive
     await wait();
     assert.deepEqual(dm.conversations.get("erin").messages.map(m => m.id), ["late"]);
+    // An edit made after the deletion of a deleted message is not kept waiting.
+    await project(record({ peer: "erin", sender: "erin", logicalID: "e3", purpose: "edit", reference: "e1", body: { text: "changed-text", sentAt: now + 5 }, sentAt: now + 5 }), false);
+    assert.equal(JSON.stringify(dm.conversations.get("erin")).includes("changed-text"), false);
+    // The kept message survives being dropped from the bounded cached list.
+    dm.conversations.get("erin").messages = [];
+    await project(late, false);
+    assert.deepEqual(dm.conversations.get("erin").messages.map(m => m.id), ["late"]);
     assert.equal(dm.conversations.get("fay").messages[0].body, "hi");
     assert.ok(consumer.redactions.length > asked, "a failed erase is retried by the next replay");
     asked = consumer.redactions.length;
