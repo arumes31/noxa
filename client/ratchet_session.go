@@ -21,6 +21,7 @@ import (
 	"net"
 	"noxa/internal/e2ee"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -730,14 +731,18 @@ func (a *App) projectRatchetRecords(m *connManager, records []RatchetRecord, isN
 // dmClearRedact erases from the protected archive the text of messages whose
 // conversation history the user deleted (a variable so tests can observe it).
 // A record that cannot be erased yet is found again by the next replay.
+// It runs on its own goroutine: a projection can run inside a consumer
+// operation, and erasing waits for that operation to finish.
 var dmClearRedact = func(m *connManager, keys map[string]bool) {
 	c, err := m.ratchetConsumerOn(nil)
 	if err != nil {
 		return
 	}
-	if _, _, err = c.redact(keys); err != nil {
-		log.Printf("deleted history: archive not erased: %s", logCode(ratchetCode(err)))
-	}
+	go func() {
+		if _, _, err := c.redact(keys); err != nil {
+			log.Printf("deleted history: archive not erased: %s", logCode(ratchetCode(err)))
+		}
+	}()
 }
 
 // eraseClearedArchive replays peer's archive records of every connected
@@ -815,10 +820,11 @@ func (a *App) applyRatchetRecord(m *connManager, store dmHistoryStore, l *dmLog,
 	// "Delete history": a replayed record from before the clear stays out and
 	// loses its text in the archive. A new delivery is kept whatever its send
 	// time (it may have waited on the server, or come from a slow clock).
-	if e == nil && !isNew && l.ClearedAt > 0 && r.SentAt <= l.ClearedAt {
+	key := ratchetSemanticKey(r.Sender, target)
+	if e == nil && !isNew && l.ClearedAt > 0 && (r.SentAt <= l.ClearedAt || slices.Contains(l.ClearedKeys, key)) {
 		// A delete record has no text and is never redacted: not collected.
 		if _, _, erased := ratchetBodyDisappearing(r.Body); !erased && r.Purpose != netproto.DMActionDelete {
-			dropped[ratchetSemanticKey(r.Sender, target)] = true
+			dropped[key] = true
 		}
 		return false
 	}

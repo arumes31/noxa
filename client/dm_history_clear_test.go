@@ -138,6 +138,7 @@ func TestDMHistoryClearErasesArchiveText(t *testing.T) {
 	receive("bob", "b1", now-20, true)
 	receive("bob", "b2", now-10, true)
 	receive("carl", "c1", now-20, true)
+	receive("bob", "fast", now+600, true) // the sender's clock runs ahead
 	if msg := app.DMHistoryClear("bob"); msg != "" {
 		t.Fatal(msg)
 	}
@@ -148,17 +149,29 @@ func TestDMHistoryClearErasesArchiveText(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		cm.ratchetProject(cm, records, false) // a session start replays the archive
+		// A session start replays the archive. A projection can also run
+		// inside a consumer operation, which must not wait for the erase.
+		cons.serial.Lock()
+		cm.ratchetProject(cm, records, false)
+		cons.serial.Unlock()
 		out := map[string]string{}
 		for _, r := range records {
 			out[r.LogicalID] = ratchetBodyText(r.Body)
 		}
 		return out
 	}
-	for range 2 {
-		if got := text(); len(got) != 4 || got["b1"] != "" || got["b2"] != "" || got["c1"] != "c1" || got["late"] != "late" {
-			t.Fatalf("archive text after the clear: %+v", got)
+	var got map[string]string
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) { // the erase is asynchronous
+		if got = text(); got["b1"] == "" && got["b2"] == "" && got["fast"] == "" {
+			break
 		}
+	}
+	if got = text(); len(got) != 5 || got["b1"] != "" || got["b2"] != "" || got["fast"] != "" || got["c1"] != "c1" || got["late"] != "late" {
+		t.Fatalf("archive text after the clear: %+v", got)
+	}
+	entries, err := app.DMHistoryLoad("bob")
+	if err != nil || len(entries) != 1 || entries[0].ClientMsgID != "late" {
+		t.Fatalf("log after the replays: %+v, %v", entries, err)
 	}
 }
 

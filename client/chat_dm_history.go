@@ -108,6 +108,9 @@ type dmLog struct {
 	// seconds, 0 = never). The protected archive still holds the messages and
 	// is replayed into this log; records sent up to then stay out.
 	ClearedAt float64 `json:"cleared_at,omitempty"`
+	// ClearedKeys are the semantic keys of deleted messages dated after
+	// ClearedAt (a sender's clock ran ahead): they stay out as well.
+	ClearedKeys []string `json:"cleared_keys,omitempty"`
 }
 
 // dmBeforeRead is a test seam placed only around read-only public APIs. It
@@ -382,7 +385,12 @@ func (a *App) dmHistoryClearWith(store dmHistoryStore, peer string) string {
 	a.dmMu.Lock()
 	defer a.dmMu.Unlock()
 	l, _ := store.load(peer) // an unreadable log is replaced as well
-	cleared := dmLog{Peer: peer, Disappearing: l.Disappearing, DisappearingAt: l.DisappearingAt, ClearedAt: float64(time.Now().UnixMilli()) / 1000}
+	cleared := dmLog{Peer: peer, Disappearing: l.Disappearing, DisappearingAt: l.DisappearingAt, ClearedAt: float64(time.Now().UnixMilli()) / 1000, ClearedKeys: l.ClearedKeys}
+	for _, e := range l.Messages {
+		if e.Protocol == ratchetProtocol && float64(e.SentAt+1) > cleared.ClearedAt { // SentAt is whole seconds, rounded down
+			cleared.ClearedKeys = append(cleared.ClearedKeys, ratchetSemanticKey(e.FromUniqueID, e.ClientMsgID))
+		}
+	}
 	if err := store.save(cleared); err != nil {
 		return err.Error()
 	}
