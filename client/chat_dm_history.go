@@ -356,6 +356,7 @@ func (a *App) dmHistoryAppendWith(store dmHistoryStore, peer, nickname string, e
 
 // DMHistoryClear deletes a peer's stored conversation (explicit user action).
 // The log file stays, emptied and marked with the time: see dmLog.ClearedAt.
+// The text of its messages is erased from the protected archive as well.
 func (a *App) DMHistoryClear(peer string) string {
 	if peer == "" {
 		return "peer is required"
@@ -364,7 +365,11 @@ func (a *App) DMHistoryClear(peer string) string {
 	if err != nil {
 		return err.Error()
 	}
-	return a.dmHistoryClearWith(store, peer)
+	msg := a.dmHistoryClearWith(store, peer)
+	if msg == "" {
+		a.eraseClearedArchive(peer)
+	}
+	return msg
 }
 
 func (a *App) dmHistoryClearWith(store dmHistoryStore, peer string) string {

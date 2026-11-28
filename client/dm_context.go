@@ -108,7 +108,11 @@ func (a *App) DMHistoryClearForContext(owner DMHistoryContext, peer string) stri
 	if err != nil {
 		return err.Error()
 	}
-	return a.dmHistoryClearWith(store, peer)
+	msg := a.dmHistoryClearWith(store, peer)
+	if msg == "" {
+		a.eraseClearedArchive(peer)
+	}
+	return msg
 }
 
 // DMHistoryPeersForContext enumerates only the captured identity's conversations.
