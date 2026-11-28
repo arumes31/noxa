@@ -781,7 +781,7 @@ export class DirectMessages extends EventTarget {
         this.#assertOpen();
         clearTimeout(this.#saveTimers.get(peer));
         this.#saveTimers.delete(peer);
-        const old = this.conversations.get(peer), clearedAt = Date.now() / 1000;
+        const old = this.conversations.get(peer), clearedAt = Math.max(Date.now() / 1000, old?.clearedAt || 0); // never moves back
         // Deleted messages dated after now (a sender's clock ran ahead) are
         // remembered by key, so they stay out as well.
         const ahead = (old?.messages || []).filter(m => m.protocol === RATCHET_PROTOCOL && m.sentAt > clearedAt).map(m => disappearKey(m.from, m.id));
@@ -907,15 +907,21 @@ export class DirectMessages extends EventTarget {
                 // must not take this message for deleted history.
                 if (!cleared.keptKeys?.includes(key)) cleared.keptKeys = [...(cleared.keptKeys || []), key];
                 this.#erase.delete(key);
-            } else if (!isNew && !shown && !cleared.keptKeys?.includes(key)) {
-                if (old) {
+            } else if (!shown && !cleared.keptKeys?.includes(key)) {
+                // A change from before the deletion can only be of a deleted message.
+                if (isNew && old && change) return;
+                if (!isNew && old) {
                     // A delete record has no text and is never redacted.
                     if (body.expired !== true && record.purpose !== "delete") this.#eraseCleared(key);
                     return;
                 }
-                // A later change of a deleted message: its text is not stored
-                // to wait for it (the archive copy goes with the message's).
-                if (change) return;
+                // A later change of a deleted message: its text does not stay
+                // stored waiting for it (the archive copy goes with the message's).
+                if (!isNew && change) {
+                    const waiting = cleared.pendingChanges?.filter(c => !(c.ref === target && c.from === record.sender));
+                    if (waiting && waiting.length !== cleared.pendingChanges.length) { cleared.pendingChanges = waiting; this.#save(record.peer); }
+                    return;
+                }
             }
         }
         if (change) {
