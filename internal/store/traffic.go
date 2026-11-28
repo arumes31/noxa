@@ -6,6 +6,8 @@ import (
 	"errors"
 	"noxa/internal/traffic"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 // Absolute per-instance checkpoints and GREATEST make ambiguous commit retries
@@ -24,12 +26,22 @@ func (s *Store) SaveTrafficCheckpoint(ctx context.Context, instance string, star
 	if err != nil {
 		return err
 	}
-	for _, bucket := range buckets {
-		if bucket.Start <= 0 || bucket.Start%300 != 0 || bucket.In < 0 || bucket.Out < 0 {
-			return errors.New("invalid traffic bucket")
+	// ⚡ Optimize: batch insert traffic buckets to reduce DB roundtrips from O(N) to O(1)
+	// Reduces overhead when inserting up to 10,000 buckets at once.
+	if len(buckets) > 0 {
+		starts := make([]int64, len(buckets))
+		ins := make([]int64, len(buckets))
+		outs := make([]int64, len(buckets))
+		for i, bucket := range buckets {
+			if bucket.Start <= 0 || bucket.Start%300 != 0 || bucket.In < 0 || bucket.Out < 0 {
+				return errors.New("invalid traffic bucket")
+			}
+			starts[i] = bucket.Start
+			ins[i] = bucket.In
+			outs[i] = bucket.Out
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO server_traffic_buckets(instance_id,bucket_start,in_bytes,out_bytes) VALUES($1,$2,$3,$4)
-  ON CONFLICT(instance_id,bucket_start) DO UPDATE SET in_bytes=GREATEST(server_traffic_buckets.in_bytes,EXCLUDED.in_bytes),out_bytes=GREATEST(server_traffic_buckets.out_bytes,EXCLUDED.out_bytes)`, instance, bucket.Start, bucket.In, bucket.Out)
+		_, err = tx.ExecContext(ctx, `INSERT INTO server_traffic_buckets(instance_id,bucket_start,in_bytes,out_bytes) SELECT $1, unnest($2::bigint[]), unnest($3::bigint[]), unnest($4::bigint[])
+  ON CONFLICT(instance_id,bucket_start) DO UPDATE SET in_bytes=GREATEST(server_traffic_buckets.in_bytes,EXCLUDED.in_bytes),out_bytes=GREATEST(server_traffic_buckets.out_bytes,EXCLUDED.out_bytes)`, instance, pq.Array(starts), pq.Array(ins), pq.Array(outs))
 		if err != nil {
 			return err
 		}
